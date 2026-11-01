@@ -1,7 +1,7 @@
 {
   "name": "aipipe-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "aipipe 的 Tauri 桌面版外殼：把 aipipe 打包成 sidecar exe，視窗內容就是 aipipe ui",
   "type": "module",
   "scripts": {
