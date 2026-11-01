@@ -175,6 +175,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary)
 }
 .tabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
 .tabs button.active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
+/* 選中狀態要立即切換，不做淡入淡出，避免底線看起來還停在上一個分頁 */
+.tabs button, .subtabs button { transition: none; }
 .tabs button:focus-visible { outline-offset: -2px; }
 .tab-badge { font-size: 11.5px; font-weight: 600; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--text-muted); line-height: 18px; }
 .tab-badge:empty { display: none; }
@@ -198,7 +200,7 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
   background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
   font: 12.5px/1.6 var(--font-mono); color: var(--text); tab-size: 4;
 }
-.doc.tall { min-height: 360px; }
+.doc.tall, .doc-frame.tall { min-height: 360px; }
 .log { min-height: 240px; }
 #tab-log .log { max-height: calc(100vh - 220px); }
 
@@ -231,8 +233,54 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
 .round summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--ease); flex: none; }
 .round[open] summary::before { transform: rotate(45deg); }
 .round summary:hover { background: var(--surface-2); }
+.round .md { padding: var(--s-2) 12px var(--s-3); border-top: 1px solid var(--border); max-height: 420px; overflow: auto; }
 .round pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--font-mono); max-height: 320px; overflow: auto; margin: 0; padding: var(--s-2) 10px; border-top: 1px solid var(--border); }
 .empty { color: var(--text-muted); font-size: 13px; padding: var(--s-3) 0; text-align: center; }
+
+.card-head h2 { display: inline-flex; align-items: center; gap: var(--s-2); }
+.head-tools { display: flex; align-items: center; gap: var(--s-2); }
+.doc-frame { border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-4) var(--s-5); max-height: 70vh; overflow: auto; background: var(--surface); }
+
+/* ---------- Markdown 預覽 ---------- */
+.md { font-size: 14px; line-height: 1.7; color: var(--text); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 0 0 var(--s-3); }
+.md h3, .md h4, .md h5, .md h6 { margin: var(--s-5) 0 var(--s-2); line-height: 1.35; font-weight: 700; color: var(--text); }
+.md .md-h1 { font-size: 22px; padding-bottom: var(--s-2); border-bottom: 1px solid var(--border); }
+.md .md-h2 { font-size: 18px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.md .md-h3 { font-size: 16px; }
+.md .md-h4 { font-size: 14.5px; }
+.md .md-h5, .md .md-h6 { font-size: 13.5px; color: var(--text-muted); }
+.md ul, .md ol { padding-left: 1.6em; }
+.md li { margin: 2px 0; }
+.md li > ul, .md li > ol { margin: 2px 0 0; }
+.md li::marker { color: var(--text-muted); }
+.md li.task-item { list-style: none; margin-left: -1.4em; }
+.md li.task-item input { vertical-align: -2px; margin-right: 4px; cursor: default; }
+.md a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+.md a:hover { text-decoration-thickness: 2px; }
+.md strong { font-weight: 700; }
+.md del { color: var(--text-muted); }
+.md code { font: 0.88em var(--font-mono); background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.md pre.md-code { position: relative; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-3) var(--s-4); overflow-x: auto; white-space: pre; }
+.md pre.md-code[data-lang] { padding-top: 28px; }
+.md pre.md-code[data-lang]::before { content: attr(data-lang); position: absolute; top: 6px; right: 10px; font: 600 11px var(--font-mono); color: var(--text-muted); text-transform: lowercase; }
+.md pre.md-code code { background: none; border: 0; padding: 0; font: 12.5px/1.6 var(--font-mono); white-space: pre; }
+.md blockquote { padding: var(--s-1) var(--s-4); border-left: 3px solid var(--border-strong); color: var(--text-muted); background: var(--surface-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.md blockquote > :last-child { margin-bottom: 0; }
+.md hr { margin: var(--s-5) 0; }
+.md .md-table { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.md table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.md th, .md td { padding: 6px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.md th + th, .md td + td { border-left: 1px solid var(--border); }
+.md th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+.md tbody tr:last-child td { border-bottom: 0; }
+.md-sm { font-size: 13px; line-height: 1.6; }
+.md-sm .md-h1 { font-size: 16px; }
+.md-sm .md-h2 { font-size: 15px; }
+.md-sm .md-h3, .md-sm .md-h4 { font-size: 14px; }
+.md-sm h3, .md-sm h4, .md-sm h5, .md-sm h6 { margin-top: var(--s-3); }
 
 /* ---------- 看板 ---------- */
 .toolbar { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; margin-bottom: var(--s-4); }
@@ -328,7 +376,8 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
   .col { min-height: 0; }
   .form-grid { grid-template-columns: minmax(0, 1fr); gap: var(--s-1); }
   .form-grid label { margin-top: var(--s-2); }
-  .doc.tall { min-height: 240px; }
+  .doc.tall, .doc-frame.tall { min-height: 240px; }
+  .doc-frame { padding: var(--s-3); }
 }
 
 @media (prefers-reduced-motion: reduce) {

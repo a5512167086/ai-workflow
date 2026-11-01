@@ -26,6 +26,7 @@
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
     <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v4M12 17.5v.01"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14l4-4M8.5 16.5l-1 1a3.5 3.5 0 0 1-5-5l3-3a3.5 3.5 0 0 1 5 0M15.5 7.5l1-1a3.5 3.5 0 0 1 5 5l-3 3a3.5 3.5 0 0 1-5 0"/></symbol>
   </svg>
 
@@ -85,11 +86,18 @@
 
           <div class="card">
             <div class="card-head">
-              <h2>目前 PRD</h2>
-              <span class="meta-inline">狀態 <b id="prd-status" class="chip">—</b></span>
+              <h2>目前 PRD <b id="prd-status" class="chip" aria-label="PRD 狀態">—</b></h2>
+              <div class="head-tools">
+                <div class="seg" role="radiogroup" aria-label="PRD 顯示方式">
+                  <button data-view="preview" type="button" role="radio" aria-checked="true">預覽</button>
+                  <button data-view="raw" type="button" role="radio" aria-checked="false">原始 Markdown</button>
+                </div>
+                <button id="btn-prd-copy" class="icon-btn" type="button" aria-label="複製 PRD 原文" title="複製 PRD 原文"><svg class="ic"><use href="#i-copy"/></svg></button>
+              </div>
             </div>
             <p id="prd-busy" class="notice hidden" role="status"></p>
-            <pre id="prd-text" class="doc tall">（尚無）</pre>
+            <div id="prd-md" class="md doc-frame tall"></div>
+            <pre id="prd-text" class="doc tall hidden">（尚無）</pre>
           </div>
         </div>
 
@@ -107,7 +115,7 @@
           </div>
 
           <div class="card rounds-card">
-            <div class="card-head"><h2>每輪紀錄</h2></div>
+            <div class="card-head"><h2>每輪紀錄</h2><span class="hint">跟隨 PRD 的顯示方式</span></div>
             <div id="prd-rounds" class="rounds"></div>
           </div>
         </aside>
@@ -186,6 +194,7 @@
     </section>
   </main>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="/markdown.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

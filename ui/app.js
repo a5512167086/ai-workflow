@@ -23,6 +23,14 @@ let selected = null;
 let subtab = 'log';
 let detail = null;
 const logs = {};
+let prdView = (() => {
+  try {
+    return localStorage.getItem('aipipe-prd-view') === 'raw' ? 'raw' : 'preview';
+  } catch {
+    return 'preview';
+  }
+})();
+let rounds = [];
 
 const icon = (name, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
@@ -78,7 +86,7 @@ function renderTop() {
   pill.setAttribute('aria-label', `流程狀態：${STATUS_TEXT[st] || st}`);
   $('#pipeline-reason').textContent = state.pipeline.reason || '';
   $('#pipeline-reason').title = state.pipeline.reason || '';
-  for (const b of $$('.seg button')) {
+  for (const b of $$('[data-mode]')) {
     const on = b.dataset.mode === config.mode;
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', String(on));
@@ -116,7 +124,7 @@ function renderPrd() {
   busyEl.textContent = busyText;
   busyEl.classList.toggle('hidden', !busyText);
   busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
-  $('#prd-text').textContent = prd || '（尚無）';
+  renderPrdBody();
   const busy = snap.prdBusy || snap.runnerAlive || snap.taskGenBusy;
   $('#btn-prd-new').disabled = busy;
   $('#btn-prd-approve').disabled = busy || state.prd.status !== 'awaiting_approval';
@@ -131,23 +139,61 @@ function renderPrd() {
   renderStepper();
 }
 
+// PRD 與每輪紀錄都是 Markdown：預覽用 markdown.js 安全渲染（不允許原始 HTML），原始模式顯示原文。
+// 舊版 aipipe ui 程序還沒提供 /markdown.js 時，退回只顯示原文。
+const canRender = () => typeof window.renderMarkdown === 'function';
+
+function renderPrdBody() {
+  const prd = snap?.prd || '';
+  const raw = prdView === 'raw' || !canRender();
+  $('#prd-text').textContent = prd || '（尚無）';
+  const md = $('#prd-md');
+  if (!raw && md.dataset.src !== prd) {
+    md.innerHTML = prd ? window.renderMarkdown(prd) : '<p class="empty">（尚無）</p>';
+    md.dataset.src = prd;
+  }
+  $('#prd-text').classList.toggle('hidden', !raw);
+  md.classList.toggle('hidden', raw);
+  for (const b of $$('[data-view]')) {
+    const on = b.dataset.view === prdView;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
+    b.disabled = !canRender();
+  }
+  $('#btn-prd-copy').disabled = !prd;
+}
+
+function renderRounds() {
+  const box = $('#prd-rounds');
+  const open = new Set($$('#prd-rounds details[open]').map((d) => d.dataset.key));
+  box.innerHTML = '';
+  if (!rounds.length) box.innerHTML = '<p class="empty">（尚無）</p>';
+  const KIND = { draft: '初稿', review: '審查', revise: '修訂', user_feedback: '使用者意見' };
+  for (const r of rounds) {
+    const d = document.createElement('details');
+    d.className = `round ${r.verdict || ''}`;
+    d.dataset.key = `${r.round}-${r.kind}-${r.version || ''}`;
+    d.open = open.has(d.dataset.key);
+    const s = document.createElement('summary');
+    s.textContent = `第 ${r.round} 輪・${KIND[r.kind] || r.kind}・${r.provider}${r.verdict ? `・${r.verdict}` : ''}${r.version ? `・v${r.version}` : ''}`;
+    let body;
+    if (prdView === 'raw' || !canRender()) {
+      body = document.createElement('pre');
+      body.textContent = r.text;
+    } else {
+      body = document.createElement('div');
+      body.className = 'md md-sm';
+      body.innerHTML = r.text ? window.renderMarkdown(r.text) : '<p class="empty">（無內容）</p>';
+    }
+    d.append(s, body);
+    box.append(d);
+  }
+}
+
 async function loadRounds() {
   try {
-    const data = await api('/api/prd');
-    const box = $('#prd-rounds');
-    box.innerHTML = '';
-    if (!data.rounds.length) box.innerHTML = '<p class="empty">（尚無）</p>';
-    const KIND = { draft: '初稿', review: '審查', revise: '修訂', user_feedback: '使用者意見' };
-    for (const r of data.rounds) {
-      const d = document.createElement('details');
-      d.className = `round ${r.verdict || ''}`;
-      const s = document.createElement('summary');
-      s.textContent = `第 ${r.round} 輪・${KIND[r.kind] || r.kind}・${r.provider}${r.verdict ? `・${r.verdict}` : ''}${r.version ? `・v${r.version}` : ''}`;
-      const pre = document.createElement('pre');
-      pre.textContent = r.text;
-      d.append(s, pre);
-      box.append(d);
-    }
+    rounds = (await api('/api/prd')).rounds;
+    renderRounds();
   } catch (err) {
     toast(err.message, true);
   }
@@ -442,7 +488,7 @@ function bind() {
   const tabButtons = $$('.tabs button');
   for (const b of tabButtons) b.onclick = () => showTab(b);
   tabKeys(tabButtons, showTab);
-  for (const b of $$('.seg button')) {
+  for (const b of $$('[data-mode]')) {
     b.onclick = () => act('/api/config/mode', { mode: b.dataset.mode }, `已切換為${b.textContent}模式`);
   }
   const subButtons = $$('.subtabs button');
@@ -508,6 +554,29 @@ function bind() {
     act('/api/task/rerun', { id: selected, revert }, `任務 ${selected} 重跑中`);
   };
   $('#log-scope').onchange = renderLog;
+  for (const b of $$('[data-view]')) {
+    b.onclick = () => {
+      prdView = b.dataset.view;
+      try {
+        localStorage.setItem('aipipe-prd-view', prdView);
+      } catch {
+        // 無法儲存時只在這次頁面生效
+      }
+      renderPrdBody();
+      renderRounds();
+    };
+  }
+  $('#btn-prd-copy').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(snap?.prd || '');
+      toast('已複製 PRD 原文');
+    } catch {
+      // 剪貼簿不可用時切到原始模式並選取全文，讓使用者自己複製
+      $('[data-view="raw"]').click();
+      getSelection().selectAllChildren($('#prd-text'));
+      toast('無法存取剪貼簿，已選取原文，請按 Ctrl+C', true);
+    }
+  };
 }
 
 bind();
