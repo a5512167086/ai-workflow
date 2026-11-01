@@ -33,6 +33,94 @@ let prdView = (() => {
   }
 })();
 let rounds = [];
+let boardView = (() => { try { return localStorage.getItem('aipipe-board-view') === 'roadmap' ? 'roadmap' : 'kanban'; } catch { return 'kanban'; } })();
+const COLUMN_LABELS = Object.fromEntries(COLUMNS);
+
+function childTasks(task) {
+  return (task.subtasks || []).map(sub => ({ ...sub, id: `${task.id}.${sub.id}`, dependencies: [
+    ...(task.dependencies || []), ...(sub.dependencies || []).map(id => String(id).includes('.') ? id : `${task.id}.${id}`),
+  ] }));
+}
+
+function boardFacts() {
+  const all = snap.tasks.flatMap(task => [task, ...childTasks(task)]);
+  const stateFor = task => snap.state.tasks[String(task.id)] || {};
+  const done = new Set(all.filter(task => column(task, stateFor(task)) === 'done').map(task => String(task.id)));
+  const unmet = task => (task.dependencies || []).filter(id => !done.has(String(id)));
+  const attention = task => stateFor(task).phase === 'stuck' || task.status === 'blocked' || column(task, stateFor(task)) === 'test';
+  const query = $('#board-search').value.trim().toLocaleLowerCase();
+  const filter = $('#board-filter').value;
+  const matches = task => {
+    const state = stateFor(task), stage = column(task, state);
+    const text = `${task.id} ${task.title || ''} ${task.description || ''} ${state.step || ''}`.toLocaleLowerCase();
+    return (!query || text.includes(query)) && (filter === 'all'
+      || filter === 'attention' && attention(task)
+      || filter === 'blocked' && stage !== 'done' && unmet(task).length > 0
+      || filter === 'active' && ['doing', 'review'].includes(stage)
+      || filter === 'done' && stage === 'done');
+  };
+  return { all, stateFor, done, unmet, attention, matches, visible: snap.tasks.filter(task => [task, ...childTasks(task)].some(matches)), filtered: !!query || filter !== 'all' };
+}
+
+function renderBoardOverview(facts) {
+  const tasks = snap.tasks;
+  $('#board-feature-title').textContent = snap.config.feature || snap.state.prd.idea?.split('\n')[0] || '目前功能';
+  const completed = tasks.filter(task => facts.done.has(String(task.id))).length;
+  const percent = tasks.length ? Math.round(completed / tasks.length * 100) : 0;
+  $('#board-progress').setAttribute('aria-valuenow', percent);
+  $('#board-progress').querySelector('span').style.width = `${percent}%`;
+  const metrics = [
+    ['主線完成', `${completed} / ${tasks.length}`],
+    ['進行與審查', tasks.filter(task => facts.stateFor(task).phase !== 'stuck' && ['doing', 'review'].includes(column(task, facts.stateFor(task)))).length],
+    ['等待驗收', tasks.filter(task => column(task, facts.stateFor(task)) === 'test').length],
+    ['卡住任務', tasks.filter(task => [task, ...childTasks(task)].some(item => facts.stateFor(item).phase === 'stuck' || item.status === 'blocked')).length],
+  ];
+  $('#board-metrics').innerHTML = metrics.map(([label, value], index) => `<div${index === 3 && value ? ' class="attention"' : ''}><dt>${label}</dt><dd>${value}</dd></div>`).join('');
+}
+
+function renderTaskRoadmap(facts) {
+  const host = $('#task-roadmap'), keep = host.scrollTop;
+  host.replaceChildren();
+  for (const task of facts.visible) {
+    const children = childTasks(task);
+    const state = facts.stateFor(task), stage = column(task, state);
+    const completed = children.filter(sub => facts.done.has(String(sub.id))).length;
+    const percent = children.length ? Math.round(completed / children.length * 100) : facts.done.has(String(task.id)) ? 100 : 0;
+    const group = document.createElement('article'); group.className = 'roadmap-group';
+    group.innerHTML = `<button type="button" class="roadmap-parent"><span class="roadmap-heading"><span class="mono roadmap-id">#${escapeHtml(task.id)}</span><strong>${escapeHtml(task.title)}</strong></span><span class="stage-chip stage-${stage}">${COLUMN_LABELS[stage]}</span></button><div class="roadmap-progress" role="progressbar" aria-label="${escapeHtml(task.title)}完成度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span style="width:${percent}%"></span></div><p class="hint roadmap-count">${children.length ? `${completed} / ${children.length} 子任務完成` : '獨立任務'}${facts.unmet(task).length ? ` · ${facts.unmet(task).length} 項依賴未完成` : ''}</p>`;
+    const parent = group.querySelector('button');
+    parent.dataset.taskId = String(task.id); parent.classList.toggle('selected', selected === String(task.id));
+    parent.onclick = () => selectTask(String(task.id));
+    for (const sub of children) {
+      if (facts.filtered && !facts.matches(sub) && !facts.matches(task)) continue;
+      const subState = facts.stateFor(sub), subStage = column(sub, subState);
+      const row = document.createElement('button'); row.type = 'button'; row.className = 'roadmap-child'; row.dataset.taskId = sub.id;
+      row.classList.toggle('selected', selected === sub.id);
+      row.innerHTML = `<span class="stage-dot stage-${subStage}" aria-hidden="true"></span><span class="mono roadmap-id">#${escapeHtml(sub.id)}</span><span class="roadmap-name">${escapeHtml(sub.title)}</span><span class="stage-chip stage-${subStage}">${subState.phase === 'stuck' ? '需要處理' : COLUMN_LABELS[subStage]}</span>`;
+      row.onclick = () => selectTask(sub.id); group.append(row);
+    }
+    host.append(group);
+  }
+  host.scrollTop = keep;
+}
+
+function renderBoardView(facts) {
+  const roadmap = boardView === 'roadmap';
+  $('.board-wrap').hidden = roadmap;
+  $('#task-roadmap').hidden = !roadmap;
+  $('.board-canvas').inert = selected !== null && !!window.matchMedia?.('(max-width: 999px)')?.matches;
+  for (const button of $$('[data-board-view]')) {
+    const active = button.dataset.boardView === boardView;
+    button.classList.toggle('on', active); button.setAttribute('aria-checked', String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
+  $('#board-results').textContent = `顯示 ${facts.visible.length} / ${snap.tasks.length} 項主線任務`;
+  $('#board-clear').hidden = !facts.filtered;
+  const empty = $('#board-empty');
+  empty.hidden = !!facts.visible.length;
+  empty.textContent = snap.tasks.length ? '沒有符合條件的任務，請調整搜尋或篩選。' : '尚未產生任務。核准 PRD 後會自動建立任務看板與藍圖。';
+  if (roadmap) renderTaskRoadmap(facts);
+}
 
 function column(task, ts) {
   const phase = ts?.phase;
@@ -243,6 +331,9 @@ async function loadRounds() {
 
 function renderBoard() {
   const { tasks, state } = snap;
+  const focusedTask = document.activeElement?.dataset.taskId;
+  const facts = boardFacts();
+  renderBoardOverview(facts);
   const board = $('#board');
   // 重畫前記下捲動位置：點任務卡或收到狀態更新時不要跳回最上面。
   const scrolls = Object.fromEntries($$('#board .col').map((c) => [c.dataset.col, c.scrollTop]));
@@ -257,16 +348,19 @@ function renderBoard() {
     board.append(el);
     return [k, el];
   }));
-  const doneIds = new Set(tasks.filter((t) => column(t, state.tasks[String(t.id)]) === 'done').map((t) => String(t.id)));
+  const doneIds = facts.done;
   const counts = {};
   for (const t of tasks) {
     const ts = state.tasks[String(t.id)];
     const col = column(t, ts);
     counts[col] = (counts[col] || 0) + 1;
+    if (!facts.visible.includes(t)) continue;
     const stuck = ts?.phase === 'stuck';
     const el = document.createElement('button');
     el.type = 'button';
     el.className = `task${stuck ? ' stuck' : ''}${selected === String(t.id) ? ' selected' : ''}`;
+    el.dataset.taskId = String(t.id);
+    el.dataset.priority = ['high', 'medium', 'low'].includes(t.priority) ? t.priority : 'medium';
     el.setAttribute('aria-pressed', String(selected === String(t.id)));
     el.innerHTML = '<div class="t-top"><span class="id"></span><span class="tag prio"></span><span class="tag tm"></span></div>'
       + '<div class="title"></div><div class="deps"></div><div class="step"></div><div class="err"></div>';
@@ -276,7 +370,7 @@ function renderBoard() {
       prio.textContent = `${PRIORITY_TEXT[t.priority] || t.priority}優先`;
       prio.classList.add(t.priority);
     } else prio.remove();
-    el.querySelector('.tm').textContent = `TM:${t.status}`;
+    el.querySelector('.tm').textContent = stuck ? '需要處理' : COLUMN_LABELS[col];
     el.querySelector('.title').textContent = t.title;
     if (t.dependencies?.length) {
       const deps = el.querySelector('.deps');
@@ -303,12 +397,20 @@ function renderBoard() {
       err.innerHTML = `${icon('alert')}<span></span>`;
       err.querySelector('span').textContent = ts.error || '需要處理';
     }
+    const flags = document.createElement('div'); flags.className = 'card-flags';
+    const children = childTasks(t), remaining = facts.unmet(t).length;
+    if (remaining && col !== 'done') flags.innerHTML += `<span class="flag blocked">${remaining} 項依賴未完成</span>`;
+    if (col === 'test') flags.innerHTML += '<span class="flag human">需要人工驗收</span>';
+    if (children.length) flags.innerHTML += `<span class="flag">子任務 ${children.filter(sub => doneIds.has(sub.id)).length}/${children.length}</span>`;
+    if (ts?.last_check_ok != null) flags.innerHTML += `<span class="flag ${ts.last_check_ok ? 'passed' : 'blocked'}">驗證${ts.last_check_ok ? '通過' : '失敗'}</span>`;
+    el.append(flags);
     el.onclick = () => selectTask(String(t.id));
     cols[col].append(el);
   }
   for (const [k, el] of Object.entries(cols)) {
-    el.querySelector('h3 .count').textContent = counts[k] || 0;
-    if (!counts[k]) el.insertAdjacentHTML('beforeend', '<p class="empty">（無）</p>');
+    const visible = el.querySelectorAll('.task').length;
+    el.querySelector('h3 .count').textContent = facts.filtered ? `${visible} / ${counts[k] || 0}` : counts[k] || 0;
+    if (!visible) el.insertAdjacentHTML('beforeend', `<p class="empty">${facts.filtered ? '此欄沒有符合的任務' : '此階段尚無任務'}</p>`);
     if (scrolls[k]) el.scrollTop = scrolls[k];
   }
   $('.board-wrap').scrollLeft = wrapLeft;
@@ -331,24 +433,42 @@ function renderBoard() {
   const badge = $('#tab-board-badge');
   badge.textContent = tasks.length ? `${counts.done || 0}/${tasks.length}` : '';
   badge.classList.toggle('attn', needsHuman);
+  renderBoardView(facts);
+  if (focusedTask) {
+    const host = boardView === 'roadmap' ? $('#task-roadmap') : $('#board');
+    $$('[data-task-id]', host).find(button => button.dataset.taskId === focusedTask)?.focus({ preventScroll: true });
+  }
 }
 
 async function selectTask(id) {
   const first = selected !== id;
   selected = id;
+  if (first) {
+    detail = null;
+    $('#d-title').textContent = `載入任務 #${id}`;
+    $('#d-meta').replaceChildren(); $('#d-gates').replaceChildren();
+    $('#d-body').textContent = '載入中…'; $('#d-rerun').disabled = true;
+  }
   $('#detail').classList.remove('hidden');
   renderBoard();
   await loadDetail();
-  if (first) $('#detail').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  if (first && selected === id) $('#d-title').focus({ preventScroll: true });
 }
 
 async function loadDetail() {
   if (!selected) return;
+  const id = selected;
   try {
-    detail = await api(`/api/task/${selected}`);
-    logs[`task-${selected}`] = detail.log;
+    const data = await api(`/api/task/${id}`);
+    if (selected !== id) return;
+    detail = data;
+    logs[`task-${id}`] = detail.log;
     renderDetail();
   } catch (err) {
+    if (selected !== id) return;
+    $('#d-title').textContent = `任務 #${id} 載入失敗`;
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重新讀取'; retry.onclick = loadDetail;
+    $('#d-body').replaceChildren(document.createTextNode(`${err.message} `), retry);
     toast(err.message, true);
   }
 }
@@ -358,13 +478,14 @@ function renderDetail() {
   const ts = detail.state || {};
   const t = detail.task || {};
   $('#d-title').textContent = `#${detail.id} ${t.title || ''}`;
-  const check = ts.last_check_ok == null ? ['—', ''] : ts.last_check_ok ? ['通過', 'ok'] : ['失敗', 'bad'];
+  const hasChecks = Object.values(snap.config.commands || {}).some(value => typeof value === 'string' && value.trim()) || !!detail.checks?.trim();
+  const check = !hasChecks ? ['未設定指令', ''] : ts.last_check_ok == null ? ['尚未執行', ''] : ts.last_check_ok ? ['通過', 'ok'] : ['失敗', 'bad'];
   const meta = [
     ['步驟', ts.step || ts.phase || '未開始'],
     ['修正輪數', `${ts.fix_round || 0} / ${snap.config.max_fix_rounds}`],
     ['嘗試次數', ts.attempts || 0],
     ['驗證', ...check],
-    ['審查', ts.review_verdicts ? Object.entries(ts.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ') : ts.review_verdict || '—',
+    ['審查', ts.review_verdict && ts.review_verdicts ? Object.entries(ts.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ') : ts.review_verdict || '—',
       ts.review_verdict === 'PASS' || ts.review_verdict === 'APPROVE' ? 'ok' : ts.review_verdict ? 'bad' : ''],
     ['commit', ts.commit ? ts.commit.slice(0, 8) : '—', 'mono'],
   ];
@@ -382,7 +503,8 @@ function renderDetail() {
   }
   $('#d-rerun').disabled = snap.runnerAlive;
   $('#d-revert').parentElement.title = ts.commit ? `會 git revert ${ts.commit.slice(0, 8)}` : '手動模式沒有 commit：會把這個任務改過的檔案還原到任務開始前（之後任務對同檔案的修改也會一起還原）';
-  for (const b of $$('.subtabs button')) {
+  renderTaskGates(t, ts);
+  for (const b of $$('[data-sub]')) {
     const on = b.dataset.sub === subtab;
     b.classList.toggle('active', on);
     b.setAttribute('aria-selected', String(on));
@@ -400,6 +522,22 @@ function renderDetail() {
     task: JSON.stringify(t, null, 2) + (detail.implement ? `\n\n===== 實作回報 =====\n${detail.implement}` : ''),
   }[subtab];
   body.replaceChildren(pre);
+}
+
+function renderTaskGates(task, state) {
+  const done = boardFacts().done;
+  const missing = (task.dependencies || []).filter(id => !done.has(String(id)));
+  const checksConfigured = Object.values(snap.config.commands || {}).some(value => typeof value === 'string' && value.trim());
+  const verified = state.last_check_ok != null && (checksConfigured || detail?.checks?.trim());
+  const review = state.review_verdict;
+  const humanDone = state.step === '人工測試通過' || snap.state.pipeline.status === 'complete' && column(task, state) === 'done';
+  const gates = [
+    ['依賴', missing.length ? `尚有 ${missing.length} 項未完成` : '已滿足', missing.length ? 'pending' : 'pass'],
+    ['驗證', verified ? state.last_check_ok ? '通過' : '失敗' : checksConfigured ? '尚未執行' : '未設定驗證指令', verified ? state.last_check_ok ? 'pass' : 'fail' : 'pending'],
+    ['審查', review ? ['PASS', 'APPROVE'].includes(review) ? '通過' : '未通過' : '尚未審查', review ? ['PASS', 'APPROVE'].includes(review) ? 'pass' : 'fail' : 'pending'],
+    ['人工驗收', humanDone ? '已確認' : '等待人工確認', humanDone ? 'pass' : 'pending'],
+  ];
+  $('#d-gates').innerHTML = gates.map(([label, text, status]) => `<li class="gate-${status}"><span class="gate-mark" aria-hidden="true">${status === 'pass' ? icon('check') : status === 'fail' ? icon('alert') : '—'}</span><span><b>${label}</b><span>${text}</span></span></li>`).join('');
 }
 
 function verdictOf(text) {
@@ -1141,6 +1279,18 @@ async function runAction(path, body = {}, message) {
 }
 
 function bind() {
+  tabKeys($$('[data-board-view]'), button => button.click());
+  window.addEventListener('resize', () => {
+    $('.board-canvas').inert = selected !== null && !!window.matchMedia?.('(max-width: 999px)')?.matches;
+  });
+  for (const button of $$('[data-board-view]')) button.onclick = () => {
+    boardView = button.dataset.boardView;
+    try { localStorage.setItem('aipipe-board-view', boardView); } catch { /* 僅保留本次選擇 */ }
+    if (snap) renderBoard();
+  };
+  $('#board-search').oninput = $('#board-filter').onchange = () => { if (snap) renderBoard(); };
+  $('#board-clear').onclick = () => { $('#board-search').value = ''; $('#board-filter').value = 'all'; renderBoard(); $('#board-search').focus(); };
+  $('#detail').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); $('#d-close').click(); } });
   $('#quota-cancel').onclick = () => { quotaDismissed = JSON.stringify(snap?.state.usage_blocked); $('#quota-notice').hidden = true; };
   $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
   $('#max-runs').onchange = async (event) => {
@@ -1205,8 +1355,8 @@ function bind() {
     $('#detail').classList.add('hidden');
     renderBoard();
     // 關閉後把焦點還給原本的任務卡
-    const cards = $$('#board .task');
-    const card = cards.find((c) => c.querySelector('.id').textContent === `#${id}`);
+    const cards = $$('#tab-board [data-task-id]');
+    const card = cards.find(c => c.dataset.taskId === id && (boardView === 'roadmap' ? c.closest('#task-roadmap') : c.closest('#board')));
     card?.focus();
   };
   $('#d-rerun').onclick = () => {

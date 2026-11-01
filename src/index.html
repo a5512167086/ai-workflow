@@ -170,16 +170,36 @@
         </div>
         <span id="runner-info" class="hint mono-ish"></span>
       </div>
+      <div class="board-overview" aria-label="本功能任務進度">
+        <div class="board-feature"><span class="eyebrow">目前功能</span><h2 id="board-feature-title">尚未開始</h2><div id="board-progress" class="feature-progress" role="progressbar" aria-label="主線任務完成度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
+        <dl id="board-metrics" class="board-metrics"></dl>
+      </div>
+      <div class="board-controls">
+        <div class="seg" role="radiogroup" aria-label="任務檢視">
+          <button id="board-view-kanban" data-board-view="kanban" type="button" role="radio" aria-checked="true">看板</button>
+          <button id="board-view-roadmap" data-board-view="roadmap" type="button" role="radio" aria-checked="false">任務藍圖</button>
+        </div>
+        <label class="board-search" for="board-search">搜尋<input id="board-search" type="search" placeholder="任務名稱、編號或步驟"></label>
+        <label class="board-filter" for="board-filter">狀態<select id="board-filter"><option value="all">所有任務</option><option value="attention">需要處理</option><option value="blocked">依賴未完成</option><option value="active">進行與審查中</option><option value="done">已完成</option></select></label>
+        <span id="board-results" class="hint" role="status"></span>
+        <button id="board-clear" type="button" hidden>清除篩選</button>
+      </div>
+      <div class="board-workspace">
+      <div class="board-canvas">
       <div class="board-wrap">
         <div id="board" class="board"></div>
       </div>
+      <div id="task-roadmap" class="task-roadmap" hidden aria-label="功能與任務藍圖"></div>
+      <p id="board-empty" class="board-empty" hidden></p>
+      </div>
 
-      <div id="detail" class="card detail hidden" aria-labelledby="d-title">
+      <div id="detail" class="card detail hidden" role="region" aria-labelledby="d-title">
         <div class="detail-head">
-          <h2 id="d-title"></h2>
+          <h2 id="d-title" tabindex="-1"></h2>
           <button id="d-close" class="icon-btn" type="button" aria-label="關閉任務詳情"><svg class="ic"><use href="#i-x"/></svg></button>
         </div>
-        <dl id="d-meta" class="meta"></dl>
+        <details class="execution-details"><summary>執行資訊與 commit</summary><dl id="d-meta" class="meta"></dl></details>
+        <section class="gate-section" aria-labelledby="d-gates-title"><h3 id="d-gates-title">完成條件</h3><ul id="d-gates" class="gate-list"></ul></section>
         <div class="row detail-actions">
           <label class="check"><input type="checkbox" id="d-revert"> 重跑前還原這個任務的變更</label>
           <button id="d-rerun" type="button"><svg class="ic"><use href="#i-redo"/></svg>重跑任務</button>
@@ -192,6 +212,7 @@
           <button data-sub="task" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">任務內容</button>
         </div>
         <div id="d-body" class="doc log lg-host" role="tabpanel" tabindex="0"></div>
+      </div>
       </div>
     </section>
 

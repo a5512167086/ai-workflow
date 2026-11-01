@@ -92,7 +92,7 @@ fn task_detail(root: &Path, id: &str) -> Result<Value> {
         .collect();
     reviews.sort();
     let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
-    let task = read_tasks(root)?.into_iter().find(|t| super::util::js_string(&t["id"]) == id).unwrap_or(Value::Null);
+    let task = super::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
     Ok(json!({
         "id": id,
         "state": read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null),
@@ -474,6 +474,17 @@ pub fn handle(method: &str, path: &str, body: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 任務詳情支援藍圖的子任務與依賴() {
+        let root = super::super::util::temp_dir("task-detail-");
+        super::super::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "parent", "subtasks": [{ "id": 1, "title": "child" }, { "id": 2, "title": "dependent", "dependencies": [1] }] })], Some("master"), json!({})).unwrap();
+        let detail = task_detail(&root, "1.2").unwrap();
+        assert_eq!(detail["task"]["title"], "dependent");
+        assert_eq!(detail["task"]["id"], "1.2");
+        assert_eq!(detail["task"]["dependencies"], json!(["1.1"]));
+        assert_eq!(task_detail(&root, "9.9").unwrap_err().status, 404);
+    }
 
     #[test]
     fn 核准後自動拆任務_啟動失敗保留核准並提供重試狀態() {

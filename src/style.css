@@ -114,7 +114,7 @@ button.primary:hover:not(:disabled), a.btn.primary:hover { background: var(--pri
 button.block { width: 100%; }
 .icon-btn { width: 32px; padding: 0; }
 
-textarea, select, input[type="text"] {
+textarea, select, input[type="text"], input[type="search"] {
   font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong);
   border-radius: var(--r-sm); padding: 6px 10px; min-height: 32px; transition: border-color var(--ease);
 }
@@ -638,4 +638,92 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 }
 @media (max-width: 620px) {
   .backlog-layout, .prd-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) minmax(0, 1fr); overflow: auto; }
+}
+
+/* 任務控制台：參考 Monstrare 的車道、卡片提示及階層藍圖，沿用 aipipe 主題。 */
+.board-overview { flex: none; display: flex; align-items: center; gap: var(--s-5); padding: var(--s-3) var(--s-4); margin-bottom: var(--s-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); }
+.board-feature { flex: 1; min-width: 0; }
+.eyebrow { color: var(--text-muted); font-size: 11px; letter-spacing: .06em; }
+.board-feature h2 { margin: 2px 0 8px; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feature-progress, .roadmap-progress { height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.feature-progress > span, .roadmap-progress > span { display: block; height: 100%; background: var(--primary); border-radius: inherit; }
+.board-metrics { display: grid; grid-template-columns: repeat(4, minmax(65px, 1fr)); gap: var(--s-5); margin: 0; }
+.board-metrics dt { color: var(--text-muted); font-size: 11.5px; }
+.board-metrics dd { margin: 2px 0 0; font: 600 19px/1.3 var(--font-mono); }
+.board-metrics .attention dd { color: var(--warn); }
+.board-controls { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); margin-bottom: var(--s-3); }
+.board-controls label { display: flex; align-items: center; gap: var(--s-2); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.board-search { flex: 1; min-width: 200px; max-width: 450px; }
+.board-search input { width: 100%; min-width: 0; }
+.board-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); position: relative; gap: var(--s-3); }
+.board-workspace:has(.detail:not(.hidden)) { grid-template-columns: minmax(0, 1fr) minmax(390px, 36%); }
+.board-canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
+#tab-board .board-wrap { flex: 1; min-height: 0; display: flex; margin: 0; padding: 0 0 6px; overflow: auto; }
+#tab-board .board { flex: 1; grid-template-rows: minmax(0, 1fr); gap: 10px; }
+#tab-board .col { min-height: 0; max-height: none; overflow-y: auto; background: var(--surface-2); padding: 0 8px 12px; border-radius: var(--r-md); }
+#tab-board .col h3 { position: sticky; top: 0; z-index: 1; background: var(--surface-2); padding: 12px 2px; margin: 0; }
+#tab-board .col h3 .count { background: var(--surface); }
+#tab-board .col > * { flex-shrink: 0; }
+#tab-board .task { position: relative; padding: 12px 12px 12px 16px; border-radius: 8px; background: var(--surface); box-shadow: 0 1px 2px #00000008; }
+#tab-board .task::before { content: ''; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 3px; border-radius: 3px; background: var(--border-strong); }
+#tab-board .task[data-priority="high"]::before { background: var(--danger); }
+#tab-board .task[data-priority="medium"]::before { background: var(--warn); }
+#tab-board .task:hover { border-color: var(--border-strong); box-shadow: 0 2px 6px #0000000d; }
+#tab-board .task.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.card-flags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.card-flags:empty { display: none; }
+.flag, .stage-chip { display: inline-block; font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 999px; color: var(--text-muted); background: var(--surface-2); }
+.flag.blocked { background: var(--danger-soft); color: var(--danger); }
+.flag.human, .stage-chip.stage-test { background: var(--warn-soft); color: var(--warn); }
+.flag.passed, .stage-chip.stage-done { background: var(--primary-soft); color: var(--primary); }
+.stage-chip.stage-doing, .stage-chip.stage-review { background: var(--info-soft); color: var(--info); }
+.board-empty { position: absolute; bottom: 20px; left: 16px; right: 16px; padding: var(--s-4); margin: 0; border: 1px dashed var(--border-strong); background: var(--surface); color: var(--text-muted); border-radius: var(--r-md); text-align: center; pointer-events: none; }
+#tab-board .detail:not(.hidden) { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: auto; margin: 0; padding: 16px; }
+#tab-board .detail-head { flex: none; align-items: start; margin-bottom: 12px; }
+#tab-board .detail-head h2 { font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+#tab-board .detail-head button { flex: none; }
+.execution-details { margin-bottom: 12px; }
+.execution-details > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.execution-details .meta { margin-top: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gate-section { margin-bottom: 12px; }
+.gate-section h3 { margin: 0 0 8px; font-size: 12px; color: var(--text-muted); }
+.gate-list { padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; list-style: none; }
+.gate-list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; background: var(--surface-2); border-radius: 6px; }
+.gate-mark { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--surface); color: var(--text-muted); }
+.gate-mark .ic { width: 12px; height: 12px; }
+.gate-pass .gate-mark { color: var(--primary); background: var(--primary-soft); }
+.gate-fail .gate-mark { color: var(--danger); background: var(--danger-soft); }
+.gate-list li > span:last-child { display: flex; flex-direction: column; min-width: 0; font-size: 11px; color: var(--text-muted); }
+.gate-list b { font-size: 12px; color: var(--text); }
+#tab-board .detail-actions { margin: 0 0 10px; gap: 8px; }
+#tab-board .detail-actions .check { font-size: 11px; }
+#tab-board .detail .subtabs { overflow-x: auto; white-space: nowrap; flex-wrap: nowrap; }
+#tab-board .detail #d-body { flex: 1; min-height: 100px; max-height: none; margin-top: 8px; }
+.task-roadmap { flex: 1; min-height: 0; overflow: auto; padding-right: 4px; }
+.roadmap-group { border: 1px solid var(--border); border-radius: 10px; padding: 16px; background: var(--surface); margin-bottom: 12px; }
+.roadmap-parent, .roadmap-child { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: transparent; padding: 8px; min-width: 0; }
+.roadmap-parent { justify-content: space-between; padding-top: 0; }
+.roadmap-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.roadmap-id { color: var(--text-muted); font-size: 11px; }
+.roadmap-parent strong, .roadmap-name { overflow-wrap: anywhere; }
+.roadmap-parent .stage-chip, .roadmap-child .stage-chip { flex: none; }
+.roadmap-progress { margin: 8px 8px 0; }
+.roadmap-count { margin: 6px 8px 12px; font-size: 11px; }
+.roadmap-child { border-top: 1px solid var(--border); border-radius: 0; min-height: 42px; font-weight: 400; }
+.roadmap-child .roadmap-name { flex: 1; min-width: 0; }
+.roadmap-parent.selected, .roadmap-child.selected { background: var(--primary-soft); outline: 1px solid var(--primary); border-radius: 6px; }
+.stage-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-muted); }
+.stage-dot.stage-doing { background: var(--info); }.stage-dot.stage-review { background: var(--review); }.stage-dot.stage-test { background: var(--warn); }.stage-dot.stage-done { background: var(--primary); }
+@media (max-width: 999px) {
+  .board-workspace:has(.detail:not(.hidden)) { grid-template-columns: minmax(0, 1fr); }
+  #tab-board .detail:not(.hidden) { position: absolute; inset: 0 0 0 auto; width: min(100%, 520px); z-index: 3; box-shadow: var(--shadow); }
+  .board-overview { gap: 12px; }.board-metrics { gap: 12px; grid-template-columns: repeat(4, minmax(54px, 1fr)); }
+}
+@media (max-width: 620px) {
+  .board-overview { align-items: stretch; flex-direction: column; gap: 8px; padding: 10px 12px; }
+  .board-feature h2 { font-size: 14px; margin-bottom: 6px; }.board-metrics dd { font-size: 16px; }
+  .board-controls { gap: 6px; }.board-search { flex-basis: 100%; max-width: none; }
+  .board-controls label { font-size: 11px; }.board-controls #board-results { font-size: 11px; }
+  #tab-board .board { min-width: 1040px; grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+  .roadmap-group { padding: 10px; }.roadmap-child { gap: 6px; }.roadmap-child .stage-chip { font-size: 10px; }
 }
