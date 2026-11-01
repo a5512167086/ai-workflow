@@ -35,6 +35,7 @@
       <span id="queue-line" class="reason"></span>
     </div>
     <div class="top-actions">
+      <button id="show-projects" type="button">專案</button><button id="show-settings" type="button">設定</button>
       <button id="btn-theme" class="icon-btn" type="button" aria-label="主題：跟隨系統" title="主題：跟隨系統">
         <svg class="ic"><use href="#i-monitor"/></svg>
       </button>
@@ -55,20 +56,10 @@
 
     </div>
 
-    <details class="card" id="overview-settings"><summary>設定</summary><p class="hint">全域佇列在此設定；各專案的 AI、模型與工作流程模式，請由專案卡片的「設定」開啟。</p>      <div class="card queue-card">
-        <div class="card-head"><h2>執行佇列</h2></div>
-        <label for="max-runs" class="field-label">同時執行的流程上限</label>
-        <div class="row tight">
-          <select id="max-runs">
-            <option value="1">1 個（預設）</option>
-            <option value="2">2 個</option>
-            <option value="3">3 個</option>
-            <option value="4">4 個</option>
-          </select>
-        </div>
-        <p class="hint">其他專案會排隊；停下來等你的專案不佔名額。</p>
-      </div></details>
-    <section aria-labelledby="projects-h">
+    <section id="overview-settings" hidden><div class="settings-toolbar"><h2>設定</h2><label for="settings-project">專案</label><select id="settings-project"></select></div><p id="settings-empty" class="hint" hidden>先加入專案，即可設定各階段的 AI 與模型。</p><iframe id="project-settings" title="所選專案設定"></iframe>
+      <div class="card home-queue"><label for="max-runs">全域同時執行上限</label><select id="max-runs"><option value="1">1 個</option><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select><span class="hint">其他專案會排隊，等待人工測試不占名額。</span></div>
+    </section>
+    <section id="projects-panel" aria-labelledby="projects-h">
       <h2 id="projects-h" class="section-h">專案 <span class="tab-badge" id="count"></span></h2>
       <div id="projects" class="project-grid"></div>
     </section>

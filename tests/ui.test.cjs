@@ -19,7 +19,7 @@ function page() {
     draft() { return modelDraft; },
     setApi(fn) { api = fn; },
     setArchive(value) { recArchive = value; },
-    archive() { return recArchive; }, renderUsage, runAction
+    archive() { return recArchive; }, renderUsage, runAction, renderPrd
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
@@ -123,5 +123,27 @@ test('額度切換先確認，取消不執行，同意僅帶本次 provider', as
   assert.equal(request.path, '/api/run/continue');
   assert.equal(request.body.useProvider, 'codex');
   assert.equal(state.config.roles.code_reviewer, 'both');
+  dom.window.close();
+});
+
+test('PRD 僅在拆任務失敗時顯示重試，不再有新想法表單', () => {
+  const { dom, ui, doc } = page();
+  const state = snapshot(); state.state.prd.status = 'approved';
+  ui.setSnap(state); ui.renderPrd();
+  assert.equal(doc.querySelector('#idea'), null);
+  assert.equal(doc.querySelector('#btn-tasks').hidden, true);
+  state.state.task_gen = { status: 'error', error: 'failed' };
+  ui.renderPrd();
+  assert.equal(doc.querySelector('#btn-tasks').hidden, false);
+  dom.window.close();
+});
+
+test('取消額度通知不啟動任務，也不清除額度紀錄', () => {
+  const { dom, ui, doc } = page();
+  const state = snapshot(); state.state.usage_blocked = { provider: 'claude' };
+  ui.setSnap(state); ui.bind();
+  doc.querySelector('#quota-cancel').click();
+  assert.equal(doc.querySelector('#quota-notice').hidden, true);
+  assert.equal(state.state.usage_blocked.provider, 'claude');
   dom.window.close();
 });

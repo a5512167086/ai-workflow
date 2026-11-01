@@ -177,7 +177,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
             round += 1;
             set_task(root, id, json!({ "step": format!("修正驗證錯誤（第 {round} 輪）"), "fix_round": round }))?;
             let failed: Vec<String> = results.iter().filter(|r| !r.ok).map(|r| format!("## {} (`{}`)\n{}", r.name, r.cmd, tail_chars(&r.output, 15000))).collect();
-            let fix = agent(root, cfg, "implementer", fix_checks_prompt(cfg, &task, &failed.join("\n\n"), round), true, scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
+            let fix = agent(root, cfg, "fixer", fix_checks_prompt(cfg, &task, &failed.join("\n\n"), round), true, scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
             if !fix.ok {
                 return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
             }
@@ -214,7 +214,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         }
         round += 1;
         set_task(root, id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
-        let fix = agent(root, cfg, "implementer", fix_review_prompt(cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
+        let fix = agent(root, cfg, "fixer", fix_review_prompt(cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
         if !fix.ok {
             return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
         }
@@ -224,7 +224,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
     set_task(root, id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;
     let full = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
     let stat: Vec<&str> = full.lines().filter(|l| (l.starts_with(' ') && l.len() > 1 && !l[1..].starts_with(char::is_whitespace) && l.contains('|')) || l.contains("file changed") || l.contains("files changed")).collect();
-    let ho = agent(root, cfg, "implementer", handover_prompt(root, cfg, &task, &notes, &stat.join("\n")), true, scope, "更新 handover", "handover", None)?;
+    let ho = agent(root, cfg, "handover", handover_prompt(root, cfg, &task, &notes, &stat.join("\n")), true, scope, "更新 handover", "handover", None)?;
     if !ho.ok {
         append_log(root, scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", ho.error_text()));
     }

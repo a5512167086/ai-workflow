@@ -597,3 +597,45 @@ details.usage-recent > summary::before { content: ""; width: 7px; height: 7px; b
 details.usage-recent[open] > summary::before { transform: rotate(45deg); }
 details.usage-recent > summary h2 { margin: 0; }
 details.usage-recent[open] > summary { margin-bottom: var(--s-3); }
+
+/* App 外框固定，長內容僅在各自的工作區捲動。 */
+html { height: 100%; overflow: hidden; }
+body { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+body > .topbar, body > .tabs { flex: none; }
+body > main { flex: 1; min-height: 0; width: 100%; max-width: none; display: flex; flex-direction: column; overflow: hidden; }
+main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
+[hidden] { display: none !important; }
+#tab-backlog:not([hidden]), #tab-prd:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
+.backlog-layout { flex: 1; min-height: 0; grid-template-columns: minmax(360px, 38%) minmax(0, 1fr); align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+.backlog-layout > .card { min-height: 0; margin-bottom: 0; display: flex; flex-direction: column; overflow: auto; }
+.backlog-layout > .card:first-child > * { flex: none; }
+.backlog-layout #bl-detail { flex: 1; min-height: 100px; resize: none; }
+.backlog-layout #backlog { flex: 1; min-height: 0; overflow: auto; }
+.prd-layout { flex: 1; min-height: 0; align-items: stretch; grid-template-rows: minmax(0, 1fr); }
+.prd-layout .col-main { min-height: 0; display: flex; flex-direction: column; }
+.prd-layout .col-main > .card { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; overflow: hidden; }
+.prd-layout .doc, .prd-layout .doc-frame { flex: 1; min-height: 0; max-height: none; overflow: auto; }
+.prd-layout .col-side { position: static; min-height: 0; overflow: auto; }
+#prd-stepper { flex: none; }
+.overview-tools { flex: none; grid-template-columns: minmax(0, 1fr); }
+#projects-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#projects { min-height: 0; overflow: auto; align-content: start; }
+#overview-settings:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--s-3); }
+.settings-toolbar, .home-queue { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); }
+.settings-toolbar h2 { margin: 0; }
+#project-settings { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.home-queue { margin-bottom: 0; }
+.settings-only > .topbar, .settings-only > .tabs, .settings-only #quota-notice { display: none; }
+.settings-only > main { padding: var(--s-3); }
+.settings-only #tab-settings { overflow: auto; }
+.settings-only #tab-settings .settings-layout > .card:nth-child(2) { display: none; }
+#tab-board:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
+#tab-board .board-wrap { flex: 1; min-height: 100px; overflow: auto; }
+#tab-board .detail:not(.hidden) { flex: 0 1 50%; min-height: 160px; overflow: auto; }
+@media (max-width: 900px) {
+  .backlog-layout { grid-template-columns: minmax(280px, 42%) minmax(0, 1fr); }
+  .prd-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+@media (max-width: 620px) {
+  .backlog-layout, .prd-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) minmax(0, 1fr); overflow: auto; }
+}

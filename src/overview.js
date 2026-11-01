@@ -49,7 +49,7 @@ function render() {
       <p class="pc-reason"></p>
       <div class="pc-actions">
         <button type="button" class="icon-btn" data-act="remove">${icon('trash')}</button>
-        <a class="btn" href="${projectHref(p.id)}#settings">設定</a>
+        <a class="btn" href="#settings=${p.id}" data-project-settings="${p.id}">設定</a>
         <a class="btn primary" href="${projectHref(p.id)}">${icon('forward')}開啟</a>
       </div>`;
     card.querySelector('.pc-name a').textContent = p.name;
@@ -73,6 +73,7 @@ function render() {
       if (!confirm(`從總覽移除「${p.name}」？\n只會移出清單，不會刪除任何檔案。`)) return;
       if (await act('/api/projects/remove', { id: p.id }, '已從總覽移除')) refresh();
     };
+    card.querySelector('[data-project-settings]').onclick = (event) => { event.preventDefault(); showSettings(p.id); };
     grid.append(card);
   }
 
@@ -86,6 +87,32 @@ function render() {
   $('#queue-line').textContent = `執行中 ${running.length}/${queue.max}${running.length ? `：${running.join('、')}` : ''}${waiting.length ? `・排隊：${waiting.join('、')}` : ''}`;
   if (document.activeElement !== $('#max-runs')) $('#max-runs').value = String(Math.min(queue.max, 4));
   $('#btn-pick').classList.toggle('hidden', !desktop);
+  renderSettingsProjects();
+}
+
+let settingsProject = location.hash.match(/^#settings=([0-9a-f]{10})$/)?.[1] || '';
+function showSettings(id = settingsProject) {
+  settingsProject = id;
+  $('#overview-settings').hidden = false;
+  $('#projects-panel').hidden = true;
+  $('.overview-tools').hidden = true;
+  if (id) history.replaceState(null, '', `#settings=${id}`);
+  renderSettingsProjects();
+}
+function renderSettingsProjects() {
+  if (!data) return;
+  const available = data.projects.filter(p => p.status !== 'missing');
+  if (!available.some(p => p.id === settingsProject)) settingsProject = available[0]?.id || '';
+  const select = $('#settings-project');
+  select.replaceChildren(...available.map(p => new Option(p.name, p.id)));
+  select.value = settingsProject;
+  $('#settings-empty').hidden = !!settingsProject;
+  const frame = $('#project-settings');
+  frame.hidden = !settingsProject;
+  if (settingsProject && frame.dataset.project !== settingsProject) {
+    frame.dataset.project = settingsProject;
+    frame.src = `${projectHref(settingsProject)}&settings=1`;
+  }
 }
 
 async function refresh() {
@@ -127,6 +154,14 @@ function connect() {
 
 function bind() {
   bindTheme();
+  $('#show-settings').onclick = () => showSettings();
+  $('#settings-project').onchange = (event) => showSettings(event.target.value);
+  $('#show-projects').onclick = () => {
+    $('#overview-settings').hidden = true;
+    $('#projects-panel').hidden = false;
+    $('.overview-tools').hidden = false;
+    history.replaceState(null, '', location.pathname);
+  };
   $('#btn-add').onclick = () => addProject();
   $('#add-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) addProject();
@@ -148,5 +183,6 @@ function bind() {
 }
 
 bind();
+if (location.hash.startsWith('#settings')) showSettings();
 refresh();
 connect();

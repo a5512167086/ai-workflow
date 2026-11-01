@@ -17,6 +17,9 @@ const COLUMNS = [
 // 需要人回應的流程狀態：「我測完了，繼續」在這些狀態下變成主要按鈕。
 const NEEDS_HUMAN = ['waiting', 'feature_test', 'stuck', 'error'];
 
+const SETTINGS_ONLY = new URLSearchParams(location.search).has('settings');
+if (SETTINGS_ONLY) document.body.classList.add('settings-only');
+let quotaDismissed = '';
 let snap = null;
 let selected = null;
 let subtab = 'log';
@@ -162,12 +165,13 @@ function renderPrd() {
   busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
   renderPrdBody();
   const busy = snap.prdBusy || snap.runnerAlive || snap.taskGenBusy;
-  $('#btn-prd-new').disabled = busy;
+
   $('#btn-prd-approve').disabled = busy || state.prd.status !== 'awaiting_approval';
   $('#btn-prd-revise').disabled = busy || !prd;
   $('#btn-tasks').disabled = busy || state.prd.status !== 'approved';
+  $('#btn-tasks').hidden = state.task_gen?.status !== 'error';
   const tg = state.task_gen;
-  $('#task-gen').textContent = snap.taskGenBusy ? 'AI 產生任務中…'
+  $('#task-gen').textContent = (snap.taskGenBusy || tg?.status === 'running') ? 'AI 產生任務中…'
     : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '';
   const badge = $('#tab-prd-badge');
   badge.textContent = state.prd.status === 'awaiting_approval' ? '待核准' : '';
@@ -481,7 +485,7 @@ function onState(data) {
   const prevStatus = snap?.state.prd.status;
   snap = data;
   const blocked = data.state.usage_blocked;
-  $('#quota-notice').hidden = !blocked || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
+  $('#quota-notice').hidden = !blocked || quotaDismissed === JSON.stringify(blocked) || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
   $('#quota-message').textContent = blocked ? `${blocked.message}。可確認後改用另一個 AI 繼續；實作與審查會分開建立 session。` : '';
   if (skillChanged) loadSkillRuns().catch(err => toast(err.message, true));
   $('#skill-run').disabled = !!(data.skillBusy || data.runnerAlive || data.prdBusy || data.taskGenBusy);
@@ -891,7 +895,7 @@ function renderRecords() {
 }
 
 // ---------- 設定：AI 角色與模型 ----------
-const ROLE_LABELS = { author: 'PRD 作者（也負責拆任務）', reviewer: 'PRD 審查', implementer: '實作、修正與 handover', code_reviewer: '程式碼審查' };
+const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）' };
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 let modelOptions = null;
 let modelDraft = null;
@@ -922,7 +926,13 @@ function effortsFor(provider, model) {
 function renderModels(force = false) {
   if (!snap) return;
   if (!force && $('#role-models').contains(document.activeElement)) return;
-  if (!modelsDirty) modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
+  if (!modelsDirty) {
+    modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
+    for (const [role, parent] of [['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer']]) {
+      modelDraft.roles[role] ??= modelDraft.roles[parent];
+      modelDraft.models[role] ??= structuredClone(modelDraft.models[parent] || {});
+    }
+  }
   const box = $('#role-models');
   box.replaceChildren();
   for (const [role, label] of Object.entries(ROLE_LABELS)) {
@@ -992,6 +1002,7 @@ function renderModels(force = false) {
 }
 function showTab(b) {
   if (!b) return;
+  if (b.dataset.tab === 'settings' && !SETTINGS_ONLY) { location.href = `overview.html#settings=${PROJECT_ID}`; return; }
   if (b.dataset.tab === 'settings') loadQueue();
   if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
@@ -1078,9 +1089,10 @@ function bindSkills() {
   $('#skill-to-prd').onclick = handle(async () => {
     const run = skillRuns.find(run => run.id === $('#skill-run-history').value);
     if (!run || run.status !== 'done') throw new Error('請選擇已完成的技能會議');
-    if ($('#idea').value.trim() && !confirm('以此會議取代目前尚未送出的需求內容？')) return;
-    $('#idea').value = `以下是需求釐清／設計會議紀錄。以使用者回答為準，AI 建議仍需在 PRD 區分假設與待決策事項。\n\n${run.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`;
-    showTab($('#tabbtn-prd')); toast('已帶入需求欄位，確認後可起草 PRD');
+    if ($('#bl-detail').value.trim() && !confirm('以此會議取代目前尚未新增的需求說明？')) return;
+    $('#bl-title').value = run.messages[0]?.text.split('\n')[0].slice(0, 200) || '技能會議需求';
+    $('#bl-detail').value = `以下是需求釐清／設計會議紀錄。以使用者回答為準，AI 建議仍需區分假設與待決策事項。\n\n${run.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`;
+    showTab($('#tabbtn-backlog')); toast('已帶入需求待辦，確認後按新增');
   });
   $('#skill-new').onclick = () => { skillEditingName = null; $('#skill-editor').value = '---\nname: my-skill\ndescription: 說明用途及使用時機\n---\n在此撰寫技能指令。\n'; };
   $('#skill-save').onclick = handle(async () => {
@@ -1126,6 +1138,7 @@ async function runAction(path, body = {}, message) {
 }
 
 function bind() {
+  $('#quota-cancel').onclick = () => { quotaDismissed = JSON.stringify(snap?.state.usage_blocked); $('#quota-notice').hidden = true; };
   $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
   $('#max-runs').onchange = async (event) => {
     await act('/api/queue/config', { max: Number(event.target.value) }, '已更新全域執行佇列');
@@ -1176,11 +1189,7 @@ function bind() {
       $('#btn-doctor').disabled = false;
     }
   };
-  $('#btn-prd-new').onclick = () => {
-    if (snap?.prd && !confirm('會取代目前的 PRD 草稿，確定？')) return;
-    act('/api/prd/new', { idea: $('#idea').value }, '已開始起草 PRD');
-  };
-  $('#btn-prd-approve').onclick = () => act('/api/prd/approve', {}, 'PRD 已核准');
+  $('#btn-prd-approve').onclick = () => act('/api/prd/approve', {}, 'PRD 已核准，正在自動產生任務');
   $('#btn-prd-revise').onclick = () => act('/api/prd/revise', { feedback: $('#feedback').value }, '已送出修改意見');
   $('#btn-tasks').onclick = () => act('/api/tasks/generate', {}, '已開始產生任務');
   $('#btn-start').onclick = () => runAction('/api/run/start', {}, '流程已開始');
@@ -1249,7 +1258,7 @@ function bind() {
 bind();
 bindSkills();
 bindBacklog();
-if (location.hash === '#settings') showTab($('#tabbtn-settings'));
+if (SETTINGS_ONLY || location.hash === '#settings') showTab($('#tabbtn-settings'));
 api('/api/state').then(onState).catch((err) => toast(err.message, true));
 loadInitialLogs();
 connect();

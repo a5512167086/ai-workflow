@@ -133,6 +133,23 @@ fn is_task_id(id: &str) -> bool {
     ok(parts.next()) && parts.next().is_none_or(|p| ok(Some(p))) && parts.next().is_none()
 }
 
+fn approve_and_generate(root: &Path, cfg: &Value, launch: &dyn Fn(&Path) -> Result<Value>) -> Result<Value> {
+    let file = approve_prd(root, cfg)?;
+    super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": null, "error": "" }))?;
+    match launch(root) {
+        Ok(job) => {
+            super::state::update_state(root, |s| {
+                if s["task_gen"]["status"] == "running" && s["task_gen"]["pid"].is_null() { s["task_gen"]["pid"] = job["pid"].clone(); }
+            })?;
+            Ok(json!({ "file": file.to_string_lossy(), "taskGeneration": job }))
+        }
+        Err(err) => {
+            super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "error", "error": err.message }))?;
+            Ok(json!({ "file": file.to_string_lossy(), "taskError": err.message }))
+        }
+    }
+}
+
 fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
     let mut args = args.to_vec();
     if let Some(provider) = body["useProvider"].as_str() {
@@ -153,7 +170,10 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             spawn(root, &["prd", &idea])
         }
-        "prd/approve" => Ok(json!({ "file": approve_prd(root, &snap["config"])?.to_string_lossy() })),
+        "prd/approve" => {
+            busy_guard(&snap)?;
+            approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
+        }
         "prd/revise" => {
             busy_guard(&snap)?;
             let feedback = text_field(body, "feedback").trim().to_string();
@@ -347,7 +367,7 @@ fn available_models(root: &Path, cfg: &Value) -> Value {
     let efforts = |list: &[&str]| list.iter().map(|e| json!(e)).collect::<Vec<_>>();
     let claude_models: Vec<Value> = [
         ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-5-5", "Opus 5.5"),
-        ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1"),
+        ("claude-haiku-5-5", "Haiku 5.5"),
         ("claude-opus-4-7", "Opus 4.7"), ("claude-opus-4-6", "Opus 4.6"), ("claude-sonnet-4-6", "Sonnet 4.6"),
         ("opus", "Opus（隨 CLI 更新的別名）"), ("sonnet", "Sonnet（隨 CLI 更新的別名）"), ("haiku", "Haiku（隨 CLI 更新的別名）"),
     ].iter()
@@ -454,6 +474,24 @@ pub fn handle(method: &str, path: &str, body: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 核准後自動拆任務_啟動失敗保留核准並提供重試狀態() {
+        for fail in [false, true] {
+            let root = super::super::util::temp_dir("auto-tasks-");
+            ensure_dirs(&root).unwrap();
+            fs::create_dir_all(root.join(".aipipe/prd")).unwrap();
+            fs::write(root.join(".aipipe/prd/current.md"), "# PRD").unwrap();
+            super::super::state::update_state(&root, |s| s["prd"]["status"] = json!("awaiting_approval")).unwrap();
+            let result = approve_and_generate(&root, &super::super::config::default_config(), &|_| {
+                if fail { Err(http(500, "無法啟動")) } else { Ok(json!({ "pid": 123 })) }
+            }).unwrap();
+            let state = read_state(&root);
+            assert_eq!(state["prd"]["status"], "approved");
+            assert_eq!(state["task_gen"]["status"], if fail { "error" } else { "running" });
+            assert_eq!(result["taskError"].is_string(), fail);
+        }
+    }
 
     #[test]
     fn 路徑工具() {

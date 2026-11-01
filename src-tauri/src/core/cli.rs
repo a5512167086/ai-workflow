@@ -268,8 +268,8 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
     let result = (|| -> Result<usize> {
         let prd = fs::read_to_string(root.join(cfg_str(&cfg, "prd_path")))?;
         let res = run_agent(AgentOpts {
-            root, cfg: &cfg, provider: cfg_str(&cfg["roles"], "author"), prompt: tasks_from_prd_prompt(root, &cfg, &prd),
-            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("author"),
+            root, cfg: &cfg, provider: cfg_str(&cfg["roles"], "task_planner"), prompt: tasks_from_prd_prompt(root, &cfg, &prd),
+            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("task_planner"),
         })?;
         if !res.ok {
             crate::bail!("作者 AI 產生任務失敗：{}", res.error_text());

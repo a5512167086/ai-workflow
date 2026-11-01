@@ -208,7 +208,7 @@ fn git_project(scenario: Value) -> (PathBuf, Value) {
 
 fn git_project_with(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
     let (root, mut cfg) = fixture(providers, scenario);
-    for role in ["author", "reviewer", "implementer", "code_reviewer"] {
+    for role in aipipe::core::config::ROLES {
         cfg["roles"][role] = json!("codex");
     }
     cfg["skills"]["implement"] = json!(["uiux-design"]);
@@ -413,4 +413,29 @@ fn 確認後本次單_ai_不嘗試限額_ai_且保留角色設定() {
     assert_eq!(saved["roles"]["code_reviewer"], "both");
     assert!(saved["_run_provider"].is_null());
     assert_eq!(read_state(&root)["tasks"]["1"]["review_verdicts"], json!({ "codex": "PASS" }));
+}
+
+#[test]
+fn 拆任務_實作_修正_交接各自套用模型() {
+    let mut scenario = pipeline_scenario();
+    scenario["codex"]["rules"][1]["text"] = json!("VERDICT: FAIL");
+    let (root, mut cfg) = git_project(scenario);
+    cfg["max_fix_rounds"] = json!(1);
+    for role in ["task_planner", "implementer", "fixer", "handover"] {
+        cfg["models"][role]["codex"] = json!({ "model": format!("model-{role}"), "effort": "low" });
+    }
+    save_config(&root, &cfg).unwrap();
+    let file = root.join(cfg["prd_path"].as_str().unwrap());
+    fs::create_dir_all(file.parent().unwrap()).unwrap(); fs::write(file, "# PRD").unwrap();
+    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    generate_tasks(&root).unwrap();
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "stuck");
+    fs::write(root.join(".fake-cli.json"), pipeline_scenario().to_string()).unwrap();
+    assert!(matches!(acknowledge(&root).unwrap(), Next::Verify(_)));
+    assert_eq!(run_pipeline(&root, Some("1"), true).unwrap(), "waiting");
+    let calls = calls(&root);
+    for role in ["task_planner", "implementer", "fixer", "handover"] {
+        let model = format!("model-{role}");
+        assert!(calls.iter().any(|c| c["args"].as_array().unwrap().windows(2).any(|w| w[0] == "-m" && w[1] == model)), "{role}");
+    }
 }

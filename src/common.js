@@ -1,5 +1,8 @@
 'use strict';
 
+// 首頁內嵌的專案設定沿用同源父視窗的桌面橋接。
+if (!window.__TAURI__ && window.parent !== window) window.__TAURI__ = window.parent.__TAURI__;
+
 // 專案頁（app.js）與總覽（overview.js）共用的小工具。
 
 const $ = (sel) => document.querySelector(sel);
@@ -35,7 +38,8 @@ async function subscribe(handlers) {
   const { listen } = window.__TAURI__.event;
   for (const [name, fn] of Object.entries(handlers)) {
     const event = name === 'projects' ? name : `${name}-${PROJECT_ID}`;
-    await listen(event, (e) => fn(e.payload));
+    const unlisten = await listen(event, (e) => fn(e.payload));
+    window.addEventListener('pagehide', unlisten, { once: true });
   }
   if (PROJECT_ID && !('projects' in handlers)) await window.__TAURI__.core.invoke('watch_project', { id: PROJECT_ID });
 }

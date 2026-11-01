@@ -66,7 +66,7 @@
   </nav>
 
   <main id="main" tabindex="-1">
-    <div id="quota-notice" class="notice" hidden><p id="quota-message"></p><button id="quota-retry" type="button">確認並以另一個 AI 繼續</button></div>
+    <div id="quota-notice" class="notice" hidden><p id="quota-message"></p><button id="quota-retry" type="button">確認並以另一個 AI 繼續</button><button id="quota-cancel" type="button">取消</button></div>
     <section id="tab-backlog" class="tab" role="tabpanel" aria-labelledby="tabbtn-backlog" hidden>
       <div class="backlog-layout">
         <div class="card">
@@ -121,18 +121,6 @@
 
       <div class="prd-layout">
         <div class="col-main">
-          <div id="prd-new" class="card">
-            <div class="card-head">
-              <h2>新想法</h2>
-              <span class="hint">作者 AI 起草，審查 AI 交叉審查</span>
-            </div>
-            <label for="idea" class="field-label">想法</label>
-            <textarea id="idea" rows="3" placeholder="例如：加入 CSV 匯出功能，可選欄位與日期範圍"></textarea>
-            <div class="row end">
-              <button id="btn-prd-new" type="button"><svg class="ic"><use href="#i-sparkle"/></svg>起草 PRD</button>
-            </div>
-          </div>
-
           <div class="card">
             <div class="card-head">
               <h2>目前 PRD <b id="prd-status" class="chip" aria-label="PRD 狀態">—</b></h2>
@@ -160,7 +148,7 @@
             <textarea id="feedback" rows="3" placeholder="要修改的地方"></textarea>
             <button id="btn-prd-revise" class="block" type="button"><svg class="ic"><use href="#i-edit"/></svg>要求再改</button>
             <hr>
-            <button id="btn-tasks" class="block" type="button"><svg class="ic"><use href="#i-list"/></svg>依 PRD 產生任務</button>
+            <button id="btn-tasks" class="block" type="button"><svg class="ic"><use href="#i-list"/></svg>重新產生任務</button>
             <p id="task-gen" class="hint center" role="status"></p>
           </div>
 
@@ -245,7 +233,7 @@
           <select id="skill-run-history"><option value="">新會議</option></select>
           <label for="skill-input" class="field-label spaced">需求或回答</label><textarea id="skill-input" rows="4"></textarea>
           <div class="row"><button id="skill-run" class="primary" type="button">送出</button></div>
-          <div class="row"><button id="skill-to-prd" type="button">將此會議帶入 PRD</button></div>
+          <div class="row"><button id="skill-to-prd" type="button">將此會議帶入需求待辦</button></div>
           <p class="hint">每次回覆使用全新 AI session，透過會議紀錄交接。可將確認的需求整理後帶入 PRD。</p>
           <pre id="skill-output" class="doc" role="status"></pre>
         </div>
@@ -264,7 +252,8 @@
         <div class="card"><h2>全域執行佇列</h2><label for="max-runs">同時執行的專案上限</label><select id="max-runs"><option value="1">1 個</option><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select><p id="queue-line" class="hint"></p><p class="hint">適用所有專案；等待人工驗收的專案不占名額。</p></div>
         <div class="card settings-wide">
           <div class="card-head"><h2>AI 角色與模型</h2><button id="btn-save-models" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
-          <p class="hint">每個角色選擇 AI、模型與推理強度；空白＝CLI 預設。PRD 審查與程式碼審查可以選「雙人審查」：Claude 與 Codex 各審一次，兩份意見分開顯示，兩份都通過才算通過。只有一個 AI 可用或額度用完改用另一個 AI 時，套用那個 AI 的設定。</p>
+          <p class="hint">每個階段可獨立選擇 AI、模型與推理強度；空白＝CLI 預設。PRD 審查與程式碼審查可以選「雙人審查」：Claude 與 Codex 各審一次，兩份意見分開顯示，兩份都通過才算通過。只有一個 AI 可用或額度用完改用另一個 AI 時，套用那個 AI 的設定。</p>
+          <p class="hint">Pro 訂閱不含 Fable：在 Claude Code 看得到模型選項，也可能需要額外 usage credits。此處建議清單不列 Fable。Handover 是給下一個 AI session 的交接紀錄，會記錄已完成內容、驗證結果與待處理事項。</p>
           <div id="role-models" class="role-models"></div>
           <datalist id="models-claude"></datalist>
           <datalist id="models-codex"></datalist>
