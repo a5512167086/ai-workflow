@@ -7,6 +7,9 @@ import * as git from './git.js';
 import * as tmaster from './taskmaster.js';
 import { implementPrompt, fixChecksPrompt, fixReviewPrompt, codeReviewPrompt, handoverPrompt } from './prompts.js';
 import { appendLog, isPidAlive, readState, taskDir, taskState, updateState } from './state.js';
+import { acquireSlot, release as releaseSlot } from './queue.js';
+import { archiveTasks } from './archive.js';
+import { updateItem } from './backlog.js';
 
 const RUN_SCOPE = 'runner';
 
@@ -196,7 +199,7 @@ function acquireRunner(root) {
 function releaseRunner(root) {
   updateState(root, (st) => {
     if (st.runner.pid === process.pid) st.runner = { pid: null, started_at: null };
-    if (st.pipeline.status === 'running') st.pipeline.status = 'idle';
+    if (['running', 'queued'].includes(st.pipeline.status)) st.pipeline.status = 'idle';
   });
 }
 
@@ -217,6 +220,22 @@ export async function runPipeline(root, { firstTask = null, verifyOnly = false }
     if (waiting) {
       setPipeline(root, 'waiting', `任務 ${waiting.id} 等待人工測試，測完請按「我測完了，繼續」`);
       return 'waiting';
+    }
+
+    // 全域佇列：其他專案正在跑時在這裡排隊；排隊中按暫停就放棄排隊。
+    const granted = await acquireSlot(root, {
+      onWait: (position, running) => {
+        const names = running.map((e) => path.basename(e.root)).join('、');
+        setPipeline(root, 'queued', `排隊第 ${position} 位${names ? `，執行中：${names}` : ''}`);
+      },
+      shouldAbort: () => readState(root).control.pause_requested,
+    });
+    if (!granted) {
+      updateState(root, (s) => {
+        s.control.pause_requested = false;
+      });
+      setPipeline(root, 'paused', '使用者在排隊時暫停');
+      return 'paused';
     }
 
     if (cfg.mode === 'auto') {
@@ -268,7 +287,13 @@ export async function runPipeline(root, { firstTask = null, verifyOnly = false }
     setPipeline(root, 'error', err.message);
     throw err;
   } finally {
+    releaseSlot();
     releaseRunner(root);
+    try {
+      archiveTasks(root);
+    } catch (err) {
+      appendLog(root, RUN_SCOPE, `⚠ 封存任務清單失敗：${err.message}`);
+    }
   }
 }
 
@@ -289,6 +314,7 @@ export async function acknowledge(root) {
   }
   if (state.pipeline.status === 'feature_test') {
     setPipeline(root, 'complete', '功能已完成並通過人工測試');
+    finishFeature(root);
     return { next: null };
   }
   // 卡住的任務，或流程出錯時停在半途的任務（runner 已不在）：重新驗證與審查。
@@ -299,6 +325,17 @@ export async function acknowledge(root) {
   if (stuck && !waiting.length) return { next: 'verify', task: stuck.id };
   setPipeline(root, 'idle', '');
   return { next: 'run' };
+}
+
+/** 功能完成：封存最後的任務清單，並把對應的待辦項目標成完成。 */
+function finishFeature(root) {
+  const s = readState(root);
+  try {
+    archiveTasks(root, { completed_at: new Date().toISOString() });
+    if (s.prd.backlog_id) updateItem(root, s.prd.backlog_id, { status: 'done', feature: s.prd.archive_dir || undefined });
+  } catch (err) {
+    appendLog(root, RUN_SCOPE, `⚠ 功能完成後的封存／待辦更新失敗：${err.message}`);
+  }
 }
 
 export function requestPause(root) {

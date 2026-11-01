@@ -3,6 +3,7 @@ import path from 'node:path';
 import { runAgent, parseVerdict } from './agents.js';
 import { prdDraftPrompt, prdReviewPrompt, prdRevisePrompt, stripOuterFence } from './prompts.js';
 import { aipipeDir, appendLog, readState, updateState, readText } from './state.js';
+import { archivePrd, archiveTasks } from './archive.js';
 
 const SCOPE = 'prd';
 
@@ -108,11 +109,20 @@ async function withErrorState(root, fn) {
   }
 }
 
-export async function draftPrd(root, cfg, idea) {
+export async function draftPrd(root, cfg, idea, { backlogId = null } = {}) {
   guard(root);
+  // 開始新功能前，把上一個功能最後的任務狀態寫進它的封存；之後 archive_dir 清空，核准時會建新的資料夾。
+  try {
+    archiveTasks(root);
+  } catch (err) {
+    appendLog(root, SCOPE, `⚠ 封存上一個功能的任務清單失敗：${err.message}`);
+  }
   await withErrorState(root, async () => {
     updateState(root, (s) => {
-      s.prd = { ...s.prd, status: 'drafting', idea, round: 0, rounds: [], version: 0, approved_at: null, error: '', pid: process.pid };
+      s.prd = {
+        ...s.prd, status: 'drafting', idea, round: 0, rounds: [], version: 0, approved_at: null, error: '', pid: process.pid,
+        archive_dir: null, backlog_id: backlogId,
+      };
     });
     for (const f of fs.readdirSync(aipipeDir(root, 'prd'))) fs.rmSync(aipipeDir(root, 'prd', f));
     appendLog(root, SCOPE, `新想法：${idea}`);
@@ -159,5 +169,11 @@ export function approvePrd(root, cfg) {
     st.prd.approved_at = new Date().toISOString();
   });
   appendLog(root, SCOPE, `PRD 已核准，寫入 ${cfg.prd_path}`);
+  try {
+    const dir = archivePrd(root, cfg);
+    appendLog(root, SCOPE, `PRD 與每輪紀錄已封存到 ${dir}`);
+  } catch (err) {
+    appendLog(root, SCOPE, `⚠ 封存 PRD 失敗：${err.message}`);
+  }
   return target;
 }

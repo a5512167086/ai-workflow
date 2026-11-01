@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findProjectRoot, loadConfig, patchConfig, MODES } from './config.js';
+import { CONFIG_FILE, findProjectRoot, loadConfig, patchConfig, MODES } from './config.js';
 import { initProject } from './init.js';
 import { draftPrd, revisePrd, approvePrd } from './prd.js';
 import * as tmaster from './taskmaster.js';
@@ -10,6 +10,11 @@ import { appendLog, ensureDirs, readState, updateState } from './state.js';
 import { doctorReport } from './doctor.js';
 import { runAgent } from './agents.js';
 import { tasksFromPrdPrompt } from './prompts.js';
+import { IS_SEA } from './home.js';
+import { addProject, listProjects, projectSummary, removeProject } from './projects.js';
+import { queueSnapshot, setMaxConcurrent } from './queue.js';
+import { archiveTasks, tagSlug } from './archive.js';
+import { getItem, ideaFor, updateItem } from './backlog.js';
 
 const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI 開發流程
 
@@ -20,6 +25,7 @@ const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI �
                           在目前專案建立 .aipipe.json
   doctor                  檢查 claude / codex / task-master 是否可用、是否走訂閱登入
   prd "<想法>"            作者 AI 起草 PRD → 審查 AI 審 → 來回最多 max_prd_rounds 輪
+  prd --backlog <id>      用需求待辦清單裡的項目起草 PRD
   prd --revise "<意見>"   依你的意見修訂後再審一次
   prd --approve           核准目前的 PRD（寫入 prd_path）
   tasks                   用 Task Master parse-prd 產生 .taskmaster/tasks/tasks.json
@@ -30,7 +36,12 @@ const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI �
   mode <auto|manual>      切換模式
   status                  顯示目前狀態
   ui [--port 4317] [--no-open]
-                          開本機網頁 UI
+                          開本機網頁 UI；不帶 --cwd 時顯示所有專案的總覽，帶 --cwd 時直接開該專案
+  projects list           列出總覽裡的專案（~/.aipipe/projects.json）
+  projects add [目錄]     加入專案（預設目前專案）
+  projects remove <id|目錄|名稱>
+                          從總覽移除（不刪任何檔案）
+  queue [--max <n>]       顯示全域執行佇列；--max 設定同時執行的 aipipe run 上限（預設 1）
 
 全域選項：--cwd <目錄>  指定目標專案（預設從目前目錄往上找 .aipipe.json）`;
 
@@ -88,6 +99,10 @@ export async function main(argv) {
       }
       if (opts.revise) {
         await revisePrd(root, cfg, String(opts.revise));
+      } else if (opts.backlog) {
+        const item = getItem(root, String(opts.backlog));
+        updateItem(root, item.id, { status: 'in_progress' });
+        await draftPrd(root, cfg, ideaFor(item), { backlogId: item.id });
       } else {
         const idea = rest.join(' ').trim();
         if (!idea) throw new Error('請提供想法，例如：aipipe prd "加入匯出 CSV 功能"');
@@ -133,7 +148,26 @@ export async function main(argv) {
       return printStatus(root);
     case 'ui': {
       const { startServer } = await import('./server.js');
-      await startServer(root, { port: Number(opts.port) || 4317, open: !opts.no_open });
+      // 目前目錄是專案時自動加進總覽；只有明確指定 --cwd 時首頁才直接開該專案。
+      const isProject = fs.existsSync(path.join(root, CONFIG_FILE));
+      if (isProject) {
+        try {
+          addProject(root);
+        } catch {
+          // 加不進清單不影響開 UI
+        }
+      }
+      await startServer(isProject ? root : null, { port: Number(opts.port) || 4317, open: !opts.no_open, overview: !opts.cwd });
+      return;
+    }
+    case 'projects':
+      return projectsCommand(rest, root);
+    case 'queue': {
+      if (opts.max !== undefined) setMaxConcurrent(opts.max);
+      const q = queueSnapshot();
+      console.log(`同時執行上限：${q.max}`);
+      console.log(`執行中：${q.running.length ? q.running.map((e) => `${e.root}（pid ${e.pid}）`).join('、') : '無'}`);
+      for (const e of q.waiting) console.log(`  排隊 #${e.position}：${e.root}（pid ${e.pid}）`);
       return;
     }
     case undefined:
@@ -156,6 +190,10 @@ async function generateTasks(root) {
   });
   try {
     await tmaster.ensureTaskMaster(root, cfg, scope);
+    let tag = tmaster.currentTag(root);
+    if (cfg.taskmaster.use_tags) {
+      tag = (await tmaster.useFeatureTag(root, cfg, tagSlug(cfg.feature || state.prd.idea), scope)) || tag;
+    }
     const via = await tmaster.parsePrd(root, cfg, cfg.prd_path, scope, async () => {
       const prd = fs.readFileSync(path.join(root, cfg.prd_path), 'utf8');
       const res = await runAgent({
@@ -169,9 +207,10 @@ async function generateTasks(root) {
     });
     const tasks = tmaster.readTasks(root);
     updateState(root, (s) => {
-      s.task_gen = { status: 'done', pid: null, error: '', count: tasks.length, via };
+      s.task_gen = { status: 'done', pid: null, error: '', count: tasks.length, via, tag };
       s.tasks = {};
     });
+    archiveTasks(root);
     appendLog(root, scope, `產生 ${tasks.length} 個任務（${via === 'agent' ? '作者 AI 產生、Task Master 管理' : 'task-master parse-prd'}）`);
     console.log(`Task Master 產生 ${tasks.length} 個任務，下一步：aipipe run 或在 UI 按「開始」`);
   } catch (err) {
@@ -193,6 +232,33 @@ function printStatus(root) {
   }
 }
 
+function projectsCommand([sub, ...args], root) {
+  if (sub === 'add') {
+    const dir = args[0] ? path.resolve(args[0]) : root;
+    const p = addProject(dir);
+    console.log(`已加入：${p.name}（${p.path}，id ${p.id}）`);
+    return;
+  }
+  if (sub === 'remove' || sub === 'rm') {
+    if (!args[0]) throw new Error('請指定要移除的專案 id、路徑或名稱');
+    const p = removeProject(args[0]);
+    console.log(`已從總覽移除：${p.name}（${p.path}），檔案沒有變動`);
+    return;
+  }
+  if (sub && sub !== 'list' && sub !== 'ls') throw new Error('用法：aipipe projects list|add [目錄]|remove <id|目錄|名稱>');
+  const list = listProjects();
+  if (!list.length) {
+    console.log('總覽裡還沒有專案：在專案目錄執行 aipipe projects add');
+    return;
+  }
+  for (const p of list) {
+    const s = projectSummary(p);
+    const prog = s.progress?.total ? ` ${s.progress.done}/${s.progress.total}` : '';
+    const feature = s.feature ? `  ${s.feature.split('\n')[0].slice(0, 40)}` : '';
+    console.log(`${p.id}  ${p.name}  [${s.status}${prog}]${feature}\n            ${p.path}`);
+  }
+}
+
 async function doctor(root) {
   const { lines } = await doctorReport(root);
   console.log(lines.join('\n'));
@@ -203,7 +269,9 @@ export function spawnDetachedCli(root, args) {
     ensureDirs(root);
     const out = fs.openSync(path.join(root, '.aipipe', 'logs', 'process.log'), 'a');
     fs.writeSync(out, `\n[${new Date().toISOString()}] aipipe ${args.join(' ')}\n`);
-    const child = spawn(process.execPath, [BIN_PATH, ...args, '--cwd', root], {
+    // SEA（桌面版 sidecar）本身就是 aipipe，不需要再帶入口腳本。
+    const argv = IS_SEA ? [...args, '--cwd', root] : [BIN_PATH, ...args, '--cwd', root];
+    const child = spawn(process.execPath, argv, {
       cwd: root,
       detached: true,
       stdio: ['ignore', out, out],

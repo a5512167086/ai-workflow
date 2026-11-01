@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { IS_SEA } from './home.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -48,6 +49,11 @@ export function which(name) {
   return null;
 }
 
+/** 執行 npm 安裝的 .js CLI 用的 node。桌面版（SEA）的 process.execPath 是 aipipe 自己，要另外找 node。 */
+function nodeExe() {
+  return IS_SEA ? which('node') : process.execPath;
+}
+
 /**
  * 把設定或 PATH 裡的 CLI 解析成可直接 spawn 的 { command, prefixArgs, shell }。
  * npm 在 Windows 產生的 .cmd 包裝檔會改成用 node 直接執行其 JS 入口，避免經過 cmd.exe 的參數跳脫問題。
@@ -60,13 +66,14 @@ export function resolveCli(configured, fallbackName) {
   if (IS_WIN && /\.(cmd|bat)$/i.test(file)) {
     const text = fs.readFileSync(file, 'utf8');
     const m = text.match(/"%(?:dp0|~dp0)%\\([^"]+\.(?:js|mjs|cjs))"/i);
-    if (m) {
-      return { command: process.execPath, prefixArgs: [path.join(path.dirname(file), m[1])], shell: false, label: file };
+    if (m && nodeExe()) {
+      return { command: nodeExe(), prefixArgs: [path.join(path.dirname(file), m[1])], shell: false, label: file };
     }
     return { command: file, prefixArgs: [], shell: true, label: file };
   }
   if (/\.(js|mjs|cjs)$/i.test(file)) {
-    return { command: process.execPath, prefixArgs: [file], shell: false, label: file };
+    if (!nodeExe()) throw new Error(`${file} 是 Node.js 腳本，需要安裝 Node.js 並放在 PATH 中`);
+    return { command: nodeExe(), prefixArgs: [file], shell: false, label: file };
   }
   return { command: file, prefixArgs: [], shell: false, label: file };
 }

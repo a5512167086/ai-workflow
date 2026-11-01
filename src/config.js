@@ -20,6 +20,9 @@ export function defaultConfig() {
     context_files: ['docs/ai-context.md', 'docs/index.md'],
     handover_path: 'docs/handovers/current_handover.md',
     prd_path: '.taskmaster/docs/prd.md',
+    // 需求待辦清單與功能封存，都放在專案裡可以 commit。
+    backlog_path: 'docs/aipipe/backlog.json',
+    archive_dir: 'docs/prd',
     roles: {
       author: 'claude',
       reviewer: 'codex',
@@ -68,6 +71,8 @@ export function defaultConfig() {
       model: 'sonnet',
       // auto：先用 task-master parse-prd，失敗再由作者 AI 依 Task Master 格式產生；task-master／agent 只用其中一種。
       parse_with: 'auto',
+      // 每個功能用一個 Task Master tag，各自一份任務清單，開始新功能不會覆蓋上一個功能的任務。
+      use_tags: true,
     },
   };
 }
@@ -106,6 +111,10 @@ export function validateConfig(cfg) {
   }
   if (typeof cfg.wsl_distro !== 'string' || !/^[\w.-]*$/.test(cfg.wsl_distro)) {
     errors.push('wsl_distro 只能包含英數字、底線、點與連字號');
+  }
+  for (const key of ['backlog_path', 'archive_dir']) {
+    const v = cfg[key];
+    if (typeof v !== 'string' || !v || path.isAbsolute(v) || v.split(/[\\/]/).includes('..')) errors.push(`${key} 必須是專案內的相對路徑`);
   }
   if (!['auto', 'task-master', 'agent'].includes(cfg.taskmaster?.parse_with)) {
     errors.push('taskmaster.parse_with 必須是 auto / task-master / agent');

@@ -68,7 +68,7 @@ export async function ensureTaskMaster(root, cfg, scope) {
 export async function parsePrd(root, cfg, prdFile, scope, agentFallback) {
   const mode = cfg.taskmaster.parse_with;
   if (mode !== 'agent') {
-    const args = ['parse-prd', '--input', prdFile, '--force'];
+    const args = ['parse-prd', '--input', prdFile, '--force', '--tag', currentTag(root)];
     if (cfg.num_tasks > 0) args.push('--num-tasks', String(cfg.num_tasks));
     const res = await tm(root, cfg, args, scope, { allowFail: mode === 'auto' });
     if (res.code === 0 && fs.existsSync(tasksFile(root))) return 'task-master';
@@ -81,8 +81,55 @@ export async function parsePrd(root, cfg, prdFile, scope, agentFallback) {
   return 'agent';
 }
 
-/** 驗證並寫入 AI 產生的任務清單（Task Master tag 格式）。 */
-export function writeTasks(root, tasks) {
+/** 目前使用中的 Task Master tag（.taskmaster/state.json 的 currentTag），預設 master。 */
+export function currentTag(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, '.taskmaster', 'state.json'), 'utf8')).currentTag || 'master';
+  } catch {
+    return 'master';
+  }
+}
+
+function readTasksFile(root) {
+  const file = tasksFile(root);
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+/** Task Master 的 tag 名稱只接受英數字、底線與連字號。 */
+export function tagName(date, slug, existing = []) {
+  const base = `f-${date.replace(/-/g, '')}-${slug}`.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/-+$/, '');
+  let name = base;
+  for (let i = 2; existing.includes(name); i++) name = `${base}-${i}`;
+  return name;
+}
+
+/**
+ * 為新功能建立並切換到自己的 tag。失敗（例如舊版 Task Master）就回傳 null，沿用目前的 tag。
+ */
+export async function useFeatureTag(root, cfg, slug, scope) {
+  const data = readTasksFile(root) || {};
+  const existing = Array.isArray(data.tasks) ? [] : Object.keys(data);
+  // 目前的 tag 還是空的（例如全新專案的 master），直接用它就好。
+  const cur = currentTag(root);
+  if (!Array.isArray(data.tasks) && !(data[cur]?.tasks || []).length) return cur;
+  const name = tagName(new Date().toISOString().slice(0, 10), slug, existing);
+  const add = await tm(root, cfg, ['tags', 'add', name, '--description', `aipipe ${slug}`], scope, { allowFail: true });
+  if (add.code !== 0) {
+    appendLog(root, scope, `⚠ 建立 Task Master tag ${name} 失敗，沿用 ${cur}`);
+    return null;
+  }
+  const use = await tm(root, cfg, ['tags', 'use', name], scope, { allowFail: true });
+  if (use.code !== 0) {
+    appendLog(root, scope, `⚠ 切換到 Task Master tag ${name} 失敗，沿用 ${cur}`);
+    return null;
+  }
+  appendLog(root, scope, `這個功能的任務放在 Task Master tag「${name}」`);
+  return name;
+}
+
+/** 驗證並寫入 AI 產生的任務清單（Task Master tag 格式），只覆蓋目前的 tag，其他功能的 tag 保留。 */
+export function writeTasks(root, tasks, tag = currentTag(root)) {
   if (!Array.isArray(tasks) || !tasks.length) throw new Error('任務清單是空的');
   const ids = new Set();
   const clean = tasks.map((t, i) => {
@@ -104,7 +151,10 @@ export function writeTasks(root, tasks) {
   const file = tasksFile(root);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const now = new Date().toISOString();
-  const data = { master: { tasks: clean, metadata: { created: now, updated: now, description: 'Tasks for master context' } } };
+  let data = readTasksFile(root) || {};
+  if (Array.isArray(data.tasks)) data = {}; // 舊版單一清單格式：改寫成 tag 格式
+  const meta = data[tag]?.metadata || {};
+  data[tag] = { tasks: clean, metadata: { ...meta, created: meta.created || now, updated: now, description: meta.description || `Tasks for ${tag} context` } };
   fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
   return clean;
 }
@@ -131,13 +181,12 @@ export async function setStatus(root, cfg, id, status, scope) {
   await tm(root, cfg, ['set-status', `--id=${id}`, `--status=${status}`], scope);
 }
 
-/** 讀 tasks.json；支援新版 tag 格式 { master: { tasks } } 與舊版 { tasks }。 */
+/** 讀目前 tag 的任務；支援新版 tag 格式 { <tag>: { tasks } } 與舊版 { tasks }。 */
 export function readTasks(root) {
-  const file = tasksFile(root);
-  if (!fs.existsSync(file)) return [];
-  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const data = readTasksFile(root);
+  if (!data) return [];
   if (Array.isArray(data.tasks)) return data.tasks;
-  const tag = data.master || Object.values(data).find((v) => v && Array.isArray(v.tasks));
+  const tag = data[currentTag(root)] || data.master || Object.values(data).find((v) => v && Array.isArray(v.tasks));
   return tag?.tasks || [];
 }
 
