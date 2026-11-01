@@ -160,6 +160,7 @@ function renderPrdBody() {
     b.setAttribute('aria-checked', String(on));
     b.disabled = !canRender();
   }
+  $('#prd-md-missing').classList.toggle('hidden', canRender());
   $('#btn-prd-copy').disabled = !prd;
 }
 
