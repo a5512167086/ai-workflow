@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aipipe</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">aipipe <span id="project" class="muted"></span></div>
+    <div class="status-line">
+      <span id="pipeline-status" class="pill">—</span>
+      <span id="pipeline-reason" class="muted"></span>
+    </div>
+    <div class="mode">
+      模式
+      <div class="seg" role="radiogroup" aria-label="模式">
+        <button data-mode="auto" type="button">自動</button>
+        <button data-mode="manual" type="button">手動</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="prd" class="active" type="button">PRD</button>
+    <button data-tab="board" type="button">任務看板</button>
+    <button data-tab="log" type="button">流程 log</button>
+    <button data-tab="settings" type="button">設定</button>
+  </nav>
+
+  <main>
+    <section id="tab-prd" class="tab active">
+      <div class="controls">
+        <span>狀態：<b id="prd-status">—</b></span>
+        <span id="prd-busy" class="muted"></span>
+      </div>
+      <div id="prd-new" class="card">
+        <label for="idea">想法</label>
+        <textarea id="idea" rows="3" placeholder="例如：加入 CSV 匯出功能，可選欄位與日期範圍"></textarea>
+        <button id="btn-prd-new" type="button">起草 PRD</button>
+      </div>
+      <div class="split">
+        <div class="card grow">
+          <h3>目前 PRD</h3>
+          <pre id="prd-text" class="doc">（尚無）</pre>
+        </div>
+        <div class="card side">
+          <h3>每輪紀錄</h3>
+          <div id="prd-rounds"></div>
+        </div>
+      </div>
+      <div class="card" id="prd-actions">
+        <button id="btn-prd-approve" class="primary" type="button">核准 PRD</button>
+        <label for="feedback">或附意見要求再改：</label>
+        <textarea id="feedback" rows="3" placeholder="要修改的地方"></textarea>
+        <button id="btn-prd-revise" type="button">要求再改</button>
+        <hr>
+        <button id="btn-tasks" type="button">用 Task Master 產生任務</button>
+        <span id="task-gen" class="muted"></span>
+      </div>
+    </section>
+
+    <section id="tab-board" class="tab">
+      <div class="controls">
+        <button id="btn-start" class="primary" type="button">開始</button>
+        <button id="btn-pause" type="button">暫停</button>
+        <button id="btn-continue" type="button">我測完了，繼續</button>
+        <span id="runner-info" class="muted"></span>
+      </div>
+      <div id="board" class="board"></div>
+      <div id="detail" class="card hidden">
+        <div class="detail-head">
+          <h3 id="d-title"></h3>
+          <button id="d-close" type="button" aria-label="關閉">✕</button>
+        </div>
+        <div id="d-meta" class="meta"></div>
+        <div class="controls">
+          <label><input type="checkbox" id="d-revert"> 重跑前還原這個任務的變更</label>
+          <button id="d-rerun" type="button">重跑任務</button>
+        </div>
+        <div class="subtabs">
+          <button data-sub="log" class="active" type="button">即時 log</button>
+          <button data-sub="checks" type="button">test 輸出</button>
+          <button data-sub="reviews" type="button">審查意見</button>
+          <button data-sub="diff" type="button">diff</button>
+          <button data-sub="task" type="button">任務內容</button>
+        </div>
+        <pre id="d-body" class="doc log"></pre>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <div class="card">
+        <h3>CLI 執行環境</h3>
+        <p class="muted">每個 CLI 可以在 Windows 原生或 WSL 裡執行。下一次呼叫 CLI 時生效。</p>
+        <table class="settings">
+          <tbody>
+            <tr><th>claude</th><td><select data-runtime="claude"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
+            <tr><th>codex</th><td><select data-runtime="codex"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
+            <tr><th>task-master</th><td><select data-runtime="task_master"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
+            <tr><th><label for="wsl-distro">WSL 發行版</label></th><td><input id="wsl-distro" type="text" placeholder="空白＝預設發行版，例如 Ubuntu"></td></tr>
+          </tbody>
+        </table>
+        <div class="controls">
+          <button id="btn-save-runtime" class="primary" type="button">儲存</button>
+          <button id="btn-doctor" type="button">檢查 CLI（doctor）</button>
+        </div>
+        <pre id="doctor-out" class="doc hidden"></pre>
+      </div>
+      <div class="card">
+        <h3>目前設定（.aipipe.json）</h3>
+        <pre id="config-json" class="doc"></pre>
+      </div>
+    </section>
+
+    <section id="tab-log" class="tab">
+      <div class="controls">
+        <select id="log-scope"></select>
+      </div>
+      <pre id="log-body" class="doc log"></pre>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
