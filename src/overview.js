@@ -49,6 +49,7 @@ function render() {
       <p class="pc-reason"></p>
       <div class="pc-actions">
         <button type="button" class="icon-btn" data-act="remove">${icon('trash')}</button>
+        <a class="btn" href="${projectHref(p.id)}#settings">設定</a>
         <a class="btn primary" href="${projectHref(p.id)}">${icon('forward')}開啟</a>
       </div>`;
     card.querySelector('.pc-name a').textContent = p.name;

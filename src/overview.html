@@ -52,7 +52,10 @@
           <button id="btn-add" class="primary" type="button"><svg class="ic"><use href="#i-plus"/></svg>加入</button>
         </div>
       </div>
-      <div class="card queue-card">
+
+    </div>
+
+    <details class="card" id="overview-settings"><summary>設定</summary><p class="hint">全域佇列在此設定；各專案的 AI、模型與工作流程模式，請由專案卡片的「設定」開啟。</p>      <div class="card queue-card">
         <div class="card-head"><h2>執行佇列</h2></div>
         <label for="max-runs" class="field-label">同時執行的流程上限</label>
         <div class="row tight">
@@ -64,9 +67,7 @@
           </select>
         </div>
         <p class="hint">其他專案會排隊；停下來等你的專案不佔名額。</p>
-      </div>
-    </div>
-
+      </div></details>
     <section aria-labelledby="projects-h">
       <h2 id="projects-h" class="section-h">專案 <span class="tab-badge" id="count"></span></h2>
       <div id="projects" class="project-grid"></div>

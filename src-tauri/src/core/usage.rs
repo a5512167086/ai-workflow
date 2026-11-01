@@ -386,7 +386,14 @@ pub fn refresh_usage_limits_with(
         let env = cli_environment(cfg, provider, root);
         let key = environment_key(provider, &env.runtime, &env.distro);
         match result {
-            Ok(windows) if !windows.is_empty() => merge_limits(&key, &windows, Value::Null, true)?,
+            Ok(windows) if !windows.is_empty() => {
+                merge_limits(&key, &windows, Value::Null, true)?;
+                if windows.iter().all(|w| w["remainingPercent"].as_f64().is_some_and(|n| n > 0.0)) {
+                    super::state::update_state(root, |s| {
+                        if s["usage_blocked"]["provider"] == provider { s["usage_blocked"] = Value::Null; }
+                    })?;
+                }
+            }
             Ok(_) => merge_limits(&key, &[], json!("CLI 未提供訂閱額度資料"), false)?,
             Err(_) => merge_limits(&key, &[], json!(failed), false)?,
         }

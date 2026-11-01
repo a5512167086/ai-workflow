@@ -393,3 +393,24 @@ VERDICT: PASS" }] });
     let labels: Vec<String> = sessions(&root).iter().filter(|s| s["stage"] == "code_review").map(|s| s["label"].as_str().unwrap().into()).collect();
     assert_eq!(labels.len(), 2, "{labels:?}");
 }
+
+#[test]
+fn 確認後本次單_ai_不嘗試限額_ai_且保留角色設定() {
+    let mut scenario = pipeline_scenario();
+    scenario["claude"] = json!({ "code": 1, "text": LIMIT });
+    let (root, mut cfg) = git_project_with(&["claude", "codex"], scenario);
+    cfg["roles"]["code_reviewer"] = json!("both");
+    save_config(&root, &cfg).unwrap();
+    let file = root.join(cfg["prd_path"].as_str().unwrap());
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, "# PRD").unwrap();
+    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    generate_tasks(&root).unwrap();
+    let before = calls(&root).len();
+    assert_eq!(aipipe::core::runner::run_pipeline_with_provider(&root, None, false, Some("codex")).unwrap(), "waiting");
+    assert!(calls(&root)[before..].iter().all(|c| c["provider"] == "codex"));
+    let saved = aipipe::core::config::load_config(&root).unwrap();
+    assert_eq!(saved["roles"]["code_reviewer"], "both");
+    assert!(saved["_run_provider"].is_null());
+    assert_eq!(read_state(&root)["tasks"]["1"]["review_verdicts"], json!({ "codex": "PASS" }));
+}

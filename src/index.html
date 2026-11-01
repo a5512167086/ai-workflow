@@ -40,7 +40,7 @@
     <div class="brand">
       <a class="icon-btn back-link" href="overview.html" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
       <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
-      <span class="name">aipipe <small class="hint">v0.1.1</small></span>
+      <span class="name">aipipe <small class="hint">v0.2.0</small></span>
       <span id="project" class="project mono" title=""></span>
     </div>
     <div class="status-line">
@@ -49,13 +49,6 @@
     </div>
     <div class="top-actions">
       <button id="usage-short" type="button" title="查看本專案 token 用量與訂閱額度">Tokens：未知</button>
-      <div class="mode">
-        <span class="label" id="mode-label">模式</span>
-        <div class="seg" role="radiogroup" aria-labelledby="mode-label">
-          <button data-mode="auto" type="button" role="radio" aria-checked="false">自動</button>
-          <button data-mode="manual" type="button" role="radio" aria-checked="false">手動</button>
-        </div>
-      </div>
       <button id="btn-theme" class="icon-btn" type="button" aria-label="主題：跟隨系統" title="主題：跟隨系統">
         <svg class="ic"><use href="#i-monitor"/></svg>
       </button>
@@ -73,6 +66,7 @@
   </nav>
 
   <main id="main" tabindex="-1">
+    <div id="quota-notice" class="notice" hidden><p id="quota-message"></p><button id="quota-retry" type="button">確認並以另一個 AI 繼續</button></div>
     <section id="tab-backlog" class="tab" role="tabpanel" aria-labelledby="tabbtn-backlog" hidden>
       <div class="backlog-layout">
         <div class="card">
@@ -259,6 +253,15 @@
     </section>
     <section id="tab-settings" class="tab" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
       <div class="settings-layout">
+        <div class="card"><h2>工作流程模式</h2><p class="hint">自動：驗證與審查通過後自動 commit。手動：不自動 commit，每個任務完成後等待你測試。與 Windows／WSL 執行環境無關。</p>      <div class="mode">
+        <span class="label" id="mode-label">模式</span>
+        <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+          <button data-mode="auto" type="button" role="radio" aria-checked="false">自動</button>
+          <button data-mode="manual" type="button" role="radio" aria-checked="false">手動</button>
+        </div>
+      </div>
+</div>
+        <div class="card"><h2>全域執行佇列</h2><label for="max-runs">同時執行的專案上限</label><select id="max-runs"><option value="1">1 個</option><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select><p id="queue-line" class="hint"></p><p class="hint">適用所有專案；等待人工驗收的專案不占名額。</p></div>
         <div class="card settings-wide">
           <div class="card-head"><h2>AI 角色與模型</h2><button id="btn-save-models" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
           <p class="hint">每個角色選擇 AI、模型與推理強度；空白＝CLI 預設。PRD 審查與程式碼審查可以選「雙人審查」：Claude 與 Codex 各審一次，兩份意見分開顯示，兩份都通過才算通過。只有一個 AI 可用或額度用完改用另一個 AI 時，套用那個 AI 的設定。</p>

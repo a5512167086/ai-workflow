@@ -17,7 +17,7 @@ use super::prd::{approve_prd, draft_prd, revise_prd};
 use super::projects::{add_project, list_projects, project_summary, remove_project};
 use super::prompts::tasks_from_prd_prompt;
 use super::queue::{queue_snapshot, set_max_concurrent};
-use super::runner::{acknowledge, prepare_rerun, request_pause, run_pipeline, Next};
+use super::runner::{acknowledge, prepare_rerun, request_pause, run_pipeline_with_provider, Next};
 use super::skills::{import_skill, list_skills, load_skill, new_skill_run, save_skill_run};
 use super::state::{append_log, ensure_dirs, read_state, update_state};
 use super::tasks;
@@ -123,6 +123,11 @@ pub fn main(argv: &[String]) -> Result<i32> {
     let root = if cmd == Some("init") { start.clone() } else { find_project_root(&start) };
     let root = root.as_path();
 
+    let forward_run = |mut forwarded: Vec<String>| {
+        if let Some(p) = args.get("use_provider") { forwarded.extend(["--use-provider".into(), p.into()]); }
+        main(&forwarded)
+    };
+
     match cmd {
         Some("init") => {
             let mut git_init = args.flag("git_init");
@@ -198,7 +203,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
             _ => crate::bail!("用法：skills list|import|run"),
         },
         Some("run") => {
-            let result = run_pipeline(root, args.get("task"), args.flag("verify"))?;
+            let result = run_pipeline_with_provider(root, args.get("task"), args.flag("verify"), args.get("use_provider"))?;
             let reason = read_state(root)["pipeline"]["reason"].as_str().unwrap_or("").to_string();
             println!("流程停止：{result}{}", if reason.is_empty() { String::new() } else { format!(" — {reason}") });
         }
@@ -207,8 +212,8 @@ pub fn main(argv: &[String]) -> Result<i32> {
             println!("已要求暫停，目前任務結束後停下");
         }
         Some("continue") => match acknowledge(root)? {
-            Next::Run if !args.flag("no_run") => return main(&strings(&["run", "--cwd", &root.to_string_lossy()])),
-            Next::Verify(id) => return main(&strings(&["run", "--cwd", &root.to_string_lossy(), "--task", &id, "--verify"])),
+            Next::Run if !args.flag("no_run") => return forward_run(strings(&["run", "--cwd", &root.to_string_lossy()])),
+            Next::Verify(id) => return forward_run(strings(&["run", "--cwd", &root.to_string_lossy(), "--task", &id, "--verify"])),
             Next::Done => println!("功能已完成"),
             Next::Run => {}
         },
@@ -216,7 +221,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
             let Some(id) = rest.first() else { crate::bail!("請指定任務 id") };
             prepare_rerun(root, id, args.flag("revert"))?;
             if !args.flag("no_run") {
-                return main(&strings(&["run", "--cwd", &root.to_string_lossy(), "--task", id]));
+                return forward_run(strings(&["run", "--cwd", &root.to_string_lossy(), "--task", id]));
             }
         }
         Some("mode") => {

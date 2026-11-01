@@ -286,8 +286,15 @@ fn pause_requested(root: &Path) -> bool {
 /// 主迴圈。停下來的時機：手動模式每個任務完成後（等待測試）；自動模式全部任務完成（功能待測試）；
 /// 兩種模式在修正輪數用盡／AI 失敗、使用者按暫停時也會停。回傳最後的流程狀態。
 pub fn run_pipeline(root: &Path, first_task: Option<&str>, verify_only: bool) -> Result<String> {
+    run_pipeline_with_provider(root, first_task, verify_only, None)
+}
+
+pub fn run_pipeline_with_provider(root: &Path, first_task: Option<&str>, verify_only: bool, provider: Option<&str>) -> Result<String> {
+    if provider.is_some_and(|p| !["claude", "codex"].contains(&p)) {
+        crate::bail!("本次執行的 AI 必須是 claude 或 codex");
+    }
     acquire_runner(root)?;
-    let result = pipeline_loop(root, first_task, verify_only);
+    let result = pipeline_loop(root, first_task, verify_only, provider);
     if let Err(err) = &result {
         let _ = set_pipeline(root, "error", &err.message, json!({}));
     }
@@ -299,8 +306,11 @@ pub fn run_pipeline(root: &Path, first_task: Option<&str>, verify_only: bool) ->
     result
 }
 
-fn pipeline_loop(root: &Path, first_task: Option<&str>, verify_only: bool) -> Result<String> {
+fn pipeline_loop(root: &Path, first_task: Option<&str>, verify_only: bool, provider: Option<&str>) -> Result<String> {
     let mut cfg = load_config(root)?;
+    if let Some(p) = provider {
+        append_log(root, RUN_SCOPE, &format!("使用者確認：本次執行僅使用 {p}，實作與審查使用獨立 session；原始角色設定不變"));
+    }
     let state = read_state(root);
     if state["prd"]["status"] != "approved" {
         crate::bail!("PRD 尚未核准");
@@ -336,6 +346,7 @@ fn pipeline_loop(root: &Path, first_task: Option<&str>, verify_only: bool) -> Re
     let mut pending = first_task.map(String::from);
     loop {
         cfg = load_config(root)?;
+        cfg["_run_provider"] = json!(provider);
         if pause_requested(root) {
             update_state(root, |s| s["control"]["pause_requested"] = json!(false))?;
             set_pipeline(root, "paused", "使用者暫停", json!({}))?;

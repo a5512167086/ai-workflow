@@ -133,6 +133,15 @@ fn is_task_id(id: &str) -> bool {
     ok(parts.next()) && parts.next().is_none_or(|p| ok(Some(p))) && parts.next().is_none()
 }
 
+fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
+    let mut args = args.to_vec();
+    if let Some(provider) = body["useProvider"].as_str() {
+        if !["claude", "codex"].contains(&provider) { return Err(http(400, "AI 不正確")); }
+        args.extend(["--use-provider", provider]);
+    }
+    spawn(root, &args)
+}
+
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
     match action {
@@ -159,7 +168,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "run/start" => {
             busy_guard(&snap)?;
-            spawn(root, &["run"])
+            spawn_run(root, &["run"], body)
         }
         "run/pause" => {
             request_pause(root)?;
@@ -167,7 +176,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "run/continue" => {
             busy_guard(&snap)?;
-            spawn(root, &["continue"])
+            spawn_run(root, &["continue"], body)
         }
         "task/rerun" => {
             busy_guard(&snap)?;
@@ -175,7 +184,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             if !is_task_id(&id) {
                 return Err(http(400, "任務 id 不正確"));
             }
-            if truthy(body.get("revert")) { spawn(root, &["rerun", &id, "--revert"]) } else { spawn(root, &["rerun", &id]) }
+            if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
         }
         "config/runtime" => {
             let mut runtime = json!({});
@@ -336,10 +345,23 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
 /// 設定頁的模型選單：Codex 從 CLI 的 model/list 取得（含各模型支援的推理強度）；Claude 用 CLI 接受的別名，也能填完整名稱。
 fn available_models(root: &Path, cfg: &Value) -> Value {
     let efforts = |list: &[&str]| list.iter().map(|e| json!(e)).collect::<Vec<_>>();
-    let claude_models: Vec<Value> = ["fable", "opus", "sonnet", "haiku"].iter()
-        .map(|m| json!({ "id": m, "name": m, "efforts": efforts(&["low", "medium", "high", "xhigh", "max"]) }))
+    let claude_models: Vec<Value> = [
+        ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-5-5", "Opus 5.5"),
+        ("claude-haiku-5-5", "Haiku 5.5"), ("claude-fable-5-1", "Fable 5.1"),
+        ("claude-opus-4-7", "Opus 4.7"), ("claude-opus-4-6", "Opus 4.6"), ("claude-sonnet-4-6", "Sonnet 4.6"),
+        ("opus", "Opus（隨 CLI 更新的別名）"), ("sonnet", "Sonnet（隨 CLI 更新的別名）"), ("haiku", "Haiku（隨 CLI 更新的別名）"),
+    ].iter()
+        .map(|(id, name)| json!({ "id": id, "name": name, "efforts": efforts(&["low", "medium", "high", "xhigh", "max"]) }))
         .collect();
-    let claude = json!({ "models": claude_models, "error": null });
+    let mut settings = json!({});
+    // WSL 使用另一份設定，不能誤拿 Windows 使用者設定充當預設值。
+    if super::runtime::cli_environment(cfg, "claude", root).runtime == "windows" {
+        for file in [super::home::home_dir().join(".claude/settings.json"), root.join(".claude/settings.json"), root.join(".claude/settings.local.json")] {
+            if let Some(value) = super::util::read_json(file) { settings = super::config::deep_merge(&settings, &value); }
+        }
+    }
+    let claude = json!({ "models": claude_models, "error": null,
+        "defaultModel": settings["model"], "defaultEffort": settings["effortLevel"], "defaultSource": "Claude CLI 設定（帳號與環境可能另有覆寫）" });
     let codex = match resolve_cli_for(cfg, "codex", root).and_then(|spec| query_codex_rpc_with(&spec, root, "model/list", Some(json!({})), 20)) {
         Ok(result) => {
             let models: Vec<Value> = result["data"].as_array().into_iter().flatten().filter(|m| m["hidden"] != true).map(|m| json!({
@@ -350,7 +372,8 @@ fn available_models(root: &Path, cfg: &Value) -> Value {
                 "efforts": m["supportedReasoningEfforts"].as_array().into_iter().flatten().filter_map(|e| e["reasoningEffort"].as_str()).collect::<Vec<_>>(),
                 "defaultEffort": m["defaultReasoningEffort"],
             })).collect();
-            json!({ "models": models, "error": null })
+            let config = resolve_cli_for(cfg, "codex", root).and_then(|spec| query_codex_rpc_with(&spec, root, "config/read", Some(json!({ "includeLayers": false })), 10)).ok();
+            json!({ "models": models, "error": null, "defaultModel": config.as_ref().map(|c| &c["config"]["model"]), "defaultEffort": config.as_ref().map(|c| &c["config"]["model_reasoning_effort"]), "defaultSource": "Codex CLI 設定與模型清單" })
         }
         Err(_) => json!({ "models": [], "error": "無法從 Codex CLI 取得模型清單，可以直接填模型名稱" }),
     };

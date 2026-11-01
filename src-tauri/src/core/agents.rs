@@ -56,16 +56,29 @@ impl AgentResult {
 
 pub fn run_agent(opts: AgentOpts) -> Result<AgentResult> {
     let AgentOpts { root, cfg, provider: preferred, write, scope, .. } = opts;
+    let preferred = cfg["_run_provider"].as_str().unwrap_or(preferred);
+    if cfg["_run_provider"].is_string() && probe_provider(root, cfg, preferred)["available"] != true {
+        crate::bail!("本次指定的 {preferred} 不可用，請確認 CLI 安裝與登入狀態");
+    }
     let selected = select_provider(root, cfg, preferred)?;
     let provider = selected.provider;
     if provider != preferred {
         append_log(root, scope, &format!("單 AI 模式：{preferred} 不可用（{}），改用 {provider}，建立全新 session", selected.checks[0]["error"].as_str().unwrap_or("")));
     }
     let result = run_agent_session(&opts, &provider)?;
+    if result.ok {
+        let _ = super::state::update_state(root, |s| {
+            if s["usage_blocked"]["provider"] == provider { s["usage_blocked"] = Value::Null; }
+        });
+    }
     let Some(limit) = (!result.ok).then(|| usage_limit(&result.error_text())).flatten() else { return Ok(result) };
+    let _ = super::state::update_state(root, |s| s["usage_blocked"] = json!({ "provider": provider, "message": explain_usage_limit(&provider, &limit) }));
     let message = explain_usage_limit(&provider, &limit);
     let stop = |result: AgentResult, error: String| Ok(AgentResult { error: Some(error), failure: Some(limit.clone()), ..result });
-    if write {
+    if cfg["_run_provider"].is_string() {
+        return stop(result, format!("{message}。本次指定的 AI 額度不足，請等待重設或重新選擇 AI"));
+    }
+    if write || opts.role == Some("code_reviewer") {
         return stop(result, format!("{message}。工作可能已修改檔案，已停止；確認變更後再重試"));
     }
     let other = other_provider(&provider);
@@ -353,6 +366,7 @@ pub fn provider_name(provider: &str) -> &'static str {
 pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> {
     let role = base.role.unwrap_or("reviewer");
     let mut providers = super::config::role_providers(base.cfg, role);
+    if let Some(p) = base.cfg["_run_provider"].as_str() { providers = vec![p.to_string()]; }
     if providers.len() > 1 {
         let available: Vec<String> = providers.iter().filter(|p| probe_provider(base.root, base.cfg, p)["available"] == true).cloned().collect();
         if available.is_empty() {
@@ -367,6 +381,7 @@ pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> 
     let dual = providers.len() > 1;
     let mut reviews = Vec::new();
     for provider in providers {
+        if reviews.iter().any(|r: &Review| r.provider == provider) { continue; }
         let label = if dual { format!("{}（{}）", base.label, provider_name(&provider)) } else { base.label.to_string() };
         let result = run_agent(AgentOpts {
             root: base.root, cfg: base.cfg, provider: &provider, prompt: base.prompt.clone(), write: base.write, scope: base.scope,
@@ -376,6 +391,7 @@ pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> 
             crate::bail!("{}審查 AI 失敗：{}", if dual { format!("{} ", provider_name(&provider)) } else { String::new() }, result.error_text());
         }
         let (pass, verdict) = parse_verdict(&result.text, pass_words);
+        if reviews.iter().any(|r| r.provider == result.provider) { continue; }
         reviews.push(Review { provider: result.provider.clone(), text: result.text.clone(), pass, verdict, result });
     }
     Ok(reviews)

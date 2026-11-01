@@ -19,7 +19,7 @@ function page() {
     draft() { return modelDraft; },
     setApi(fn) { api = fn; },
     setArchive(value) { recArchive = value; },
-    archive() { return recArchive; }
+    archive() { return recArchive; }, renderUsage, runAction
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
@@ -94,5 +94,34 @@ test('雙人審查按輪次分開顯示兩份意見', () => {
   ]);
   assert.equal(view.querySelectorAll('.review-pair.cols-2').length, 1);
   assert.equal(view.querySelectorAll('.review-col').length, 2);
+  dom.window.close();
+});
+
+test('未知 context 隱藏，已有數據才顯示', () => {
+  const { dom, ui, doc } = page();
+  const usage = { providers: [{ provider: 'codex', latest: {} }], recent: [] };
+  ui.renderUsage(usage);
+  assert.doesNotMatch(doc.querySelector('#usage-providers').textContent, /context 剩餘|容量與占用資料/);
+  usage.providers[0].latest.context = { remainingPercent: 50, remainingTokens: 100, capacity: 200 };
+  ui.renderUsage(usage);
+  assert.match(doc.querySelector('#usage-providers').textContent, /50.0%/);
+  dom.window.close();
+});
+
+test('額度切換先確認，取消不執行，同意僅帶本次 provider', async () => {
+  const { dom, ui, w } = page();
+  const state = snapshot(); state.state.pipeline.status = 'stuck';
+  state.state.usage_blocked = { provider: 'claude' };
+  ui.setSnap(state);
+  let request;
+  ui.setApi(async (path, body) => { request = { path, body }; return {}; });
+  w.confirm = () => false;
+  await ui.runAction('/api/run/start');
+  assert.equal(request, undefined);
+  w.confirm = () => true;
+  await ui.runAction('/api/run/start');
+  assert.equal(request.path, '/api/run/continue');
+  assert.equal(request.body.useProvider, 'codex');
+  assert.equal(state.config.roles.code_reviewer, 'both');
   dom.window.close();
 });

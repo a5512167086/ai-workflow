@@ -101,8 +101,10 @@ function renderUsage(usage = snap?.usage) {
     }
     if (provider.limits?.checkedAt) paragraph(card, `額度資料擷取：${usageTime(provider.limits.checkedAt)} · ${provider.provider === 'codex' ? 'Codex 官方查詢' : 'Claude CLI'}・所有專案共用`, 'hint');
     const context = latest?.context;
-    const contextHeading = document.createElement('h3'); contextHeading.textContent = '最近一次請求的 context 剩餘'; card.append(contextHeading);
-    paragraph(card, context ? `${context.remainingPercent.toFixed(1)}% · ${tokenNumber(context.remainingTokens)} / ${tokenNumber(context.capacity)} tokens${context.estimated ? '（依最後一次模型請求估算）' : '（CLI 回報）'}` : '未知：CLI 未提供可用的 context 容量與占用資料', 'hint');
+    if (context && Number.isFinite(context.remainingPercent)) {
+      const contextHeading = document.createElement('h3'); contextHeading.textContent = '最近一次請求的 context 剩餘'; card.append(contextHeading);
+      paragraph(card, `${context.remainingPercent.toFixed(1)}% · ${tokenNumber(context.remainingTokens)} / ${tokenNumber(context.capacity)} tokens${context.estimated ? '（依最後一次模型請求估算）' : '（CLI 回報）'}`, 'hint');
+    }
     host.append(card);
   }
   const rows = $('#usage-recent'); rows.replaceChildren();
@@ -478,6 +480,9 @@ function onState(data) {
   const prevPrd = snap?.state.prd.rounds.length;
   const prevStatus = snap?.state.prd.status;
   snap = data;
+  const blocked = data.state.usage_blocked;
+  $('#quota-notice').hidden = !blocked || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
+  $('#quota-message').textContent = blocked ? `${blocked.message}。可確認後改用另一個 AI 繼續；實作與審查會分開建立 session。` : '';
   if (skillChanged) loadSkillRuns().catch(err => toast(err.message, true));
   $('#skill-run').disabled = !!(data.skillBusy || data.runnerAlive || data.prdBusy || data.taskGenBusy);
   renderSettings();
@@ -948,6 +953,8 @@ function renderModels(force = false) {
       model.type = 'text';
       model.setAttribute('list', `models-${p}`);
       model.placeholder = `預設（${snap.config[p]?.model || 'CLI 預設'}）`;
+      model.placeholder = '沿用預設';
+      model.title = '可選擇完整版本或直接輸入模型 ID';
       model.value = cur.model || '';
       model.setAttribute('aria-label', `${label}：${PROVIDER_LABEL[p]} 模型`);
       const effort = document.createElement('select');
@@ -969,13 +976,23 @@ function renderModels(force = false) {
       model.addEventListener('input', save);
       model.addEventListener('change', () => { save(); fillEfforts(); });
       effort.addEventListener('change', save);
+      const defaults = document.createElement('p');
+      defaults.className = 'hint model-defaults';
+      const providerInfo = modelOptions?.[p];
+      const defaultEntry = providerInfo?.models.find(m => m.default);
+      const defaultModel = snap.config[p]?.model || providerInfo?.defaultModel || defaultEntry?.id;
+      const defaultEffort = snap.config[p]?.effort || providerInfo?.defaultEffort || defaultEntry?.defaultEffort;
+      defaults.textContent = `預設模型：${defaultModel || 'CLI 依帳號決定（未回報）'}；預設推理強度：${defaultEffort || 'CLI 依模型決定（未回報）'}。來源：${snap.config[p]?.model || snap.config[p]?.effort ? '.aipipe.json' : providerInfo?.defaultSource || 'CLI 模型清單'}。`;
       line.append(who, model, effort);
       row.append(line);
+      row.append(defaults);
     }
     box.append(row);
   }
 }
 function showTab(b) {
+  if (!b) return;
+  if (b.dataset.tab === 'settings') loadQueue();
   if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
   if (b.dataset.tab === 'backlog') loadBacklog();
@@ -992,6 +1009,14 @@ function showTab(b) {
     s.classList.toggle('active', on);
     s.hidden = !on;
   }
+}
+
+async function loadQueue() {
+  try {
+    const { queue } = await api('/api/projects');
+    $('#max-runs').value = String(queue.max);
+    $('#queue-line').textContent = `執行中 ${queue.running.length} 個，排隊 ${queue.waiting.length} 個`;
+  } catch (err) { toast(err.message, true); }
 }
 
 let skillLibrary = [], skillRuns = [], skillEditingName = null;
@@ -1083,7 +1108,29 @@ function bindSkills() {
   });
 }
 
+async function runAction(path, body = {}, message) {
+  const blocked = snap?.state.usage_blocked;
+  const exhausted = snap?.usage?.providers?.filter(p => p.limits?.windows?.some(w => !w.expired && w.remainingPercent === 0)) || [];
+  const provider = blocked?.provider || exhausted[0]?.provider;
+  if (provider) {
+    const other = provider === 'claude' ? 'codex' : 'claude';
+    if (exhausted.some(p => p.provider === other)) {
+      toast('兩個 AI 的額度都已用完，請等待重設後更新額度。', true);
+      return;
+    }
+    if (!confirm(`${PROVIDER_LABEL[provider]} 曾回報額度不足。要只用 ${PROVIDER_LABEL[other]} 繼續這次執行嗎？\n\n實作與審查會使用不同 session；雙人審查暫時改為單人。會保留現有檔案並重新驗證，不會還原變更。原本角色設定不變，下次執行會再詢問。若另一個 AI 也沒有額度，流程會停止。\n\n若額度已重設，可先到用量頁更新。`)) return;
+    body = { ...body, useProvider: other };
+    if (path === '/api/run/start' && ['stuck', 'error'].includes(snap.state.pipeline.status)) path = '/api/run/continue';
+  }
+  return act(path, body, message);
+}
+
 function bind() {
+  $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
+  $('#max-runs').onchange = async (event) => {
+    await act('/api/queue/config', { max: Number(event.target.value) }, '已更新全域執行佇列');
+    loadQueue();
+  };
   $('#usage-short').onclick = () => showTab($('#tabbtn-usage'));
   $('#btn-usage-refresh').onclick = refreshUsage;
   bindTheme();
@@ -1136,9 +1183,9 @@ function bind() {
   $('#btn-prd-approve').onclick = () => act('/api/prd/approve', {}, 'PRD 已核准');
   $('#btn-prd-revise').onclick = () => act('/api/prd/revise', { feedback: $('#feedback').value }, '已送出修改意見');
   $('#btn-tasks').onclick = () => act('/api/tasks/generate', {}, '已開始產生任務');
-  $('#btn-start').onclick = () => act('/api/run/start', {}, '流程已開始');
+  $('#btn-start').onclick = () => runAction('/api/run/start', {}, '流程已開始');
   $('#btn-pause').onclick = () => act('/api/run/pause', {}, '目前任務結束後會暫停');
-  $('#btn-continue').onclick = () => act('/api/run/continue', {}, '繼續');
+  $('#btn-continue').onclick = () => runAction('/api/run/continue', {}, '繼續');
   $('#d-close').onclick = () => {
     const id = selected;
     selected = null;
@@ -1153,7 +1200,7 @@ function bind() {
   $('#d-rerun').onclick = () => {
     const revert = $('#d-revert').checked;
     if (revert && !confirm('會還原這個任務的變更後重跑，確定？')) return;
-    act('/api/task/rerun', { id: selected, revert }, `任務 ${selected} 重跑中`);
+    runAction('/api/task/rerun', { id: selected, revert }, `任務 ${selected} 重跑中`);
   };
   $('#log-scope').onchange = renderLog;
   $('#log-expand').onclick = () => setLogTreeOpen($('#rec-body'), true);
@@ -1202,6 +1249,7 @@ function bind() {
 bind();
 bindSkills();
 bindBacklog();
+if (location.hash === '#settings') showTab($('#tabbtn-settings'));
 api('/api/state').then(onState).catch((err) => toast(err.message, true));
 loadInitialLogs();
 connect();
