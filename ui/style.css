@@ -478,3 +478,20 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   button:active:not(:disabled) { transform: none; }
 }
+/* Shared skills use the same form controls and spacing as project settings. */
+#tab-skills > .settings-layout label { display: block; margin-bottom: 6px; }
+#tab-skills input:not([type="checkbox"]), #tab-skills select { width: 100%; }
+#skill-editor { font-family: var(--font-mono); }
+#skill-bindings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+#skill-bindings fieldset { margin: 0; min-width: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+#skill-bindings legend { color: var(--text-muted); padding: 0 4px; }
+#tab-skills #skill-bindings label { display: inline-flex; align-items: center; gap: 4px; margin: 4px 8px 0 0; }
+#tab-skills .card-head:not(:first-child) { margin-top: 24px; }
+@media (max-width: 600px) { #skill-bindings { grid-template-columns: 1fr; } }
+/* Usage counters are independent from subscription quota and context capacity. */
+#tab-usage h3 { margin-top: 20px; font-size: 14px; }
+#tab-usage progress { width: 100%; height: 12px; accent-color: var(--primary); }
+.usage-table-wrap { overflow-x: auto; }
+.usage-table { width: 100%; border-collapse: collapse; text-align: left; }
+.usage-table th, .usage-table td { padding: 10px; border-bottom: 1px solid var(--border); }
+#usage-short { white-space: nowrap; font-family: var(--font-mono); }

@@ -5,7 +5,7 @@ import { CONFIG_FILE, loadConfig } from './config.js';
 import { aipipeHome, readJson, withLock, writeJson } from './home.js';
 import { queueEntryFor } from './queue.js';
 import { isPidAlive, readState } from './state.js';
-import { readTasks } from './taskmaster.js';
+import { readTasks } from './tasks.js';
 
 /*
  * 全域專案清單：~/.aipipe/projects.json。只記錄路徑與使用時間，專案本身的狀態仍在各自的 .aipipe/。
@@ -118,7 +118,7 @@ export function projectSummary(project) {
     reason = 'PRD 起草／審查中';
   } else if (isPidAlive(state.task_gen?.pid)) {
     status = 'generating';
-    reason = 'Task Master 產生任務中';
+    reason = 'AI 產生任務中';
   } else if (runnerAlive && (ps === 'queued' || queue?.state === 'waiting')) {
     status = 'queued';
     reason = queue?.position ? `排隊第 ${queue.position} 位，等其他專案的流程跑完` : reason;

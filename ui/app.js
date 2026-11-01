@@ -33,7 +33,7 @@ let rounds = [];
 
 function column(task, ts) {
   const phase = ts?.phase;
-  // aipipe 自己的階段優先；沒跑過的任務才看 Task Master 的狀態。
+  // aipipe 自己的階段優先；沒跑過的任務才看 任務引擎的狀態。
   if (phase === 'awaiting_test') return 'test';
   if (phase === 'reviewing') return 'review';
   if (phase === 'implementing' || phase === 'stuck') return 'doing';
@@ -60,6 +60,66 @@ function renderTop() {
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', String(on));
   }
+}
+
+const tokenNumber = value => typeof value === 'number' ? value.toLocaleString('zh-TW') : '未知';
+const usageTime = value => value ? new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + '（台北）' : '未提供';
+function renderUsage(usage = snap?.usage) {
+  if (!usage) return;
+  $('#usage-short').textContent = `Tokens：${tokenNumber(usage.totalTokens)}`;
+  $('#usage-total').textContent = tokenNumber(usage.totalTokens);
+  $('#usage-coverage').textContent = `／${usage.measuredSessions} 次有統計，${usage.unknownSessions} 次未回報`;
+  const host = $('#usage-providers'); host.replaceChildren();
+  const paragraph = (parent, text, className = '') => {
+    const element = document.createElement('p'); element.textContent = text; element.className = className; parent.append(element); return element;
+  };
+  for (const provider of usage.providers) {
+    const card = document.createElement('section'); card.className = 'card';
+    const heading = document.createElement('h2'); heading.textContent = `${provider.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${provider.runtime}${provider.distro ? ` / ${provider.distro}` : ''}`; card.append(heading);
+    paragraph(card, `本專案處理量：${tokenNumber(provider.tokens)} tokens`);
+    const latest = provider.latest;
+    paragraph(card, `最近執行：${latest?.label || '尚無紀錄'}${latest?.status === 'running' ? '（執行中）' : ''}`);
+    paragraph(card, `本次輸入 ${tokenNumber(latest?.tokens?.inputTokens)} ／輸出 ${tokenNumber(latest?.tokens?.outputTokens)} tokens`);
+    paragraph(card, `輸入內含快取讀取 ${tokenNumber(latest?.tokens?.cacheReadTokens)} ／快取寫入 ${tokenNumber(latest?.tokens?.cacheWriteTokens)}`, 'hint');
+    const quotaHeading = document.createElement('h3'); quotaHeading.textContent = '訂閱額度剩餘'; card.append(quotaHeading);
+    const windows = provider.limits?.windows || [];
+    if (!windows.length) paragraph(card, provider.limits?.error || (provider.provider === 'claude' ? '未知：等待 Claude CLI 回報限額事件' : '未知：按「更新訂閱額度」查詢'), 'hint');
+    for (const window of windows) {
+      const remaining = window.expired ? null : window.remainingPercent;
+      const duration = window.windowMinutes ? `（${window.windowMinutes % 1440 === 0 ? window.windowMinutes / 1440 + ' 天' : window.windowMinutes % 60 === 0 ? window.windowMinutes / 60 + ' 小時' : window.windowMinutes + ' 分鐘'}視窗）` : '';
+      paragraph(card, `${window.name}${duration}：${typeof remaining === 'number' ? remaining.toFixed(1) + '%' : '未知'}${window.status === 'rejected' && !window.expired ? ' · 已觸及限額' : ''}`);
+      if (typeof remaining === 'number') {
+        const meter = document.createElement('progress'); meter.max = 100; meter.value = remaining;
+        meter.setAttribute('aria-label', `${window.name} 訂閱額度剩餘百分比`); card.append(meter);
+      }
+      paragraph(card, `重設：${usageTime(window.resetsAt)}${window.expired ? '；視窗已過期，請更新' : ''}`, 'hint');
+    }
+    if (provider.limits?.checkedAt) paragraph(card, `額度資料擷取：${usageTime(provider.limits.checkedAt)} · ${provider.provider === 'codex' ? 'Codex 官方查詢' : 'Claude CLI 回報'}`, 'hint');
+    const context = latest?.context;
+    const contextHeading = document.createElement('h3'); contextHeading.textContent = '最近一次請求的 context 剩餘'; card.append(contextHeading);
+    paragraph(card, context ? `${context.remainingPercent.toFixed(1)}% · ${tokenNumber(context.remainingTokens)} / ${tokenNumber(context.capacity)} tokens${context.estimated ? '（依最後一次模型請求估算）' : '（CLI 回報）'}` : '未知：CLI 未提供可用的 context 容量與占用資料', 'hint');
+    host.append(card);
+  }
+  const rows = $('#usage-recent'); rows.replaceChildren();
+  for (const session of usage.recent) {
+    const row = document.createElement('tr');
+    for (const value of [session.label, `${session.provider} / ${session.runtime}`, session.status === 'running' ? '執行中' : session.status === 'done' ? '完成' : '失敗', tokenNumber(session.tokens?.inputTokens), tokenNumber(session.tokens?.outputTokens), tokenNumber(session.tokens?.totalTokens)]) {
+      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    }
+    rows.append(row);
+  }
+}
+let usageRefreshBusy = false, lastUsageRefresh = 0;
+async function refreshUsage() {
+  if (usageRefreshBusy) return;
+  usageRefreshBusy = true; $('#btn-usage-refresh').disabled = true;
+  $('#usage-refresh-status').textContent = '正在查詢 Codex 訂閱額度；不會啟動模型對話。Claude 顯示最近一次 CLI 回報。';
+  try {
+    const usage = await api('/api/usage/refresh', {}); lastUsageRefresh = Date.now();
+    if (snap) snap.usage = usage; renderUsage(usage);
+    $('#usage-refresh-status').textContent = '查詢結果如下；百分比是擷取當時的快照，其他工具的使用也會影響訂閱額度。';
+  } catch (error) { $('#usage-refresh-status').textContent = error.message; }
+  finally { usageRefreshBusy = false; $('#btn-usage-refresh').disabled = false; }
 }
 
 function renderStepper() {
@@ -100,7 +160,7 @@ function renderPrd() {
   $('#btn-prd-revise').disabled = busy || !prd;
   $('#btn-tasks').disabled = busy || state.prd.status !== 'approved';
   const tg = state.task_gen;
-  $('#task-gen').textContent = snap.taskGenBusy ? 'Task Master 產生任務中…'
+  $('#task-gen').textContent = snap.taskGenBusy ? 'AI 產生任務中…'
     : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '';
   const badge = $('#tab-prd-badge');
   badge.textContent = state.prd.status === 'awaiting_approval' ? '待核准' : '';
@@ -348,17 +408,21 @@ function renderSettings() {
   const { config } = snap;
   $('#config-json').textContent = JSON.stringify(config, null, 2);
   if (settingsDirty) return; // 不覆蓋使用者還沒儲存的選擇
-  for (const s of $$('[data-runtime]')) s.value = config.runtime?.[s.dataset.runtime] || 'windows';
+  for (const s of $$('[data-runtime]')) s.value = config.runtime?.[s.dataset.runtime] || 'auto';
   $('#wsl-distro').value = config.wsl_distro || '';
 }
 
 let detailTimer = null;
 function onState(data) {
+  const skillChanged = snap?.state.skill_job?.id !== data.state.skill_job?.id || snap?.skillBusy !== data.skillBusy;
   const prevPrd = snap?.state.prd.rounds.length;
   const prevStatus = snap?.state.prd.status;
   snap = data;
+  if (skillChanged) loadSkillRuns().catch(err => toast(err.message, true));
+  $('#skill-run').disabled = !!(data.skillBusy || data.runnerAlive || data.prdBusy || data.taskGenBusy);
   renderSettings();
   renderTop();
+  renderUsage();
   renderPrd();
   renderBoard();
   renderBacklog();
@@ -638,7 +702,7 @@ async function openArchive(name) {
     const meta = [
       ['核准時間', m.approved_at ? new Date(m.approved_at).toLocaleString('zh-TW') : '—'],
       ['完成時間', m.completed_at ? new Date(m.completed_at).toLocaleString('zh-TW') : '—'],
-      ['Task Master tag', m.tm_tag || '—'],
+      ['任務群組', m.tm_tag || '—'],
       ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—'],
     ];
     for (const [k, v] of meta) {
@@ -680,6 +744,8 @@ async function openArchive(name) {
 }
 
 function showTab(b) {
+  if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
+  if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
   if (b.dataset.tab === 'backlog') loadBacklog();
   if (b.dataset.tab === 'history') loadHistory();
   for (const x of $$('.tabs button')) {
@@ -695,7 +761,98 @@ function showTab(b) {
   }
 }
 
+let skillLibrary = [], skillRuns = [], skillEditingName = null;
+const SKILL_STAGE_LABELS = { prd: 'PRD 起草／修訂', prd_review: 'PRD 審查', tasks: '拆解任務', implement: '實作', code_review: '程式碼審查', fix: '修正', handover: '交接' };
+function renderSkillEditor() {
+  const selected = skillLibrary.find(skill => skill.name === $('#skill-name').value);
+  skillEditingName = selected?.name || null;
+  $('#skill-editor').value = selected?.text || '';
+  $('#skill-compatibility').textContent = selected?.compatible ? '共用指令可供 Codex／Claude Code 使用；附帶工具仍需執行環境支援。'
+    : selected?.error || `需調整專屬欄位：${selected?.extensions?.join(', ') || ''}`;
+  renderSkillHistory();
+}
+async function loadSkills() {
+  const data = await api('/api/skills');
+  skillLibrary = data.skills;
+  const previous = $('#skill-name').value;
+  $('#skill-name').replaceChildren(...skillLibrary.map(skill => new Option(skill.name, skill.name)));
+  if (skillLibrary.some(skill => skill.name === previous)) $('#skill-name').value = previous;
+  renderSkillEditor();
+  $('#skill-bindings').replaceChildren();
+  for (const stage of data.stages) {
+    const group = document.createElement('fieldset');
+    const legend = document.createElement('legend'); legend.textContent = SKILL_STAGE_LABELS[stage]; group.append(legend);
+    for (const skill of skillLibrary.filter(skill => skill.compatible)) {
+      const label = document.createElement('label');
+      const input = document.createElement('input'); input.type = 'checkbox'; input.dataset.skillStage = stage; input.value = skill.name;
+      input.checked = (data.config?.[stage] || []).includes(skill.name);
+      label.append(input, document.createTextNode(` ${skill.name} `)); group.append(label);
+    }
+    $('#skill-bindings').append(group);
+  }
+  await loadSkillRuns();
+}
+function renderSkillHistory() {
+  const select = $('#skill-run-history'), previous = select.value;
+  select.replaceChildren(new Option('新會議', ''));
+  for (const run of skillRuns.filter(run => run.name === $('#skill-name').value)) {
+    select.append(new Option(`${run.updated_at.slice(0, 19)} · ${run.status} · ${run.messages[0]?.text.slice(0, 25)}`, run.id));
+  }
+  if (skillRuns.some(run => run.id === previous && run.name === $('#skill-name').value)) select.value = previous;
+}
+function renderSkillOutput() {
+  const run = skillRuns.find(run => run.id === $('#skill-run-history').value);
+  $('#skill-output').textContent = run ? `${run.messages.map(message => `${message.role === 'user' ? '你' : run.provider || 'AI'}：${message.text}`).join('\n\n')}\n\n${run.error || run.status}` : '';
+}
+async function loadSkillRuns() {
+  const { runs } = await api('/api/skills/runs');
+  const previousCount = skillRuns.length;
+  skillRuns = runs;
+  renderSkillHistory();
+  if (runs.length > previousCount && runs[0]?.name === $('#skill-name').value) $('#skill-run-history').value = runs[0].id;
+  renderSkillOutput();
+}
+function bindSkills() {
+  const handle = fn => async () => { try { await fn(); } catch (error) { toast(error.message, true); } };
+  $('#skills-refresh').onclick = handle(loadSkills);
+  $('#skill-name').onchange = () => { renderSkillEditor(); renderSkillOutput(); };
+  $('#skill-run-history').onchange = renderSkillOutput;
+  $('#skill-to-prd').onclick = handle(async () => {
+    const run = skillRuns.find(run => run.id === $('#skill-run-history').value);
+    if (!run || run.status !== 'done') throw new Error('請選擇已完成的技能會議');
+    if ($('#idea').value.trim() && !confirm('以此會議取代目前尚未送出的需求內容？')) return;
+    $('#idea').value = `以下是需求釐清／設計會議紀錄。以使用者回答為準，AI 建議仍需在 PRD 區分假設與待決策事項。\n\n${run.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`;
+    showTab($('#tabbtn-prd')); toast('已帶入需求欄位，確認後可起草 PRD');
+  });
+  $('#skill-new').onclick = () => { skillEditingName = null; $('#skill-editor').value = '---\nname: my-skill\ndescription: 說明用途及使用時機\n---\n在此撰寫技能指令。\n'; };
+  $('#skill-save').onclick = handle(async () => {
+    const { skill } = await api('/api/skills/save', { text: $('#skill-editor').value, name: skillEditingName });
+    await loadSkills(); $('#skill-name').value = skill.name; renderSkillEditor(); toast('已儲存 Skill');
+  });
+  $('#skill-import').onclick = handle(async () => {
+    const { skill } = await api('/api/skills/import', { path: $('#skill-source').value });
+    await loadSkills(); $('#skill-name').value = skill.name; renderSkillEditor(); toast('已匯入 Skill');
+  });
+  $('#skill-bindings-save').onclick = handle(async () => {
+    const skills = Object.fromEntries(Object.keys(SKILL_STAGE_LABELS).map(stage => [stage, []]));
+    for (const input of $$('[data-skill-stage]:checked')) skills[input.dataset.skillStage].push(input.value);
+    await api('/api/skills/config', { skills }); toast('已儲存階段技能');
+  });
+  $('#skill-run').onclick = handle(async () => {
+    const previousId = $('#skill-run-history').value;
+    const previous = skillRuns.find(run => run.id === previousId);
+    if (previous && previous.status !== 'done') throw new Error('請選擇已完成的回覆或新會議');
+    $('#skill-run').disabled = true;
+    try {
+      await api('/api/skills/run', { name: $('#skill-name').value, input: $('#skill-input').value, provider: $('#skill-provider').value, previousId });
+      $('#skill-input').value = ''; toast('已開始技能會議');
+    } catch (error) { $('#skill-run').disabled = false; throw error; }
+  });
+}
+
 function bind() {
+  $('#usage-short').onclick = () => showTab($('#tabbtn-usage'));
+  $('#btn-usage-refresh').onclick = refreshUsage;
   bindTheme();
   const tabButtons = $$('.tabs button');
   for (const b of tabButtons) b.onclick = () => showTab(b);
@@ -792,6 +949,7 @@ function bind() {
 }
 
 bind();
+bindSkills();
 bindBacklog();
 api('/api/state').then(onState).catch((err) => toast(err.message, true));
 loadInitialLogs();

@@ -6,7 +6,7 @@ import { isGitRepo } from './git.js';
 import { CONFIG_FILE, findProjectRoot, loadConfig, patchConfig, MODES } from './config.js';
 import { initProject } from './init.js';
 import { draftPrd, revisePrd, approvePrd } from './prd.js';
-import * as tmaster from './taskmaster.js';
+import * as taskEngine from './tasks.js';
 import { runPipeline, acknowledge, requestPause, prepareRerun } from './runner.js';
 import { appendLog, ensureDirs, readState, updateState } from './state.js';
 import { doctorReport } from './doctor.js';
@@ -17,6 +17,7 @@ import { addProject, listProjects, projectSummary, removeProject } from './proje
 import { queueSnapshot, setMaxConcurrent } from './queue.js';
 import { archiveTasks, tagSlug } from './archive.js';
 import { getItem, ideaFor, updateItem } from './backlog.js';
+import { listSkills, importSkill, loadSkill, newSkillRun, saveSkillRun } from './skills.js';
 
 const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI 開發流程
 
@@ -26,12 +27,15 @@ const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI �
        [--implementer ...] [--code-reviewer ...] [--feature 名稱] [--force] [--git-init]
                           在目前專案建立 .aipipe.json；不是 git repo 時 --git-init 會先 git init
                           （互動終端機下沒加也會詢問）
-  doctor                  檢查 claude / codex / task-master 是否可用、是否走訂閱登入
+  doctor                  檢查 Windows／WSL 的 Claude Code、Codex 安裝與訂閱登入
   prd "<想法>"            作者 AI 起草 PRD → 審查 AI 審 → 來回最多 max_prd_rounds 輪
   prd --backlog <id>      用需求待辦清單裡的項目起草 PRD
   prd --revise "<意見>"   依你的意見修訂後再審一次
   prd --approve           核准目前的 PRD（寫入 prd_path）
-  tasks                   用 Task Master parse-prd 產生 .taskmaster/tasks/tasks.json
+  tasks                   用 AI 拆解核准的 PRD，由內建任務引擎保存及排程
+  skills list             列出共用 Skills
+  skills import <資料夾>  匯入包含 SKILL.md 的技能資料夾
+  skills run <名稱> --input <需求> [--provider claude|codex] [--session <上次回覆 id>]
   run [--task <id>]       逐個任務執行（實作 → 驗證 → 審查 → 修正 → handover）
   pause                   目前任務結束後暫停
   continue                「我測完了，繼續」
@@ -131,6 +135,20 @@ export async function main(argv) {
     }
     case 'tasks':
       return generateTasks(root);
+    case 'skills': {
+      const [action, name] = rest;
+      if (!action || action === 'list') {
+        for (const skill of listSkills(root)) console.log(`${skill.name}：${skill.compatible ? skill.description : skill.error || '含執行器專屬設定'}`);
+        return;
+      }
+      if (action === 'import') {
+        if (!name) throw new Error('請指定 Skill 資料夾');
+        console.log(`已匯入 ${importSkill(root, name).name}`);
+        return;
+      }
+      if (action === 'run') return runSkill(root, name, String(opts.input || ''), { provider: opts.provider, previousId: opts.session });
+      throw new Error('用法：skills list|import|run');
+    }
     case 'run': {
       const result = await runPipeline(root, { firstTask: opts.task ? String(opts.task) : null, verifyOnly: !!opts.verify });
       const s = readState(root);
@@ -198,7 +216,7 @@ export async function main(argv) {
   }
 }
 
-async function generateTasks(root) {
+export async function generateTasks(root) {
   const cfg = loadConfig(root);
   const state = readState(root);
   if (state.prd.status !== 'approved') throw new Error('PRD 尚未核准');
@@ -207,30 +225,26 @@ async function generateTasks(root) {
     s.task_gen = { status: 'running', pid: process.pid, error: '' };
   });
   try {
-    await tmaster.ensureTaskMaster(root, cfg, scope);
-    let tag = tmaster.currentTag(root);
-    if (cfg.taskmaster.use_tags) {
-      tag = (await tmaster.useFeatureTag(root, cfg, tagSlug(cfg.feature || state.prd.idea), scope)) || tag;
-    }
-    const via = await tmaster.parsePrd(root, cfg, cfg.prd_path, scope, async () => {
-      const prd = fs.readFileSync(path.join(root, cfg.prd_path), 'utf8');
-      const res = await runAgent({
-        root, cfg, provider: cfg.roles.author, prompt: tasksFromPrdPrompt(root, cfg, prd),
-        write: false, scope, label: '依 PRD 產生任務',
-      });
-      if (!res.ok) throw new Error(`作者 AI 產生任務失敗：${res.error}`);
-      const text = res.text.trim();
-      const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-      tmaster.writeTasks(root, json.tasks);
+    const via = 'builtin';
+    const prd = fs.readFileSync(path.join(root, cfg.prd_path), 'utf8');
+    const res = await runAgent({
+      root, cfg, provider: cfg.roles.author, prompt: tasksFromPrdPrompt(root, cfg, prd),
+      write: false, scope, label: '依 PRD 產生任務', stage: 'tasks',
     });
-    const tasks = tmaster.readTasks(root);
+    if (!res.ok) throw new Error(`作者 AI 產生任務失敗：${res.error}`);
+    const text = res.text.trim();
+    const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    taskEngine.validateTasks(json.tasks);
+    const tag = await taskEngine.useFeatureTag(root, cfg, tagSlug(cfg.feature || state.prd.idea));
+    taskEngine.writeTasks(root, json.tasks, tag, { prd_version: state.prd.version, provider: res.provider, sessionId: res.sessionId });
+    const tasks = taskEngine.readTasks(root);
     updateState(root, (s) => {
       s.task_gen = { status: 'done', pid: null, error: '', count: tasks.length, via, tag };
       s.tasks = {};
     });
     archiveTasks(root);
-    appendLog(root, scope, `產生 ${tasks.length} 個任務（${via === 'agent' ? '作者 AI 產生、Task Master 管理' : 'task-master parse-prd'}）`);
-    console.log(`Task Master 產生 ${tasks.length} 個任務，下一步：aipipe run 或在 UI 按「開始」`);
+    appendLog(root, scope, `產生 ${tasks.length} 個任務（AI 拆解，內建任務引擎管理）`);
+    console.log(`已產生 ${tasks.length} 個任務，下一步：aipipe run 或在 UI 按「開始」`);
   } catch (err) {
     updateState(root, (s) => {
       s.task_gen = { status: 'error', pid: null, error: err.message };
@@ -239,12 +253,34 @@ async function generateTasks(root) {
   }
 }
 
+export async function runSkill(root, name, input, { provider, previousId } = {}) {
+  if (!input.trim()) throw new Error('請輸入需求或回答');
+  const cfg = loadConfig(root);
+  if (provider && !['claude', 'codex'].includes(provider)) throw new Error('provider 必須是 claude 或 codex');
+  loadSkill(root, name);
+  const run = newSkillRun(root, name, input, previousId);
+  updateState(root, s => { s.skill_job = { pid: process.pid, id: run.id }; });
+  try {
+    const prompt = `這是互動式技能會議。根據以下交接紀錄回覆最新的使用者訊息；不要替使用者回答。\n${run.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`;
+    const result = await runAgent({ root, cfg, provider: provider || cfg.roles.author, prompt, write: false,
+      scope: `skill-${run.id}`, label: `Skill ${name}`, skills: [name] });
+    if (!result.ok) throw new Error(result.error);
+    run.messages.push({ role: 'assistant', text: result.text });
+    Object.assign(run, { status: 'done', provider: result.provider, sessionId: result.sessionId, skills: result.skills });
+    saveSkillRun(root, run);
+    console.log(`${result.text}\n\nSkill session: ${run.id}`);
+    return run;
+  } catch (error) {
+    Object.assign(run, { status: 'error', error: error.message }); saveSkillRun(root, run); throw error;
+  } finally { updateState(root, s => { s.skill_job = { pid: null, id: run.id }; }); }
+}
+
 function printStatus(root) {
   const cfg = loadConfig(root);
   const s = readState(root);
   console.log(`模式：${cfg.mode}　流程：${s.pipeline.status}${s.pipeline.reason ? `（${s.pipeline.reason}）` : ''}`);
   console.log(`PRD：${s.prd.status}${s.prd.round ? `，審查 ${s.prd.round} 輪` : ''}`);
-  for (const t of tmaster.readTasks(root)) {
+  for (const t of taskEngine.readTasks(root)) {
     const ts = s.tasks[String(t.id)];
     console.log(`  #${t.id} [${t.status}] ${t.title}${ts ? ` — ${ts.phase}${ts.step ? `：${ts.step}` : ''}` : ''}`);
   }
@@ -278,8 +314,9 @@ function projectsCommand([sub, ...args], root) {
 }
 
 async function doctor(root) {
-  const { lines } = await doctorReport(root);
+  const { lines, bad } = await doctorReport(root);
   console.log(lines.join('\n'));
+  process.exitCode = bad ? 1 : 0;
 }
 
 export function spawnDetachedCli(root, args) {

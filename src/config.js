@@ -5,8 +5,8 @@ export const CONFIG_FILE = '.aipipe.json';
 export const ROLES = ['author', 'reviewer', 'implementer', 'code_reviewer'];
 export const PROVIDERS = ['claude', 'codex'];
 export const MODES = ['auto', 'manual'];
-export const CLI_NAMES = ['claude', 'codex', 'task_master'];
-export const RUNTIMES = ['windows', 'wsl'];
+export const CLI_NAMES = ['claude', 'codex'];
+export const RUNTIMES = ['auto', 'windows', 'wsl'];
 
 export function defaultConfig() {
   return {
@@ -19,7 +19,8 @@ export function defaultConfig() {
     },
     context_files: ['docs/ai-context.md', 'docs/index.md'],
     handover_path: 'docs/handovers/current_handover.md',
-    prd_path: '.taskmaster/docs/prd.md',
+    prd_path: 'docs/aipipe/prd.md',
+    skills: { prd: [], prd_review: [], tasks: [], implement: [], code_review: [], fix: [], handover: [] },
     // 需求待辦清單與功能封存，都放在專案裡可以 commit。
     backlog_path: 'docs/aipipe/backlog.json',
     archive_dir: 'docs/prd',
@@ -37,23 +38,20 @@ export function defaultConfig() {
     branch_prefix: 'aipipe/',
     // 每個 CLI 在 Windows 原生（windows）或 WSL（wsl）執行。
     runtime: {
-      claude: 'windows',
-      codex: 'windows',
-      task_master: 'windows',
+      claude: 'auto',
+      codex: 'auto',
     },
     // 空字串＝WSL 預設發行版。
     wsl_distro: '',
-    // runtime 為 wsl 時在 WSL 裡執行的指令名稱或路徑；空字串＝claude / codex / task-master。
+    // runtime 為 wsl 時在 WSL 裡執行的指令名稱或路徑；空字串＝claude / codex。
     wsl_cli: {
       claude: '',
       codex: '',
-      task_master: '',
     },
     // runtime 為 windows 時使用。空字串代表從 PATH 尋找；Windows 上可填 .exe 或 .cmd 的完整路徑。
     cli: {
       claude: '',
       codex: '',
-      task_master: '',
     },
     claude: {
       model: '',
@@ -65,14 +63,6 @@ export function defaultConfig() {
       // Windows 上 Codex 需要 windows.sandbox 才會真的啟用 workspace-write，否則會默默降成 read-only。
       // 可填 elevated / unelevated；空字串代表沿用 ~/.codex/config.toml。
       windows_sandbox: process.platform === 'win32' ? 'elevated' : '',
-    },
-    taskmaster: {
-      provider: 'claude-code',
-      model: 'sonnet',
-      // auto：先用 task-master parse-prd，失敗再由作者 AI 依 Task Master 格式產生；task-master／agent 只用其中一種。
-      parse_with: 'auto',
-      // 每個功能用一個 Task Master tag，各自一份任務清單，開始新功能不會覆蓋上一個功能的任務。
-      use_tags: true,
     },
   };
 }
@@ -103,8 +93,12 @@ export function validateConfig(cfg) {
     const n = cfg[key];
     if (!Number.isInteger(n) || n < 1 || n > 10) errors.push(`${key} 必須是 1–10 的整數`);
   }
-  if (!['claude-code', 'codex-cli'].includes(cfg.taskmaster?.provider)) {
-    errors.push('taskmaster.provider 必須是 claude-code 或 codex-cli（不使用 API key 的 provider）');
+  if (!cfg.skills || typeof cfg.skills !== 'object' || Array.isArray(cfg.skills)) errors.push('skills 必須是階段與技能名稱陣列的物件');
+  for (const [stage, names] of Object.entries(cfg.skills && typeof cfg.skills === 'object' ? cfg.skills : {})) {
+    if (!['prd', 'prd_review', 'tasks', 'implement', 'code_review', 'fix', 'handover'].includes(stage)
+      || !Array.isArray(names) || names.some(name => typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(name))) {
+      errors.push(`skills.${stage} 必須是 Skill 名稱陣列`);
+    }
   }
   for (const name of CLI_NAMES) {
     if (!RUNTIMES.includes(cfg.runtime?.[name])) errors.push(`runtime.${name} 必須是 ${RUNTIMES.join(' / ')}`);
@@ -115,9 +109,6 @@ export function validateConfig(cfg) {
   for (const key of ['backlog_path', 'archive_dir']) {
     const v = cfg[key];
     if (typeof v !== 'string' || !v || path.isAbsolute(v) || v.split(/[\\/]/).includes('..')) errors.push(`${key} 必須是專案內的相對路徑`);
-  }
-  if (!['auto', 'task-master', 'agent'].includes(cfg.taskmaster?.parse_with)) {
-    errors.push('taskmaster.parse_with 必須是 auto / task-master / agent');
   }
   return errors;
 }

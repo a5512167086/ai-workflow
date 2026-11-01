@@ -1,5 +1,5 @@
 // 把 aipipe（bin/aipipe.js + src/ + ui/）打包成單一 exe（Node SEA），給 Tauri 當 sidecar。
-// 使用者不需要另外安裝 Node 就能跑 aipipe 本身；claude／codex／task-master 仍是各自安裝的 CLI。
+// aipipe 本身包含 Node；Claude Code／Codex 至少安裝一個，任務引擎與預設 Skills 直接打包。
 //
 // 步驟：esbuild 合併成一個 CJS → node --experimental-sea-config 產生 blob（UI 檔案當 asset 內嵌）
 //       → 複製目前的 node.exe → postject 注入 blob。

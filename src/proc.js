@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { IS_SEA } from './home.js';
+import { cliEnvironment, wslLocation } from './runtime.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -78,7 +79,7 @@ export function resolveCli(configured, fallbackName) {
   return { command: file, prefixArgs: [], shell: false, label: file };
 }
 
-const BIN_NAMES = { claude: 'claude', codex: 'codex', task_master: 'task-master' };
+const BIN_NAMES = { claude: 'claude', codex: 'codex' };
 
 /**
  * 在 WSL 裡啟動指令前執行的清理腳本。login shell 會讀 .bashrc／.profile，可能又設回 API key，
@@ -93,12 +94,13 @@ export const WSL_SCRUB_SCRIPT = [
 
 /**
  * 依 .aipipe.json 的 runtime 解析 CLI：windows 用 resolveCli；wsl 透過 wsl.exe 執行。
- * name 是 claude / codex / task_master。回傳的 spec 都有 toPath()，把 Windows 路徑轉成該 runtime 看得懂的路徑。
+ * name 是 claude / codex。回傳的 spec 都有 toPath()，把 Windows 路徑轉成該 runtime 看得懂的路徑。
  */
-export function resolveCliFor(cfg, name) {
-  if ((cfg.runtime?.[name] || 'windows') === 'wsl') {
-    if (!IS_WIN) throw new Error('runtime "wsl" 只能在 Windows 上使用');
-    const distro = cfg.wsl_distro || '';
+export function resolveCliFor(cfg, name, root = process.cwd()) {
+  const environment = cliEnvironment(cfg, name, root);
+  if (environment.runtime === 'wsl') {
+    if (!IS_WIN) return { ...resolveCli(cfg.wsl_cli?.[name], BIN_NAMES[name]), runtime: 'wsl', toPath: (p) => p };
+    const distro = environment.distro;
     const bin = cfg.wsl_cli?.[name] || BIN_NAMES[name];
     return {
       wsl: true,
@@ -120,17 +122,31 @@ function wslBaseArgs(distro) {
 }
 
 const wslPathCache = new Map();
-export function toWslPath(distro, winPath) {
+export function toWslPath(distro, winPath, { execute = spawnSync } = {}) {
+  const location = wslLocation(winPath);
+  if (location) {
+    if (distro && location.distro.toLowerCase() !== distro.toLowerCase()) throw new Error('不可跨 WSL 發行版存取專案');
+    return location.path;
+  }
+  if (winPath.startsWith('/')) return winPath;
   const key = `${distro}|${winPath}`;
-  if (wslPathCache.has(key)) return wslPathCache.get(key);
-  const r = spawnSync('wsl.exe', [...wslBaseArgs(distro), '-e', 'wslpath', '-a', winPath], {
+  if (execute === spawnSync && wslPathCache.has(key)) return wslPathCache.get(key);
+  // Launch independently of the desktop app's cwd. WSL can take time to cold-start.
+  const r = execute('wsl.exe', [...wslBaseArgs(distro), '--cd', '/', '-e', '/usr/bin/wslpath', '-a', winPath], {
     encoding: 'utf8',
     env: cleanEnv(),
     windowsHide: true,
+    timeout: 30000,
   });
-  if (r.status !== 0 || !r.stdout.trim()) throw new Error(`wslpath 轉換失敗：${winPath} ${r.stderr || ''}`.trim());
+  if (r.error || r.status !== 0 || !r.stdout?.trim()) {
+    const detail = r.error?.code === 'ETIMEDOUT' ? 'WSL 啟動或路徑轉換超過 30 秒，請確認發行版可正常啟動'
+      : r.error ? `${r.error.code || ''} ${r.error.message}`
+      : (r.stderr || r.stdout || `結束碼 ${r.status}，沒有回傳路徑`).replace(/\0/g, '').trim();
+    throw new Error(`wslpath 轉換失敗（${distro || '預設發行版'}）：${winPath}；${detail}`);
+  }
   const out = r.stdout.trim();
-  wslPathCache.set(key, out);
+  if (!out.startsWith('/') || /[\r\n]/.test(out)) throw new Error(`wslpath 未回傳有效的 Linux 路徑：${winPath}`);
+  if (execute === spawnSync) wslPathCache.set(key, out);
   return out;
 }
 
@@ -138,8 +154,12 @@ export function toWslPath(distro, winPath) {
  * 組出 wsl.exe 的參數。必須用 -e（--exec）：用 -- 時 wsl.exe 會把參數接成字串交給預設 shell，
  * 引號與 $、;、| 會被重新解析。--cd 直接接受 Windows 路徑。
  */
-function wslArgs(spec, cwd, args) {
-  return [...wslBaseArgs(spec.distro), ...(cwd ? ['--cd', cwd] : []), '-e', 'bash', '-lc', WSL_SCRUB_SCRIPT, 'aipipe', spec.bin, ...args];
+export function wslArgs(spec, cwd, args) {
+  // WSL --cd accepts Windows paths itself. Only UNC Linux paths need local parsing.
+  const location = cwd ? wslLocation(cwd) : null;
+  if (location && spec.distro && location.distro.toLowerCase() !== spec.distro.toLowerCase()) throw new Error('不可跨 WSL 發行版存取專案');
+  const directory = location?.path || cwd;
+  return [...wslBaseArgs(spec.distro), ...(directory ? ['--cd', directory] : []), '-e', 'bash', '-lc', WSL_SCRUB_SCRIPT, 'aipipe', spec.bin, ...args];
 }
 
 function quoteForCmd(arg) {
@@ -164,10 +184,10 @@ export function killTree(child) {
  * 執行子程序。input 會寫入 stdin（長 prompt 一律走 stdin，避開命令列長度限制）。
  * 回傳 { code, stdout, stderr, timedOut }，不因非零結束碼丟例外。
  */
-export function run(spec, args, { cwd, input, env, timeoutSec = 0, onStdout, onStderr, shellCommand } = {}) {
-  return new Promise((resolve, reject) => {
+function spawnCommand(spec, args, { cwd, env, shellCommand } = {}) {
     let child;
-    const opts = { cwd, env: env || cleanEnv(), windowsHide: true, detached: !IS_WIN };
+    // A Linux/UNC project directory is for WSL --cd, not the Windows launcher.
+    const opts = { cwd: spec?.wsl ? undefined : cwd, env: env || cleanEnv(), windowsHide: true, detached: !IS_WIN };
     if (shellCommand) {
       child = spawn(shellCommand, { ...opts, shell: true });
     } else if (spec.wsl) {
@@ -178,6 +198,51 @@ export function run(spec, args, { cwd, input, env, timeoutSec = 0, onStdout, onS
     } else {
       child = spawn(spec.command, [...spec.prefixArgs, ...args], opts);
     }
+    return child;
+}
+
+/** Query the Codex control plane without starting a conversation or model turn. */
+export function queryCodexRpc(spec, { cwd, method, timeoutSec = 15 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawnCommand(spec, ['app-server'], { cwd });
+    let buffer = '', finished = false;
+    const finish = (error, value) => {
+      if (finished) return;
+      finished = true; clearTimeout(timer); child.stdin.end(); killTree(child);
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('額度查詢逾時')), timeoutSec * 1000);
+    const send = message => child.stdin.write(JSON.stringify(message) + '\n');
+    child.stdout.setEncoding('utf8');
+    child.stderr.resume(); // Never surface control-plane stderr, which can contain account details.
+    child.stdin.on('error', error => finish(error));
+    child.on('error', error => finish(error));
+    child.on('close', () => { if (!finished) finish(new Error('CLI 未提供額度查詢結果')); });
+    child.stdout.on('data', data => {
+      buffer += data;
+      if (buffer.length > 1e6) return finish(new Error('額度查詢回應過大'));
+      let index;
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+        if (message.id === 1) {
+          if (message.error) return finish(new Error('CLI 不支援額度查詢初始化'));
+          send({ method: 'initialized', params: {} });
+          send({ id: 2, method });
+        } else if (message.id === 2) {
+          if (message.error) return finish(new Error('無法取得訂閱額度，請確認 CLI 版本與登入狀態'));
+          return finish(null, message.result);
+        }
+      }
+    });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'aipipe', version: '0.1.1' } } });
+  });
+}
+
+export function run(spec, args, { cwd, input, env, timeoutSec = 0, onStdout, onStderr, shellCommand } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawnCommand(spec, args, { cwd, env, shellCommand });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -213,5 +278,9 @@ export function run(spec, args, { cwd, input, env, timeoutSec = 0, onStdout, onS
 }
 
 export function runShell(command, opts) {
+  const location = IS_WIN && opts?.cwd ? wslLocation(opts.cwd) : null;
+  if (location) {
+    return run({ wsl: true, distro: location.distro, bin: 'bash' }, ['-c', command], opts);
+  }
   return run(null, [], { ...opts, shellCommand: command });
 }

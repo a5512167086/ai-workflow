@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { listSkills } from './skills.js';
 
 const MAX_FILE_CHARS = 40000;
 const MAX_DIFF_CHARS = 120000;
@@ -47,7 +48,7 @@ const PRD_SECTIONS = `1. 概述與目標
 7. 待確認問題`;
 
 export function prdDraftPrompt(root, cfg, idea) {
-  return `你是產品需求文件（PRD）的作者。請根據以下想法與專案背景，寫一份可以直接交給 Task Master 拆任務的 PRD。
+  return `你是產品需求文件（PRD）的作者。請根據以下想法與專案背景，寫一份可以直接拆解為開發任務的 PRD。
 
 ## 想法
 ${idea}
@@ -101,7 +102,7 @@ ${PRD_SECTIONS}
 
 export function tasksFromPrdPrompt(root, cfg, prd) {
   const count = cfg.num_tasks > 0 ? `剛好 ${cfg.num_tasks} 個` : '適當數量（通常 3–10 個）';
-  return `你負責把 PRD 拆成可以逐一交給 AI 實作的開發任務（Task Master 格式）。
+  return `你負責把 PRD 拆成可以逐一交給 AI 實作的開發任務（內建任務格式）。
 
 ## PRD
 ${prd}
@@ -112,9 +113,11 @@ ${contextBlock(root, cfg, { includeHandover: false })}
 ## 要求
 - 拆成${count}任務，依實作順序排列；每個任務可以在一個對話內完成並用測試驗證。
 - dependencies 只能引用排在前面的任務編號（從 1 開始）。
+- 每個任務列出對應 PRD 需求編號 requirement_ids 與可觀察的 acceptanceCriteria；確保所有需求都有任務涵蓋。
+- skills 可以選擇以下適用技能，沒有適用的就留空：${listSkills(root).filter(s => s.compatible).map(s => `${s.name}（${s.description}）`).join('、')}。
 - 使用與 PRD 相同的語言。
 - 不要修改任何檔案。最後的回覆只輸出一個 JSON 物件，不要其他文字或圍欄：
-{"tasks":[{"title":"","description":"","details":"實作細節","testStrategy":"怎麼驗證","priority":"high|medium|low","dependencies":[]}]}`;
+{"tasks":[{"title":"","description":"","details":"實作細節","testStrategy":"怎麼驗證","priority":"high|medium|low","dependencies":[],"requirement_ids":[],"acceptanceCriteria":[],"skills":[]}]}`;
 }
 
 function taskBlock(task) {
@@ -122,7 +125,7 @@ function taskBlock(task) {
 }
 
 export function implementPrompt(root, cfg, task) {
-  return `你正在一個全新的對話中實作 Task Master 的任務 ${task.id}。先閱讀 handover 與 context 了解目前進度，再動手。
+  return `你正在一個全新的對話中實作 開發任務 ${task.id}。先閱讀 handover 與 context 了解目前進度，再動手。
 
 ## Handover 與專案 context
 ${contextBlock(root, cfg)}
@@ -143,7 +146,7 @@ ${commandsBlock(cfg)}
 }
 
 export function fixChecksPrompt(root, cfg, task, failures, round) {
-  return `你正在修正 Task Master 任務 ${task.id} 的實作（第 ${round} 輪修正）。驗證指令失敗，請修好它們。
+  return `你正在修正 開發任務 ${task.id} 的實作（第 ${round} 輪修正）。驗證指令失敗，請修好它們。
 
 ## 任務
 ${taskBlock(task)}
@@ -161,7 +164,7 @@ ${commandsBlock(cfg)}
 }
 
 export function fixReviewPrompt(root, cfg, task, review, round) {
-  return `你正在修正 Task Master 任務 ${task.id} 的實作（第 ${round} 輪修正）。程式碼審查者提出以下意見，請處理。
+  return `你正在修正 開發任務 ${task.id} 的實作（第 ${round} 輪修正）。程式碼審查者提出以下意見，請處理。
 
 ## 任務
 ${taskBlock(task)}
@@ -179,7 +182,7 @@ ${commandsBlock(cfg)}
 }
 
 export function codeReviewPrompt(root, cfg, task, diff, checkSummary) {
-  return `你是程式碼審查者。請審查 Task Master 任務 ${task.id} 的變更是否正確完成任務、有沒有錯誤、安全問題、遺漏的測試或超出範圍的修改。
+  return `你是程式碼審查者。請審查 開發任務 ${task.id} 的變更是否正確完成任務、有沒有錯誤、安全問題、遺漏的測試或超出範圍的修改。
 
 ## 任務
 ${taskBlock(task)}

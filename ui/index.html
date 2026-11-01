@@ -40,7 +40,7 @@
     <div class="brand">
       <a class="icon-btn back-link" href="/overview" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
       <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
-      <span class="name">aipipe</span>
+      <span class="name">aipipe <small class="hint">v0.1.1</small></span>
       <span id="project" class="project mono" title=""></span>
     </div>
     <div class="status-line">
@@ -48,6 +48,7 @@
       <span id="pipeline-reason" class="reason"></span>
     </div>
     <div class="top-actions">
+      <button id="usage-short" type="button" title="查看本專案 token 用量與訂閱額度">Tokens：未知</button>
       <div class="mode">
         <span class="label" id="mode-label">模式</span>
         <div class="seg" role="radiogroup" aria-labelledby="mode-label">
@@ -67,6 +68,8 @@
     <button data-tab="board" type="button" role="tab" aria-selected="false" aria-controls="tab-board" id="tabbtn-board" tabindex="-1">任務看板 <span class="tab-badge" id="tab-board-badge"></span></button>
     <button data-tab="history" type="button" role="tab" aria-selected="false" aria-controls="tab-history" id="tabbtn-history" tabindex="-1">歷史功能</button>
     <button data-tab="log" type="button" role="tab" aria-selected="false" aria-controls="tab-log" id="tabbtn-log" tabindex="-1">流程 log</button>
+    <button data-tab="usage" type="button" role="tab" aria-selected="false" aria-controls="tab-usage" id="tabbtn-usage" tabindex="-1">用量</button>
+    <button data-tab="skills" type="button" role="tab" aria-selected="false" aria-controls="tab-skills" id="tabbtn-skills" tabindex="-1">Skills</button>
     <button data-tab="settings" type="button" role="tab" aria-selected="false" aria-controls="tab-settings" id="tabbtn-settings" tabindex="-1">設定</button>
   </nav>
 
@@ -147,7 +150,7 @@
             <textarea id="feedback" rows="3" placeholder="要修改的地方"></textarea>
             <button id="btn-prd-revise" class="block" type="button"><svg class="ic"><use href="#i-edit"/></svg>要求再改</button>
             <hr>
-            <button id="btn-tasks" class="block" type="button"><svg class="ic"><use href="#i-list"/></svg>用 Task Master 產生任務</button>
+            <button id="btn-tasks" class="block" type="button"><svg class="ic"><use href="#i-list"/></svg>依 PRD 產生任務</button>
             <p id="task-gen" class="hint center" role="status"></p>
           </div>
 
@@ -193,18 +196,61 @@
       </div>
     </section>
 
+    <section id="tab-usage" class="tab" role="tabpanel" aria-labelledby="tabbtn-usage" hidden>
+      <div class="card">
+        <div class="card-head"><h2>Token 用量與訂閱額度</h2><button id="btn-usage-refresh" type="button">更新訂閱額度</button></div>
+        <p>本專案已記錄 <strong id="usage-total">未知</strong> tokens <span id="usage-coverage" class="hint"></span></p>
+        <p class="hint">Token 統計包含快取讀取，代表處理量。訂閱額度 % 由 CLI 回報，不能換算成固定剩餘 tokens；未回報時顯示未知。紀錄自此功能啟用後開始。</p>
+        <p id="usage-refresh-status" class="hint" role="status"></p>
+      </div>
+      <div id="usage-providers" class="settings-layout spaced"></div>
+      <div class="card spaced">
+        <div class="card-head"><h2>最近 20 次執行</h2></div>
+        <div class="usage-table-wrap"><table class="usage-table"><thead><tr><th>工作</th><th>AI／環境</th><th>狀態</th><th>輸入 tokens</th><th>輸出 tokens</th><th>合計</th></tr></thead><tbody id="usage-recent"></tbody></table></div>
+      </div>
+    </section>
+    <section id="tab-skills" class="tab" role="tabpanel" aria-labelledby="tabbtn-skills" hidden>
+      <div class="settings-layout">
+        <div class="card">
+          <div class="card-head"><h2>共用技能庫</h2><button id="skills-refresh" type="button">重新整理</button></div>
+          <p class="hint">同一份 Skill 可交給 Codex 或 Claude Code。執行器專屬的 hooks、工具權限等設定需先轉為共用指令。</p>
+          <label for="skill-name">選擇技能</label><select id="skill-name"></select>
+          <label for="skill-source" class="field-label spaced">匯入資料夾（包含 SKILL.md）</label>
+          <input id="skill-source" type="text" placeholder="完整路徑，WSL 可用 \\wsl.localhost\Ubuntu\…">
+          <div class="row"><button id="skill-import" type="button">匯入</button><button id="skill-new" type="button">新增技能</button></div>
+          <label for="skill-editor" class="field-label spaced">SKILL.md</label>
+          <textarea id="skill-editor" rows="12" spellcheck="false"></textarea>
+          <div class="row"><button id="skill-save" type="button">儲存技能</button></div>
+          <p id="skill-compatibility" class="hint" role="status"></p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>工作流技能</h2></div>
+          <p class="hint">只在選定階段載入；每次執行保存技能快照與版本。</p>
+          <div id="skill-bindings"></div>
+          <div class="row"><button id="skill-bindings-save" type="button">儲存階段設定</button></div>
+          <div class="card-head"><h2>技能會議</h2></div>
+          <label for="skill-provider">執行器</label>
+          <select id="skill-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
+          <label for="skill-run-history" class="field-label spaced">接續上次回覆</label>
+          <select id="skill-run-history"><option value="">新會議</option></select>
+          <label for="skill-input" class="field-label spaced">需求或回答</label><textarea id="skill-input" rows="4"></textarea>
+          <div class="row"><button id="skill-run" class="primary" type="button">送出</button></div>
+          <div class="row"><button id="skill-to-prd" type="button">將此會議帶入 PRD</button></div>
+          <p class="hint">每次回覆使用全新 AI session，透過會議紀錄交接。可將確認的需求整理後帶入 PRD。</p>
+          <pre id="skill-output" class="doc" role="status"></pre>
+        </div>
+      </div>
+    </section>
     <section id="tab-settings" class="tab" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
       <div class="settings-layout">
         <div class="card">
           <div class="card-head"><h2>CLI 執行環境</h2></div>
-          <p class="hint">每個 CLI 可以在 Windows 原生或 WSL 裡執行。下一次呼叫 CLI 時生效。</p>
+          <p class="hint">預設依專案位置自動選擇 Windows 或所屬 WSL 發行版，也可以手動指定。只有一個 AI 可用時，以獨立對話完成實作與審查。</p>
           <div class="form-grid">
             <label for="rt-claude" class="mono">claude</label>
-            <select id="rt-claude" data-runtime="claude"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
+            <select id="rt-claude" data-runtime="claude"><option value="auto">自動（依專案位置）</option><option value="windows">Windows</option><option value="wsl">WSL</option></select>
             <label for="rt-codex" class="mono">codex</label>
-            <select id="rt-codex" data-runtime="codex"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
-            <label for="rt-tm" class="mono">task-master</label>
-            <select id="rt-tm" data-runtime="task_master"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
+            <select id="rt-codex" data-runtime="codex"><option value="auto">自動（依專案位置）</option><option value="windows">Windows</option><option value="wsl">WSL</option></select>
             <label for="wsl-distro">WSL 發行版</label>
             <input id="wsl-distro" type="text" placeholder="空白＝預設發行版，例如 Ubuntu">
           </div>

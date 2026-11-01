@@ -1,12 +1,18 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { aipipeDir } from './state.js';
+import { wslLocation } from './runtime.js';
+import { toWslPath } from './proc.js';
 
 function git(root, args, extraEnv = {}) {
-  const res = spawnSync('git', ['-c', 'core.quotePath=false', ...args], {
-    cwd: root,
+  const location = process.platform === 'win32' ? wslLocation(root) : null;
+  const envArgs = location ? Object.entries(extraEnv).map(([key, value]) => `${key}=${key === 'GIT_INDEX_FILE' ? toWslPath(location.distro, value) : value}`) : [];
+  const gitArgs = ['-c', 'core.quotePath=false', ...args];
+  const res = spawnSync(location ? 'wsl.exe' : 'git', location
+    ? ['-d', location.distro, '--cd', location.path, '-e', 'env', ...envArgs, 'git', ...gitArgs] : gitArgs, {
+    cwd: location ? undefined : root,
     encoding: 'utf8',
-    env: { ...process.env, ...extraEnv },
+    env: location ? { ...process.env } : { ...process.env, ...extraEnv },
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
   });
@@ -31,7 +37,11 @@ export function hasIdentity(root) {
 }
 
 export function isGitRepo(root) {
-  return git(root, ['rev-parse', '--is-inside-work-tree']).out === 'true';
+  const result = git(root, ['rev-parse', '--is-inside-work-tree']);
+  if (result.code !== 0 && !/not a git repository/i.test(result.err + result.out)) {
+    throw new Error(`無法檢查 Git 專案：${result.err || result.out || `結束碼 ${result.code}`}`);
+  }
+  return result.code === 0 && result.out === 'true';
 }
 
 /** 在 root 建立空的 git repo（不做初始 commit，snapshotTree 能處理沒有 HEAD 的情況）。 */
@@ -66,8 +76,8 @@ export function snapshotTree(root) {
   }
 }
 
-// 任務 diff 與還原都不含 Task Master 的狀態檔：那是流程本身改的，不是任務的程式碼變更。
-const TASK_PATHSPEC = ['--', '.', ':(exclude).taskmaster'];
+// 流程資料不屬於實作變更；保留舊 Task Master 資料以支援歷史版本。
+const TASK_PATHSPEC = ['--', '.', ':(exclude).aipipe', ':(exclude).taskmaster'];
 
 export function diffTrees(root, fromTree, toTree) {
   const r = git(root, ['diff', '--no-color', '--stat', '--patch', fromTree, toTree, ...TASK_PATHSPEC]);

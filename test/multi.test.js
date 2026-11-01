@@ -12,7 +12,7 @@ const { addProject, listProjects, removeProject, projectId, projectSummary } = a
 const queue = await import('../src/queue.js');
 const backlog = await import('../src/backlog.js');
 const { archivePrd, archiveTasks, listArchives, readArchive, featureSlug, tagSlug } = await import('../src/archive.js');
-const { writeTasks, readTasks, tagName } = await import('../src/taskmaster.js');
+const { writeTasks, readTasks, tagName } = await import('../src/tasks.js');
 const { approvePrd } = await import('../src/prd.js');
 const { updateState, aipipeDir, ensureDirs } = await import('../src/state.js');
 const { defaultConfig, validateConfig } = await import('../src/config.js');
@@ -141,12 +141,11 @@ test('需求待辦：新增、編輯、排序、刪除，存在 docs/aipipe/back
   assert.equal(file.items.length, 1);
 });
 
-test('Task Master tag：writeTasks 只寫目前 tag，readTasks 讀目前 tag；tag 名稱只用 ASCII', () => {
+test('內建任務群組：保留不同功能的任務', () => {
   const dir = makeProject('tag');
   writeTasks(dir, [{ title: 'old' }]);
-  fs.writeFileSync(path.join(dir, '.taskmaster', 'state.json'), JSON.stringify({ currentTag: 'f-20261101-csv' }));
-  writeTasks(dir, [{ title: 'new 1' }, { title: 'new 2', dependencies: [1] }]);
-  const data = JSON.parse(fs.readFileSync(path.join(dir, '.taskmaster', 'tasks', 'tasks.json'), 'utf8'));
+  writeTasks(dir, [{ title: 'new 1' }, { title: 'new 2', dependencies: [1] }], 'f-20261101-csv');
+  const data = JSON.parse(fs.readFileSync(path.join(dir, '.aipipe', 'tasks.json'), 'utf8')).groups;
   assert.deepEqual(Object.keys(data), ['master', 'f-20261101-csv']);
   assert.equal(data.master.tasks[0].title, 'old');
   assert.deepEqual(readTasks(dir).map((t) => t.title), ['new 1', 'new 2']);
@@ -208,6 +207,16 @@ test('伺服器：舊 API、/api/p/<id>/、總覽與 POST 防護', async () => {
     assert.equal(legacy.root, dir);
     const scoped = await (await fetch(`${base}/api/p/${p.id}/state`)).json();
     assert.equal(scoped.project.id, p.id);
+    const usage = await (await fetch(`${base}/api/p/${p.id}/usage`)).json();
+    assert.equal(usage.totalTokens, null);
+    assert.equal(usage.providers.length, 2);
+    const skillList = await (await fetch(`${base}/api/p/${p.id}/skills`)).json();
+    assert.deepEqual(skillList.skills.map(skill => skill.name), ['grill-me', 'uiux-design']);
+    const binding = await fetch(`${base}/api/p/${p.id}/skills/config`, {
+      method: 'POST', headers: { 'X-Aipipe': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ skills: { implement: ['uiux-design'] } }),
+    });
+    assert.equal(binding.status, 200);
+    assert.deepEqual((await (await fetch(`${base}/api/skills`)).json()).config.implement, ['uiux-design']);
     const all = await (await fetch(`${base}/api/projects`)).json();
     assert.ok(all.projects.some((x) => x.id === p.id));
     assert.equal(all.queue.max, 1);

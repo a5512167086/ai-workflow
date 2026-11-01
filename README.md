@@ -1,8 +1,8 @@
 # aipipe
 
-把「多個 AI 討論 → 寫 PRD 並交叉審查 → Task Master 拆任務 → 每個任務開新對話並帶 handover → 驗證與審查 → 更新 handover → 人工測試」這套流程自動化的命令列工具，附本機網頁 UI。
+把「多個 AI 討論 → 寫 PRD 並交叉審查 → 內建引擎拆任務 → 每個任務開新對話並帶 handover → 驗證與審查 → 更新 handover → 人工測試」這套流程自動化的命令列工具，附本機網頁 UI。
 
-- **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex exec`、`task-master`），不需要也不使用 API key。
+- **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex exec`），不需要也不使用 API key。
 - **通用**：任何有 git 的軟體專案都能用，build/test/lint 指令寫在專案的 `.aipipe.json`。
 - **兩種模式**：自動（通過檢查就 commit，少停）與手動（不 commit，每個任務都停下來等你測）。
 - **多專案**：總覽畫面同時看多個專案；全域佇列讓多個專案輪流跑，不會一起燒掉訂閱額度。
@@ -10,13 +10,14 @@
 
 ## 需求
 
+Claude Code／Codex 至少安裝並以訂閱登入一個；缺少另一個時使用獨立 session 完成實作與審查。
+
 | 工具 | 用途 | 安裝／登入 |
 | --- | --- | --- |
 | Node.js 20+ | 執行 aipipe | — |
 | git | 版本控制、diff、自動 commit | — |
 | Claude Code CLI | 預設的 PRD 作者、實作者 | `npm i -g @anthropic-ai/claude-code`，然後 `claude auth login` 用 Pro/Max 帳號登入 |
 | Codex CLI | 預設的 PRD 審查者、程式碼審查者 | `npm i -g @openai/codex`，然後 `codex login` 用 ChatGPT 帳號登入 |
-| Task Master | 任務資料（tasks.json、next、set-status） | `npm i -g task-master-ai` |
 
 > 只裝 Claude 桌面版、沒有獨立的 `claude` 指令時，可以把桌面版內建的 `claude.exe` 路徑填進 `.aipipe.json` 的 `cli.claude`，但仍要先用它執行一次 `claude.exe auth login`。
 
@@ -35,7 +36,7 @@ npm install -g .
 ```bash
 cd 你的專案            # 不是 git repo 時 init 會詢問是否 git init（或加 --git-init）
 aipipe init            # 建立 .aipipe.json、docs/ai-context.md、docs/index.md 範本
-aipipe doctor          # 檢查三個 CLI 是否找得到、是否已用訂閱登入
+aipipe doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是否安裝並以訂閱登入
 aipipe ui              # 開 http://localhost:4317：所有專案的總覽（目前專案會自動加入）
 aipipe ui --cwd .      # 直接開這個專案的畫面
 ```
@@ -45,7 +46,7 @@ aipipe ui --cwd .      # 直接開這個專案的畫面
 0. **需求待辦**（選用）：先把想做的功能列進待辦、排好順序，按「起草 PRD」就用那一項開始。
 1. **PRD 頁**：輸入想法 →「起草 PRD」。作者 AI 起草，審查 AI 審，來回最多 `max_prd_rounds` 輪。右側可以展開每一輪的審查意見。
 2. 看完 PRD 後按「核准 PRD」，或在下方寫意見按「要求再改」（作者修訂後會再審一輪）。
-3. 按「用 Task Master 產生任務」。
+3. 按「依 PRD 產生任務」。
 4. **任務看板**：按「開始」。點任務卡可以看目前步驟、修正輪數、即時 log、test 輸出、審查意見、diff。
 5. 流程停下來時（等待測試、功能完成、修正輪數用盡），自己測過後按「我測完了，繼續」。
 
@@ -104,7 +105,7 @@ docs/prd/2026-11-01-匯出-csv/
   rounds/01-draft-r0-v1.md   每一輪：初稿、審查（含結論）、修訂、使用者意見
   rounds/02-review-r1-revise-v1.md
   tasks.json                 這個功能的任務清單（含最後狀態）
-  meta.json                  想法、核准／完成時間、Task Master tag、進度、待辦項目 id
+  meta.json                  想法、核准／完成時間、任務群組、進度、待辦項目 id
 ```
 
 - 核准 PRD 時建立；同一個功能重新核准會更新同一個資料夾。
@@ -112,11 +113,23 @@ docs/prd/2026-11-01-匯出-csv/
 - 開始下一個功能（起草新的 PRD）時一定建新資料夾；同一天同名的功能會加 `-2`、`-3`，不會覆蓋。
 - UI 的「歷史功能」分頁可以瀏覽每個封存的 PRD（Markdown 渲染）、每輪紀錄與任務清單。
 
-### 每個功能一個 Task Master tag
+### 每個功能一個任務群組
 
-`taskmaster.use_tags`（預設 `true`）讓每個功能的任務放在自己的 Task Master tag（例如 `f-20261101-csv`），開始新功能不會覆蓋上一個功能的 `tasks.json` 內容。產生任務時 aipipe 會執行 `task-master tags add <tag>`、`tags use <tag>`，再 `parse-prd --tag <tag>`；之後的 `next`、`set-status` 都作用在目前的 tag。已用 task-master 0.43.1 實測：`tags add`／`tags use` 可用、`set-status` 只改目前 tag、`next --format json` 讀目前 tag。
+內建任務引擎將不同功能的任務保存在 `.aipipe/tasks.json` 的獨立群組，包含依賴、狀態事件及 PRD 版本；不需要安裝 Task Master。舊 Task Master 多群組任務會在首次更新時匯入並保留來源。
 
-限制：Task Master 的 tag 名稱只接受英數字、`-`、`_`，所以中文功能名稱會轉成 ASCII（全是中文時是 `feature`，加上日期與流水號區分）。目前的 tag 還是空的（例如全新專案的 `master`）時直接沿用。`tags` 指令失敗（舊版 Task Master）時會記在 log 並沿用目前的 tag，行為就和以前一樣。
+## Skills
+
+桌面版的「用量」頁可查看各次執行與本專案的 token 處理量、CLI 回報的訂閱額度剩餘百分比及重設時間。詳見[Token 與額度顯示](docs/usage.md)。
+
+「Skills」頁提供共用技能庫、階段綁定和互動會議。預設提供 Grill Me 與 UI/UX Design；可匯入包含 `SKILL.md` 的資料夾。Codex／Claude Code 都透過 App 載入同一份可攜式指令。每次執行保存技能快照與 session，下一輪問答以紀錄交接到新 session。
+
+```bash
+aipipe skills list
+aipipe skills import <資料夾>
+aipipe skills run grill-me --input "我要做報表工具" --provider codex
+```
+
+完整設定與相容性見[內建任務引擎與共用 Skills](docs/tasks-and-skills.md)。
 
 ## 執行佇列
 
@@ -131,8 +144,8 @@ docs/prd/2026-11-01-匯出-csv/
 ## 每個任務做什麼
 
 ```
-task-master next
-  → task-master set-status in-progress
+內建排程器選擇下一項
+  → 內建引擎標記 in-progress
   → 開新的實作者對話（附 handover、context 檔、任務 JSON；不 resume 舊對話）
   → 跑 build / lint / test ──失敗──→ 把錯誤輸出交給實作者修正 ─┐
   → set-status review，審查者看這個任務的 git diff ──FAIL──→ 把意見交給實作者修正 ─┤
@@ -152,7 +165,7 @@ task-master next
 | git commit | 每個任務通過驗證和審查後自動 commit | 不 commit，由你決定 |
 | 分支 | 自動切到 `aipipe/<feature>`（不存在就從目前 HEAD 建立），不在 main 上 commit | 不切分支 |
 | 何時停下來 | PRD 等待核准、所有任務完成待功能測試、修正輪數用盡 | 以上三種，加上每個任務完成後 |
-| Task Master 狀態 | 任務通過後直接 `done` | 等你按「繼續」才 `done`，之前是 `review` |
+| 任務狀態 | 任務通過後直接 `done` | 等你按「繼續」才 `done`，之前是 `review` |
 
 在 `.aipipe.json` 的 `mode` 或 UI 右上角切換。下一個任務開始時生效。
 
@@ -174,7 +187,7 @@ task-master next
   "commands": { "build": "", "test": "npm test", "lint": "npm run lint" },
   "context_files": ["docs/ai-context.md", "docs/index.md"],
   "handover_path": "docs/handovers/current_handover.md",
-  "prd_path": ".taskmaster/docs/prd.md",  // 核准後的 PRD 寫在這裡，交給 Task Master
+  "prd_path": "docs/aipipe/prd.md",  // 核准後的 PRD
   "backlog_path": "docs/aipipe/backlog.json",  // 需求待辦清單
   "archive_dir": "docs/prd",        // 功能封存的上層資料夾
   "roles": {                        // 每個角色填 claude 或 codex
@@ -185,44 +198,26 @@ task-master next
   },
   "max_fix_rounds": 3,              // 每個任務最多修正幾輪（1–10）
   "max_prd_rounds": 2,              // PRD 審查最多幾輪（1–10）
-  "num_tasks": 0,                   // 0 = 交給 Task Master 決定
+  "num_tasks": 0,                   // 0 = 交給 AI 決定
   "command_timeout_sec": 900,       // build/test/lint 逾時
   "agent_timeout_sec": 1800,        // 每次 AI 呼叫逾時
   "branch_prefix": "aipipe/",
-  "cli": { "claude": "", "codex": "", "task_master": "" },  // 空字串 = 從 PATH 找
+  "cli": { "claude": "", "codex": "" },  // 空字串 = 從 PATH 找
   "claude": { "model": "", "allowed_tools": [] },
   "codex": { "model": "", "windows_sandbox": "elevated" },  // Windows 預設 elevated，其他平台空字串
-  "taskmaster": {
-    "provider": "claude-code",      // claude-code 或 codex-cli（都走 CLI 訂閱，不用 API key）
-    "model": "sonnet",
-    "parse_with": "auto",           // auto | task-master | agent，見下方
-    "use_tags": true                // 每個功能一個 Task Master tag，見「功能封存」
-  }
+  "skills": { "prd": [], "prd_review": ["grill-me"], "tasks": [], "implement": ["uiux-design"], "code_review": [], "fix": [], "handover": [] }
 }
 ```
 
 `init` 會依 `package.json`、`Cargo.toml`、`go.mod`、`pyproject.toml` 猜 build/test/lint 指令，猜不到就留空，請自己填。
 
-### Task Master 的設定
+### 任務與技能設定
 
-`aipipe tasks` 會：
-
-1. 沒有 `.taskmaster/` 就執行 `task-master init -y --skip-install --no-git --no-aliases --rules ""`（不產生 CLAUDE.md、.mcp.json 等規則檔）。
-2. 把 main、fallback、research 三個模型都設成 `taskmaster.provider`（預設的 research 是 perplexity，需要 API key，所以一併換掉）。
-3. 把 `cli.claude`／`cli.codex` 路徑寫進 `.taskmaster/config.json`，並關閉 Task Master 的匿名遙測。
-4. 執行 `task-master parse-prd --input <prd_path> --force`。
-
-`parse_with`：
-
-- `task-master`：只用 `task-master parse-prd`。
-- `agent`：由 aipipe 的作者 AI 依 Task Master 的 tasks.json 格式產生任務，再用 `task-master list` 確認讀得懂。
-- `auto`（預設）：先 parse-prd，失敗再改用 agent。
-
-不管哪一種，之後的 `next`、`set-status` 都由 Task Master 處理。已知 Task Master 0.43.1 的 `codex-cli` provider 在新版 Codex 上 parse-prd 會失敗（Codex API 拒絕它的 JSON schema），這時 `auto` 會自動改用 agent。
+`aipipe tasks` 直接呼叫作者 AI 拆解已核准 PRD，由內建引擎驗證、保存與排程；不再呼叫 Task Master。設定 `skills` 可指定各階段使用的技能，任務自己的 `skills` 也會帶入實作、修正與 review。
 
 ## 費用與安全
 
-- 只呼叫官方 CLI：`claude -p`、`codex exec`、`task-master`。
+- 只呼叫官方 CLI：`claude -p`、`codex exec`。
 - 啟動任何子程序前（含 build/test/lint）會移除這些環境變數：`ANTHROPIC_*`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`CODEX_API_KEY`、`OPENAI_CODEX_API_KEY`，以及從上層 Claude Code session 繼承的 `CLAUDECODE`、`CLAUDE_CODE_*`（`CLAUDE_CODE_GIT_BASH_PATH` 除外）、`CLAUDE_AGENT_SDK_*`。CLI 只能用訂閱登入，沒登入就直接失敗，不會改走付費 API。
 - 不使用 `--dangerously-skip-permissions` 或 `--dangerously-bypass-approvals-and-sandbox`：
 
@@ -248,7 +243,7 @@ task-master next
   prd/                       各版 PRD（v1.md…）、每輪審查意見、使用者意見
   tasks/<id>/                checks.txt、review-N.md、diff.patch、implement.md
   tmp/                       每次送出的 prompt 與 codex 最後回覆
-.taskmaster/                 Task Master 的資料（每個功能一個 tag）
+.aipipe/tasks.json           內建任務資料（每個功能一個群組）
 docs/handovers/current_handover.md
 docs/aipipe/backlog.json     需求待辦清單（建議 commit）
 docs/prd/<日期>-<功能>/      功能封存（建議 commit）
@@ -267,17 +262,17 @@ docs/prd/<日期>-<功能>/      功能封存（建議 commit）
 
 ## 在 WSL 裡執行 CLI
 
-每個 CLI 可以分別選擇在 Windows 原生或 WSL 裡執行。例如 claude 裝在 WSL、codex 和 task-master 用 Windows 版：
+每個 CLI 可以分別選擇在 Windows 原生或 WSL 裡執行。例如 claude 裝在 WSL、codex 用 Windows 版：
 
 ```jsonc
 {
-  "runtime": { "claude": "wsl", "codex": "windows", "task_master": "windows" },
+  "runtime": { "claude": "wsl", "codex": "windows" },
   "wsl_distro": "Ubuntu",     // 空字串＝WSL 預設發行版
-  "wsl_cli": { "claude": "", "codex": "", "task_master": "" }  // WSL 裡的指令名或路徑，空字串＝claude / codex / task-master
+  "wsl_cli": { "claude": "", "codex": "" }  // WSL 裡的指令名或路徑，空字串＝claude / codex
 }
 ```
 
-UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor）」確認。預設全部是 `windows`。`runtime` 為 `wsl` 時 `cli.*` 不使用（那是 Windows 路徑）。
+UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor）」確認。新專案預設全部是 `auto`，依專案位置選擇環境；舊設定的明確指定仍保留。詳見[自動路由與單 AI 模式](docs/runtime.md)。`runtime` 為 `wsl` 時 `cli.*` 不使用（那是 Windows 路徑）。
 
 運作方式：
 
@@ -285,19 +280,18 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 - prompt 一律從 stdin 傳入，不放在命令列。
 - 需要路徑的參數（例如 codex 的 `-C`、`-o`）會用 `wslpath -a` 轉成 `/mnt/c/...`。
 - **API key 在 WSL 端再清一次**：login shell 會讀 `.bashrc`／`.profile`，Windows 端也可能透過 `WSLENV` 轉送變數。清理腳本會 `unset` 所有 `ANTHROPIC_*`、`CLAUDE_CODE_*`、`OPENAI_API_KEY` 等變數，最後再用 `exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u OPENAI_API_KEY -u CODEX_API_KEY` 執行 CLI。
-- `aipipe doctor` 會依 runtime 分別檢查：WSL 能不能啟動、login shell 裡有沒有 API key 變數（只列名稱）、各 CLI 的版本與登入狀態（claude 必須是 `claude.ai` 訂閱登入）。
+- `aipipe doctor` 會檢查 Windows 與目標 WSL 發行版的 Claude Code／Codex 版本及訂閱登入；只有一個可用時進入單 AI 模式，兩個都不可用才阻擋 AI 工作。
 
 注意事項：
 
 - **I/O 較慢**：專案在 Windows 磁碟時，WSL 裡的 CLI 透過 `/mnt/c` 存取，讀寫大量檔案明顯比原生慢。專案很大時，考慮把整個專案放在 WSL 檔案系統、全部 CLI 都用 WSL。
 - **換行符號**：WSL 裡的工具寫出 LF，Windows 上的 git 若設 `core.autocrlf=true` 會把 LF 轉成 CRLF，diff 可能出現整檔換行差異。建議在專案加 `.gitattributes`（例如 `* text=auto eol=lf`），並讓 Windows 與 WSL 的 git 設定一致。
-- **Task Master 的 provider 會在 task-master 自己的 runtime 裡找 CLI**：task-master 在 Windows、claude 在 WSL 時，`claude-code` provider 找不到 claude，`parse-prd` 會失敗，由 `parse_with: "auto"` 改用作者 AI 產生任務。想讓 Task Master 直接用 claude-code，就把 task-master 也裝在 WSL 並設成 `wsl`（WSL 需要有 Node.js）。
 - 逾時中止時 aipipe 會結束 `wsl.exe`；WSL 裡的子程序通常會跟著結束，但不保證。
 
 ## Windows 注意事項
 
 - **Codex 的 workspace-write**：Windows 上 Codex 沒設 `windows.sandbox` 時，會把 `--sandbox workspace-write` 默默降成 read-only，實作者就改不了檔案。aipipe 會帶 `-c windows.sandbox="<codex.windows_sandbox>"`（Windows 預設 `elevated`）。如果 Codex 仍回報 read-only，該任務會直接停在「需要人工處理」並提示你改設定，不會白白耗掉修正輪數。`elevated` 需要 Codex 的 Windows 沙箱已完成一次性設定（裝過 Codex 桌面版通常已設定好）；不行的話改 `unelevated`。
-- npm 全域安裝的 `.cmd` 包裝檔（例如 `task-master.cmd`）會被解析成 `node <js 入口>` 直接執行，不經過 cmd.exe。
+- npm 全域安裝的 `.cmd` 包裝檔（例如 `codex.cmd`）會被解析成 `node <js 入口>` 直接執行，不經過 cmd.exe。
 
 ## 桌面版（Windows）
 
@@ -305,10 +299,10 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 
 - **不用裝 Node 就能跑 aipipe**：aipipe（`bin/` + `src/` + `ui/`）用 esbuild 合併後，以 Node SEA 打包成 `aipipe-sidecar.exe`，UI 檔案內嵌在 exe 裡。app 啟動時挑一個沒被佔用的本機連接埠啟動它，結束 app 時停掉它。
 - **原生功能**：總覽的「選擇資料夾」用系統對話框；系統匣圖示（左鍵開視窗、右鍵「結束 aipipe」）；關閉視窗會縮到系統匣，背景繼續監看；專案進入等待核准、等待測試、功能待測試、需要人工處理、錯誤時跳 Windows 通知。
-- **CLI 呼叫不變**：一樣只呼叫本機已登入的 claude（可設在 WSL）、codex、task-master，清掉 API key 的規則一樣。
+- **CLI 呼叫不變**：一樣只呼叫本機已登入的 claude（可設在 WSL）、codex，清掉 API key 的規則一樣。
 - 由 UI 啟動的 `aipipe run` 是獨立程序，結束 app 不會中斷正在跑的流程（和 CLI 版一樣）。sidecar 則會監看外殼的 pid，app 當掉或被強制關閉時也會自己結束。
 
-安裝：執行 `aipipe_0.1.0_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。
+安裝：執行 `aipipe_0.1.1_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。更新前請從系統匣選「結束 aipipe」；點視窗關閉只會縮到系統匣。專案頁頂列會顯示版本號。
 
 自己建置（需要 Node 20+、Rust stable、VS 2022 C++ Build Tools；WebView2 Windows 11 內建）：
 
@@ -322,7 +316,7 @@ npm run build        # = npm run sidecar（打包 aipipe-sidecar.exe）+ tauri b
 
 桌面版的限制：
 
-- claude、codex、task-master 仍要自己安裝。npm 裝的 CLI（例如 task-master、npm 版 codex）本身就需要 Node，所以實務上 Windows 端仍會有 Node；只用 WSL 裡的 CLI、或原生 exe 版的 claude／codex 時才真的不需要。aipipe 會從 PATH 找 `node` 來執行這些 `.js` CLI。
+- claude、codex 至少安裝並登入一個。npm 裝的 CLI（例如 npm 版 codex）本身就需要 Node，所以實務上 Windows 端仍會有 Node；只用 WSL 裡的 CLI、或原生 exe 版的 claude／codex 時才真的不需要。aipipe 會從 PATH 找 `node` 來執行這些 `.js` CLI。
 - sidecar exe 約 94 MB（內含 Node 執行環境），安裝檔約 24 MB。exe 沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會提示。
 - 同時開兩個 app 會各自有一個 sidecar 和連接埠（彼此透過 `~/.aipipe` 共用專案清單與佇列），通知會重複。
 

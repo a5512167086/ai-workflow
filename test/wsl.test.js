@@ -21,3 +21,16 @@ test('WSL runtime：參數原樣傳遞、cwd 轉成 /mnt 路徑、API key 在 WS
   assert.equal(stdin, '中文 stdin');
   assert.match(spec.toPath('C:\\Users\\x y\\f.md'), /^\/mnt\/c\/Users\/x y\/f\.md$/);
 });
+
+test('WSL 專案 UNC 路徑自動選擇正確發行版並在 Linux 專案目錄執行', { skip: !hasWsl && '沒有 WSL' }, async () => {
+  const info = spawnSync('wsl.exe', ['-e', 'bash', '-lc', 'printf "%s\\n" "$WSL_DISTRO_NAME"; printf "/tmp\\n"'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(info.status, 0);
+  const [distro, linuxPath] = info.stdout.trim().split('\n');
+  const root = `\\\\wsl.localhost\\${distro}${linuxPath.replaceAll('/', '\\')}`;
+  const cfg = { ...defaultConfig(), wsl_distro: 'WrongDistro', wsl_cli: { claude: 'bash' } };
+  const spec = resolveCliFor(cfg, 'claude', root);
+  assert.equal(spec.distro, distro);
+  const result = await run(spec, ['-c', 'pwd'], { cwd: root, timeoutSec: 15 });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout.trim(), linuxPath);
+});

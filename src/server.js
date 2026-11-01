@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG_FILE, loadConfig, patchConfig, MODES, CLI_NAMES, RUNTIMES } from './config.js';
 import { doctorReport } from './doctor.js';
 import { approvePrd, currentPrd } from './prd.js';
-import { readTasks } from './taskmaster.js';
+import { readTasks, tasksFile } from './tasks.js';
+import { listSkills, importSkill, saveSkill, loadSkill, listSkillRuns, SKILL_STAGES } from './skills.js';
 import { requestPause } from './runner.js';
+import { usageSnapshot, refreshUsageLimits, usageFile } from './usage.js';
 import { spawnDetachedCli } from './cli.js';
 import { initProject } from './init.js';
 import { isGitRepo } from './git.js';
@@ -91,9 +93,11 @@ function snapshot(root) {
     runnerAlive,
     prdBusy,
     taskGenBusy,
+    skillBusy: isPidAlive(state.skill_job?.pid),
     queue: runnerAlive ? queueEntryFor(root) : null,
     prd: currentPrd(root),
     tasks: readTasks(root),
+    usage: usageSnapshot(root, cfg),
   };
 }
 
@@ -121,6 +125,7 @@ function taskDetail(root, id) {
 }
 
 function busyGuard(snap) {
+  if (snap.skillBusy) throw httpError(409, 'Skill 執行中');
   if (snap.runnerAlive) throw httpError(409, '流程執行中');
   if (snap.prdBusy) throw httpError(409, 'PRD 流程執行中');
   if (snap.taskGenBusy) throw httpError(409, '任務產生中');
@@ -175,6 +180,37 @@ async function handleAction(root, action, body) {
     }
     case 'doctor':
       return doctorReport(root);
+    case 'usage/refresh':
+      return refreshUsageLimits(root, snap.config);
+    case 'skills/import':
+      busyGuard(snap);
+      return { skill: importSkill(root, String(body.path || '')) };
+    case 'skills/save':
+      busyGuard(snap);
+      return { skill: saveSkill(root, body.text, body.name) };
+    case 'skills/config': {
+      busyGuard(snap);
+      for (const [stage, names] of Object.entries(body.skills || {})) {
+        if (!SKILL_STAGES.includes(stage) || !Array.isArray(names)) throw httpError(400, 'Skill 階段設定不正確');
+        for (const name of names) {
+          const skill = loadSkill(root, name);
+          if (skill.extensions.length) throw httpError(400, `${name} 含執行器專屬設定`);
+        }
+      }
+      return { config: patchConfig(root, { skills: body.skills }) };
+    }
+    case 'skills/run': {
+      busyGuard(snap);
+      loadSkill(root, body.name);
+      if (!String(body.input || '').trim()) throw httpError(400, '請輸入需求或回答');
+      const args = ['skills', 'run', body.name, '--input', String(body.input)];
+      if (body.provider) {
+        if (!['claude', 'codex'].includes(body.provider)) throw httpError(400, 'provider 不正確');
+        args.push('--provider', body.provider);
+      }
+      if (body.previousId) args.push('--session', String(body.previousId));
+      return { pid: await spawnDetachedCli(root, args) };
+    }
     case 'config/mode': {
       if (!MODES.includes(body.mode)) throw httpError(400, '模式不正確');
       return { config: patchConfig(root, { mode: body.mode }) };
@@ -247,10 +283,11 @@ function sse(root, req, res) {
   const tick = () => {
     try {
       const stateStat = fs.statSync(aipipeDir(root, 'state.json'), { throwIfNoEntry: false });
-      const tasksStat = fs.statSync(path.join(root, '.taskmaster', 'tasks', 'tasks.json'), { throwIfNoEntry: false });
+      const tasksStat = fs.statSync(tasksFile(root), { throwIfNoEntry: false });
       const tmStateStat = fs.statSync(path.join(root, '.taskmaster', 'state.json'), { throwIfNoEntry: false });
       const cfgStat = fs.statSync(path.join(root, '.aipipe.json'), { throwIfNoEntry: false });
-      const sig = `${stateStat?.mtimeMs}|${cfgStat?.mtimeMs}`;
+      const usageStat = fs.statSync(usageFile(root), { throwIfNoEntry: false });
+      const sig = `${stateStat?.mtimeMs}|${cfgStat?.mtimeMs}|${usageStat?.mtimeMs}`;
       const tsig = `${tasksStat?.mtimeMs}|${tmStateStat?.mtimeMs}`;
       if (sig !== lastState || tsig !== lastTasks) {
         lastState = sig;
@@ -312,7 +349,10 @@ function projectsSse(req, res) {
 async function projectRoute(root, req, res, rest) {
   if (req.method === 'GET') {
     if (rest === 'state') return json(res, 200, snapshot(root));
+    if (rest === 'usage') return json(res, 200, usageSnapshot(root, loadConfig(root)));
     if (rest === 'events') return sse(root, req, res);
+    if (rest === 'skills') return json(res, 200, { skills: listSkills(root), stages: SKILL_STAGES, config: loadConfig(root).skills });
+    if (rest === 'skills/runs') return json(res, 200, { runs: listSkillRuns(root) });
     if (rest === 'prd') {
       const state = readState(root);
       return json(res, 200, { prd: currentPrd(root), status: state.prd, rounds: prdRounds(root, state) });

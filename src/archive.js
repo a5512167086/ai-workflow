@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { aipipeDir, readState, readText, updateState } from './state.js';
-import { readTasks, currentTag } from './taskmaster.js';
+import { readTasks, currentTag } from './tasks.js';
 
 /*
  * 功能封存：每個功能一個資料夾 <archive_dir>/<日期>-<功能>/（預設 docs/prd/），可以 commit。
  *   prd.md            核准的 PRD
  *   rounds/NN-*.md    每一輪的初稿、審查、修訂、使用者意見
- *   tasks.json        最後的任務清單（Task Master 格式，含狀態）
- *   meta.json         功能名稱、想法、核准時間、Task Master tag、待辦項目 id
+ *   tasks.json        最後的任務清單（含狀態）
+ *   meta.json         功能名稱、想法、核准時間、任務群組、待辦項目 id
  * 資料夾名稱不會重複；同一個功能重新核准時更新同一個資料夾，開始下一個功能時一定建新的。
  */
 
@@ -25,7 +25,7 @@ export function featureSlug(text) {
     .replace(/-+$/, '') || 'feature';
 }
 
-/** Task Master tag 用的 ASCII slug（tag 名稱不接受中文）；全是中文時回傳 feature。 */
+/** 任務群組 用的 ASCII slug（tag 名稱不接受中文）；全是中文時回傳 feature。 */
 export function tagSlug(text) {
   return featureSlug(text).normalize('NFKD').replace(/[^a-z0-9-]+/g, '').replace(/-+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'feature';
 }

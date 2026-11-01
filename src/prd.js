@@ -39,10 +39,10 @@ function setPrdStatus(root, status) {
 }
 
 async function author(root, cfg, prompt, label) {
-  const res = await runAgent({ root, cfg, provider: cfg.roles.author, prompt, write: false, scope: SCOPE, label });
+  const res = await runAgent({ root, cfg, provider: cfg.roles.author, prompt, write: false, scope: SCOPE, label, stage: 'prd' });
   const text = stripOuterFence(res.text);
   if (!res.ok || !text) throw new Error(`作者 AI 失敗：${res.error || '沒有輸出'}`);
-  return text;
+  return { text, provider: res.provider };
 }
 
 /** 審查→修訂來回，最多 max_prd_rounds 輪；審查通過就提早結束。最後一律停在 awaiting_approval 等人核准。 */
@@ -57,21 +57,21 @@ async function reviewLoop(root, cfg) {
     const prd = currentPrd(root);
     const res = await runAgent({
       root, cfg, provider: cfg.roles.reviewer, prompt: prdReviewPrompt(root, cfg, prd, round),
-      write: false, scope: SCOPE, label: `PRD 審查 第 ${round} 輪`,
+      write: false, scope: SCOPE, label: `PRD 審查 第 ${round} 輪`, stage: 'prd_review',
     });
     if (!res.ok) throw new Error(`審查 AI 失敗：${res.error}`);
     const { pass, verdict } = parseVerdict(res.text, ['APPROVE']);
     const reviewFile = aipipeDir(root, 'prd', `review-${round}.md`);
     fs.writeFileSync(reviewFile, res.text);
-    addRound(root, { kind: 'review', round, provider: cfg.roles.reviewer, verdict, version: readState(root).prd.version, file: path.basename(reviewFile) });
+    addRound(root, { kind: 'review', round, provider: res.provider, verdict, version: readState(root).prd.version, file: path.basename(reviewFile) });
     if (pass) {
       appendLog(root, SCOPE, `審查者核可（第 ${round} 輪）`);
       break;
     }
     setPrdStatus(root, 'revising');
     const revised = await author(root, cfg, prdRevisePrompt(root, cfg, prd, res.text, '審查者'), `PRD 修訂 第 ${round} 輪`);
-    const v = saveVersion(root, revised);
-    addRound(root, { kind: 'revise', round, provider: cfg.roles.author, version: v, file: `v${v}.md` });
+    const v = saveVersion(root, revised.text);
+    addRound(root, { kind: 'revise', round, provider: revised.provider, version: v, file: `v${v}.md` });
   }
   setPrdStatus(root, 'awaiting_approval');
   appendLog(root, SCOPE, '等待使用者在 UI 核准 PRD（或執行 aipipe prd --approve）');
@@ -127,8 +127,8 @@ export async function draftPrd(root, cfg, idea, { backlogId = null } = {}) {
     for (const f of fs.readdirSync(aipipeDir(root, 'prd'))) fs.rmSync(aipipeDir(root, 'prd', f));
     appendLog(root, SCOPE, `新想法：${idea}`);
     const draft = await author(root, cfg, prdDraftPrompt(root, cfg, idea), 'PRD 初稿');
-    const v = saveVersion(root, draft);
-    addRound(root, { kind: 'draft', round: 0, provider: cfg.roles.author, version: v, file: `v${v}.md` });
+    const v = saveVersion(root, draft.text);
+    addRound(root, { kind: 'draft', round: 0, provider: draft.provider, version: v, file: `v${v}.md` });
     await reviewLoop(root, cfg);
   });
 }
@@ -148,8 +148,8 @@ export async function revisePrd(root, cfg, feedback) {
     fs.writeFileSync(fbFile, feedback);
     addRound(root, { kind: 'user_feedback', round: readState(root).prd.round, provider: 'user', file: path.basename(fbFile) });
     const revised = await author(root, cfg, prdRevisePrompt(root, cfg, prd, feedback, '使用者'), 'PRD 依使用者意見修訂');
-    const v = saveVersion(root, revised);
-    addRound(root, { kind: 'revise', round: readState(root).prd.round, provider: cfg.roles.author, version: v, file: `v${v}.md` });
+    const v = saveVersion(root, revised.text);
+    addRound(root, { kind: 'revise', round: readState(root).prd.round, provider: revised.provider, version: v, file: `v${v}.md` });
     await reviewLoop(root, cfg);
   });
 }

@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { withLock } from './home.js';
 import { loadConfig } from './config.js';
 import { runAgent, parseVerdict } from './agents.js';
 import { runShell } from './proc.js';
 import * as git from './git.js';
-import * as tmaster from './taskmaster.js';
+import * as taskEngine from './tasks.js';
 import { implementPrompt, fixChecksPrompt, fixReviewPrompt, codeReviewPrompt, handoverPrompt } from './prompts.js';
 import { appendLog, isPidAlive, readState, taskDir, taskState, updateState } from './state.js';
 import { acquireSlot, release as releaseSlot } from './queue.js';
@@ -70,7 +72,7 @@ class StuckError extends Error {}
  */
 async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
   const scope = `task-${id}`;
-  const task = tmaster.findTask(root, id);
+  const task = taskEngine.findTask(root, id);
   if (!task) throw new Error(`tasks.json 找不到任務 ${id}`);
   const dir = taskDir(root, id);
   const prev = readState(root).tasks[id];
@@ -98,13 +100,13 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
     s.pipeline.current_task = String(id);
   });
   appendLog(root, scope, `═══ 任務 ${id}：${task.title} ═══`);
-  await tmaster.setStatus(root, cfg, id, 'in-progress', scope);
+  await taskEngine.setStatus(root, cfg, id, 'in-progress', scope);
 
   let notes = '';
   if (!verifyOnly) {
     const impl = await runAgent({
       root, cfg, provider: cfg.roles.implementer, prompt: implementPrompt(root, cfg, task),
-      write: true, scope, label: `實作任務 ${id}`,
+      write: true, scope, label: `實作任務 ${id}`, stage: 'implement', skills: [...(cfg.skills?.implement || []), ...(task.skills || [])],
     });
     if (!impl.ok) throw new StuckError(`實作 AI 失敗：${impl.error}`);
     notes = impl.text;
@@ -123,7 +125,7 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
       const failed = checks.results.filter((r) => !r.ok).map((r) => `## ${r.name} (\`${r.cmd}\`)\n${r.output.slice(-15000)}`).join('\n\n');
       const fix = await runAgent({
         root, cfg, provider: cfg.roles.implementer, prompt: fixChecksPrompt(root, cfg, task, failed, round),
-        write: true, scope, label: `修正驗證錯誤 第 ${round} 輪`,
+        write: true, scope, label: `修正驗證錯誤 第 ${round} 輪`, stage: 'fix', skills: [...(cfg.skills?.fix || []), ...(task.skills || [])],
       });
       if (!fix.ok) throw new StuckError(`修正 AI 失敗：${fix.error}`);
       notes += `\n\n### 修正第 ${round} 輪\n${fix.text}`;
@@ -131,13 +133,13 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
     }
 
     setTask(root, id, { phase: 'reviewing', step: '程式碼審查中' });
-    await tmaster.setStatus(root, cfg, id, 'review', scope);
+    await taskEngine.setStatus(root, cfg, id, 'review', scope);
     const diff = git.diffTrees(root, baseTree, git.snapshotTree(root));
     fs.writeFileSync(path.join(dir, 'diff.patch'), diff);
     const summary = checks.results.length ? checks.results.map((r) => `- ${r.name}: PASS`).join('\n') : '- 未設定驗證指令';
     const review = await runAgent({
       root, cfg, provider: cfg.roles.code_reviewer, prompt: codeReviewPrompt(root, cfg, task, diff || '（沒有任何變更）', summary),
-      write: false, scope, label: `程式碼審查 第 ${round + 1} 次`,
+      write: false, scope, label: `程式碼審查 第 ${round + 1} 次`, stage: 'code_review', skills: [...(cfg.skills?.code_review || []), ...(task.skills || [])],
     });
     if (!review.ok) throw new StuckError(`審查 AI 失敗：${review.error}`);
     const { pass, verdict } = parseVerdict(review.text, ['PASS']);
@@ -149,7 +151,7 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
     setTask(root, id, { phase: 'implementing', step: `處理審查意見（第 ${round} 輪）`, fix_round: round });
     const fix = await runAgent({
       root, cfg, provider: cfg.roles.implementer, prompt: fixReviewPrompt(root, cfg, task, review.text, round),
-      write: true, scope, label: `處理審查意見 第 ${round} 輪`,
+      write: true, scope, label: `處理審查意見 第 ${round} 輪`, stage: 'fix', skills: [...(cfg.skills?.fix || []), ...(task.skills || [])],
     });
     if (!fix.ok) throw new StuckError(`修正 AI 失敗：${fix.error}`);
     notes += `\n\n### 處理審查意見第 ${round} 輪\n${fix.text}`;
@@ -159,7 +161,7 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
   const stat = git.diffTrees(root, baseTree, git.snapshotTree(root)).split('\n').filter((l) => /^ \S.*\|/.test(l) || /files? changed/.test(l)).join('\n');
   const ho = await runAgent({
     root, cfg, provider: cfg.roles.implementer, prompt: handoverPrompt(root, cfg, task, notes, stat),
-    write: true, scope, label: '更新 handover',
+    write: true, scope, label: '更新 handover', stage: 'handover',
   });
   if (!ho.ok) appendLog(root, scope, `⚠ handover 更新失敗：${ho.error}（不影響任務結果）`);
   // 最終 diff（含 handover）供 UI 顯示。
@@ -168,13 +170,13 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
   const fresh = loadConfig(root);
   if (fresh.mode === 'auto') {
     setTask(root, id, { step: 'git commit' });
-    // 先標 done 再 commit，讓 tasks.json 的狀態和程式碼在同一個 commit；commit 失敗就退回 review。
-    await tmaster.setStatus(root, fresh, id, 'done', scope);
+    // commit 失敗時回到 review；任務狀態另存於本機引擎與功能封存。
+    await taskEngine.setStatus(root, fresh, id, 'done', scope);
     let sha;
     try {
       sha = git.commitAll(root, `aipipe: task ${id} ${task.title}`);
     } catch (err) {
-      await tmaster.setStatus(root, fresh, id, 'review', scope);
+      await taskEngine.setStatus(root, fresh, id, 'review', scope);
       throw new StuckError(err.message);
     }
     appendLog(root, scope, sha ? `已 commit ${sha.slice(0, 8)}` : '沒有變更可 commit');
@@ -186,13 +188,15 @@ async function runTask(root, cfg, id, { verifyOnly = false } = {}) {
 }
 
 function acquireRunner(root) {
-  const s = readState(root);
-  if (s.runner.pid && s.runner.pid !== process.pid && isPidAlive(s.runner.pid)) {
-    throw new Error(`已有 aipipe run 在執行（pid ${s.runner.pid}）`);
-  }
-  updateState(root, (st) => {
-    st.runner = { pid: process.pid, started_at: new Date().toISOString() };
-    st.control.pause_requested = false;
+  return withLock(`runner-${createHash('sha256').update(path.resolve(root).toLowerCase()).digest('hex')}`, () => {
+    const s = readState(root);
+    if (s.runner.pid && isPidAlive(s.runner.pid)) {
+      throw new Error(`已有 aipipe run 在執行（pid ${s.runner.pid}）`);
+    }
+    updateState(root, (st) => {
+      st.runner = { pid: process.pid, started_at: new Date().toISOString() };
+      st.control.pause_requested = false;
+    });
   });
 }
 
@@ -215,7 +219,7 @@ export async function runPipeline(root, { firstTask = null, verifyOnly = false }
     let cfg = loadConfig(root);
     const state = readState(root);
     if (state.prd.status !== 'approved') throw new Error('PRD 尚未核准');
-    if (!tmaster.readTasks(root).length) throw new Error('還沒有任務，請先執行 aipipe tasks');
+    if (!taskEngine.readTasks(root).length) throw new Error('還沒有任務，請先執行 aipipe tasks');
     const waiting = Object.values(state.tasks).find((t) => t.phase === 'awaiting_test');
     if (waiting) {
       setPipeline(root, 'waiting', `任務 ${waiting.id} 等待人工測試，測完請按「我測完了，繼續」`);
@@ -255,11 +259,11 @@ export async function runPipeline(root, { firstTask = null, verifyOnly = false }
         setPipeline(root, 'paused', '使用者暫停');
         return 'paused';
       }
-      const id = pending ?? (await tmaster.nextTaskId(root, cfg, RUN_SCOPE));
+      const id = pending ?? (await taskEngine.nextTaskId(root, cfg, RUN_SCOPE));
       const once = verifyOnly && pending != null;
       pending = null;
       if (!id) {
-        const all = tmaster.readTasks(root);
+        const all = taskEngine.readTasks(root);
         const open = all.filter((t) => !['done', 'cancelled', 'deferred'].includes(t.status));
         if (open.length === 0) {
           setPipeline(root, 'feature_test', '所有任務完成，請進行功能測試', { current_task: null });
@@ -308,7 +312,7 @@ export async function acknowledge(root) {
   const state = readState(root);
   const waiting = Object.values(state.tasks).filter((t) => t.phase === 'awaiting_test');
   for (const t of waiting) {
-    await tmaster.setStatus(root, cfg, t.id, 'done', `task-${t.id}`);
+    await taskEngine.setStatus(root, cfg, t.id, 'done', `task-${t.id}`);
     setTask(root, t.id, { phase: 'done', step: '人工測試通過' });
     appendLog(root, `task-${t.id}`, '使用者確認測試通過');
   }
@@ -360,7 +364,7 @@ export async function prepareRerun(root, id, { revert = false } = {}) {
       appendLog(root, `task-${id}`, '已把此任務改過的檔案還原到任務開始前的狀態');
     }
   }
-  await tmaster.setStatus(root, cfg, id, 'pending', `task-${id}`);
+  await taskEngine.setStatus(root, cfg, id, 'pending', `task-${id}`);
   updateState(root, (s) => {
     const ts = taskState(s, id);
     Object.assign(ts, { phase: 'pending', step: '等待重跑', commit: null, error: '', fix_round: 0 });

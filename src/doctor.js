@@ -1,102 +1,34 @@
-import { spawnSync } from 'node:child_process';
-import { loadConfig, CLI_NAMES } from './config.js';
-import { resolveCliFor, run, cleanEnv, STRIPPED_ENV_DESCRIPTION } from './proc.js';
+import os from 'node:os';
+import { loadConfig } from './config.js';
+import { probeProvider } from './capabilities.js';
+import { cliEnvironment, projectEnvironment } from './runtime.js';
 
-const CHECKS = {
-  claude: [['--version'], ['auth', 'status']],
-  codex: [['--version'], ['login', 'status']],
-  task_master: [['--version']],
-};
-const LABEL = { claude: 'claude', codex: 'codex', task_master: 'task-master' };
-
-/** WSL 本身是否可用，以及 login shell 裡有沒有 API key（只列名稱，不讀值）。 */
-function checkWsl(distro, lines) {
-  const base = distro ? ['-d', distro] : [];
-  const r = spawnSync('wsl.exe', [...base, '-e', 'bash', '-lc', 'echo "$WSL_DISTRO_NAME"; compgen -e | grep -E "^(ANTHROPIC_|OPENAI_API_KEY|OPENAI_BASE_URL|CODEX_API_KEY)" || true'], {
-    encoding: 'utf8',
-    env: cleanEnv(),
-    windowsHide: true,
-    timeout: 60000,
+export async function doctorReport(root, { probe = probeProvider } = {}) {
+  const cfg = loadConfig(root, { required: false });
+  const project = projectEnvironment(root);
+  const environments = process.platform === 'win32' ? ['windows', 'wsl'] : ['wsl'];
+  const settled = await Promise.allSettled(environments.flatMap(runtime => ['claude', 'codex'].map(async provider => {
+    const checkCfg = { ...cfg, runtime: { ...cfg.runtime, [provider]: runtime }, wsl_distro: project.distro || cfg.wsl_distro };
+    return { ...await probe(os.tmpdir(), checkCfg, provider), provider, runtime };
+  })));
+  const inventory = settled.map((entry, i) => entry.status === 'fulfilled' ? entry.value : {
+    provider: ['claude', 'codex'][i % 2], runtime: environments[Math.floor(i / 2)], available: false, error: entry.reason.message,
   });
-  if (r.error || r.status !== 0) {
-    lines.push(`✖ WSL${distro ? `（${distro}）` : ''} 無法啟動：${(r.error?.message || r.stderr || '').replace(/\0/g, '').trim()}`);
-    return false;
+  const active = ['claude', 'codex'].map(provider => inventory.find(item =>
+    item.provider === provider && item.runtime === cliEnvironment(cfg, provider, root).runtime));
+  const available = active.filter(item => item?.available);
+  const lines = [`專案環境：${project.runtime}${project.distro ? `（${project.distro}）` : ''}`];
+  for (const item of inventory) {
+    lines.push(`${item.available ? '✔' : '○'} ${item.runtime} / ${item.provider}：${item.available ? `${item.version || ''}，已登入` : `${item.installed ? '已安裝但未就緒' : '未安裝或無法啟動'}；${item.error}`}`);
   }
-  const [name, ...keys] = r.stdout.trim().split('\n').filter(Boolean);
-  lines.push(`● WSL 發行版：${name || '(未知)'}`);
-  if (keys.length) lines.push(`  WSL login shell 設有 ${keys.join(', ')}；aipipe 會在 WSL 端用 env -u／unset 清掉後才執行 CLI`);
-  return true;
-}
-
-function interpretClaudeAuth(out) {
-  try {
-    const j = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
-    if (!j.loggedIn) return { ok: false, note: '未登入 → 在該 runtime 執行 claude auth login' };
-    if (j.authMethod !== 'claude.ai') return { ok: false, note: `已登入但方式是 ${j.authMethod}，不是訂閱（claude.ai）` };
-    return { ok: true, note: `已用訂閱登入（${j.subscriptionType || j.authMethod}）` };
-  } catch {
-    return null;
+  for (const provider of ['claude', 'codex']) {
+    const target = cliEnvironment(cfg, provider, root);
+    lines.push(`專案 ${provider} → ${target.runtime}${target.distro ? `（${target.distro}）` : ''}`);
+    if (target.runtime !== project.runtime) lines.push(`  手動設定覆蓋專案位置：可在設定頁將 ${provider} 改為「自動（依專案位置）」`);
   }
-}
-
-export async function doctorReport(root) {
-  let cfg;
-  try {
-    cfg = loadConfig(root);
-  } catch {
-    cfg = loadConfig(root, { required: false });
-  }
-  const lines = [];
-  let bad = 0;
-  lines.push(`Windows 端子程序會移除的環境變數：${STRIPPED_ENV_DESCRIPTION}`);
-  const leaked = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY'].filter((k) => process.env[k]);
-  if (leaked.length) lines.push(`  目前環境有 ${leaked.join(', ')}，aipipe 呼叫 CLI 時會移除，確保走訂閱額度`);
-
-  const usesWsl = CLI_NAMES.some((n) => cfg.runtime[n] === 'wsl');
-  const wslOk = usesWsl ? checkWsl(cfg.wsl_distro, lines) : true;
-  if (!wslOk) bad++;
-
-  for (const name of CLI_NAMES) {
-    const runtime = cfg.runtime[name];
-    if (runtime === 'wsl' && !wslOk) {
-      lines.push(`✖ ${LABEL[name]}（wsl）：WSL 無法使用，略過`);
-      bad++;
-      continue;
-    }
-    let spec;
-    try {
-      spec = resolveCliFor(cfg, name);
-    } catch (err) {
-      lines.push(`✖ ${LABEL[name]}（${runtime}）：${err.message}`);
-      bad++;
-      continue;
-    }
-    lines.push(`● ${LABEL[name]}（${runtime}）：${spec.label}`);
-    for (const args of CHECKS[name]) {
-      let res;
-      try {
-        res = await run(spec, args, { cwd: root, env: cleanEnv(), timeoutSec: 60 });
-      } catch (err) {
-        lines.push(`    ${args.join(' ')}：無法執行 ${err.message}`);
-        bad++;
-        continue;
-      }
-      const out = (res.stdout + res.stderr).trim();
-      const line = out.split('\n').filter(Boolean).slice(-1)[0] || '';
-      const auth = name === 'claude' && args[0] === 'auth' ? interpretClaudeAuth(out) : null;
-      if (auth) {
-        lines.push(`    ${args.join(' ')}：${auth.note}`);
-        if (!auth.ok) bad++;
-        continue;
-      }
-      if (res.code !== 0) {
-        lines.push(`    ${args.join(' ')}：失敗（結束碼 ${res.code}）${line}`);
-        bad++;
-      } else {
-        lines.push(`    ${args.join(' ')}：${line}`);
-      }
-    }
-  }
-  lines.push(bad ? `有 ${bad} 項需要處理` : '全部正常');
-  return { lines, bad };
+  const bad = available.length ? 0 : 1;
+  lines.push(available.length === 2 ? '雙 AI 可用' : available.length === 1
+    ? `單 AI 模式：${available[0].provider}；實作與審查使用獨立 session`
+    : '目前專案環境沒有可用的 AI，請先安裝並登入至少一個 CLI');
+  return { lines, bad, inventory, available: available.map(item => item.provider) };
 }
