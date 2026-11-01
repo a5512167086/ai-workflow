@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configPath, defaultConfig, saveConfig } from './config.js';
-import { ensureGitignoreEntry, isGitRepo } from './git.js';
+import { ensureGitignoreEntry, initRepo, isGitRepo } from './git.js';
 import { ensureDirs } from './state.js';
 
 /** 依專案內容猜 build/test/lint 指令；猜不到就留空讓使用者自己填。 */
@@ -48,9 +48,14 @@ const INDEX_TEMPLATE = `# 專案索引
 `;
 
 export function initProject(root, options = {}) {
-  if (!isGitRepo(root)) throw new Error('目標目錄不是 git repo，請先 git init');
   if (fs.existsSync(configPath(root)) && !options.force) {
     throw new Error('.aipipe.json 已存在；要覆蓋請加 --force');
+  }
+  let gitInitialized = false;
+  if (!isGitRepo(root)) {
+    if (!options.gitInit) throw new Error('目標目錄不是 git repo；加 --git-init 讓 aipipe 幫你 git init，或自己先 git init');
+    initRepo(root);
+    gitInitialized = true;
   }
   const cfg = defaultConfig();
   cfg.commands = detectCommands(root);
@@ -77,5 +82,5 @@ export function initProject(root, options = {}) {
     }
   }
   fs.mkdirSync(path.join(root, path.dirname(cfg.handover_path)), { recursive: true });
-  return { cfg, created };
+  return { cfg, created, gitInitialized };
 }

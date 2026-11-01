@@ -34,6 +34,11 @@ export function isGitRepo(root) {
   return git(root, ['rev-parse', '--is-inside-work-tree']).out === 'true';
 }
 
+/** 在 root 建立空的 git repo（不做初始 commit，snapshotTree 能處理沒有 HEAD 的情況）。 */
+export function initRepo(root) {
+  gitOk(root, ['init', '-q']);
+}
+
 export function currentBranch(root) {
   const r = git(root, ['symbolic-ref', '--short', '-q', 'HEAD']);
   return r.code === 0 ? r.out : null;

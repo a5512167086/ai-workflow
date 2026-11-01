@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
+import { isGitRepo } from './git.js';
 import { CONFIG_FILE, findProjectRoot, loadConfig, patchConfig, MODES } from './config.js';
 import { initProject } from './init.js';
 import { draftPrd, revisePrd, approvePrd } from './prd.js';
@@ -21,8 +23,9 @@ const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI �
 用法：aipipe <指令> [選項]
 
   init [--mode auto|manual] [--author claude|codex] [--reviewer ...]
-       [--implementer ...] [--code-reviewer ...] [--feature 名稱] [--force]
-                          在目前專案建立 .aipipe.json
+       [--implementer ...] [--code-reviewer ...] [--feature 名稱] [--force] [--git-init]
+                          在目前專案建立 .aipipe.json；不是 git repo 時 --git-init 會先 git init
+                          （互動終端機下沒加也會詢問）
   doctor                  檢查 claude / codex / task-master 是否可用、是否走訂閱登入
   prd "<想法>"            作者 AI 起草 PRD → 審查 AI 審 → 來回最多 max_prd_rounds 輪
   prd --backlog <id>      用需求待辦清單裡的項目起草 PRD
@@ -44,6 +47,15 @@ const HELP = `aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI �
   queue [--max <n>]       顯示全域執行佇列；--max 設定同時執行的 aipipe run 上限（預設 1）
 
 全域選項：--cwd <目錄>  指定目標專案（預設從目前目錄往上找 .aipipe.json）`;
+
+async function confirmPrompt(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return !/^n/i.test((await rl.question(question)).trim());
+  } finally {
+    rl.close();
+  }
+}
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -72,7 +84,12 @@ export async function main(argv) {
 
   switch (cmd) {
     case 'init': {
-      const { cfg, created } = initProject(root, {
+      let gitInit = !!opts.git_init;
+      if (!gitInit && process.stdin.isTTY && !isGitRepo(root)) {
+        gitInit = await confirmPrompt(`${root} 不是 git repo（aipipe 用 git 追蹤、審查與還原 AI 的變更）。要幫你執行 git init 嗎？[Y/n] `);
+      }
+      const { cfg, created, gitInitialized } = initProject(root, {
+        gitInit,
         mode: opts.mode,
         author: opts.author,
         reviewer: opts.reviewer,
@@ -81,6 +98,7 @@ export async function main(argv) {
         feature: opts.feature,
         force: !!opts.force,
       });
+      if (gitInitialized) console.log(`已在 ${root} 執行 git init`);
       console.log(`已建立 ${path.join(root, '.aipipe.json')}（模式：${cfg.mode}）`);
       console.log(`偵測到的指令：build=${cfg.commands.build || '-'} test=${cfg.commands.test || '-'} lint=${cfg.commands.lint || '-'}`);
       if (created.length) console.log(`已建立範本：${created.join(', ')}`);

@@ -33,7 +33,7 @@ npm install -g .
 ## 快速開始
 
 ```bash
-cd 你的專案            # 必須是 git repo
+cd 你的專案            # 不是 git repo 時 init 會詢問是否 git init（或加 --git-init）
 aipipe init            # 建立 .aipipe.json、docs/ai-context.md、docs/index.md 範本
 aipipe doctor          # 檢查三個 CLI 是否找得到、是否已用訂閱登入
 aipipe ui              # 開 http://localhost:4317：所有專案的總覽（目前專案會自動加入）

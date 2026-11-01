@@ -8,7 +8,8 @@ import { parseVerdict } from '../src/agents.js';
 import { cleanEnv } from '../src/proc.js';
 import { defaultConfig, validateConfig } from '../src/config.js';
 import { stripOuterFence } from '../src/prompts.js';
-import { snapshotTree, diffTrees, restoreToTree } from '../src/git.js';
+import { snapshotTree, diffTrees, restoreToTree, isGitRepo } from '../src/git.js';
+import { initProject } from '../src/init.js';
 import { featureBranch } from '../src/runner.js';
 
 test('parseVerdict 取最後一個 VERDICT，找不到視為不通過', () => {
@@ -67,6 +68,19 @@ test('snapshotTree / restoreToTree 不動 index，可還原任務變更', () => 
   restoreToTree(dir, base);
   assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'one\n');
   assert.equal(fs.existsSync(path.join(dir, 'b.txt')), false);
+});
+
+test('initProject 在非 git 目錄預設拒絕，gitInit 時先 git init', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aipipe-init-'));
+  assert.throws(() => initProject(dir), /--git-init/);
+  assert.equal(fs.existsSync(path.join(dir, '.aipipe.json')), false);
+  const { gitInitialized } = initProject(dir, { gitInit: true });
+  assert.equal(gitInitialized, true);
+  assert.equal(isGitRepo(dir), true);
+  assert.ok(fs.existsSync(path.join(dir, '.aipipe.json')));
+  fs.mkdirSync(path.join(dir, '.aipipe', 'tmp'), { recursive: true });
+  assert.match(snapshotTree(dir), /^[0-9a-f]{40}$/);
+  assert.equal(initProject(dir, { force: true, gitInit: true }).gitInitialized, false);
 });
 
 test('stripOuterFence 去掉短前言後的 markdown 區塊，但不誤砍以標題開頭的本文', () => {

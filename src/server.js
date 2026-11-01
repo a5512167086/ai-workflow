@@ -10,6 +10,7 @@ import { readTasks } from './taskmaster.js';
 import { requestPause } from './runner.js';
 import { spawnDetachedCli } from './cli.js';
 import { initProject } from './init.js';
+import { isGitRepo } from './git.js';
 import { seaAsset, IS_SEA } from './home.js';
 import { addItem, deleteItem, getItem, readBacklog, reorderItems, updateItem } from './backlog.js';
 import { listArchives, readArchive } from './archive.js';
@@ -203,8 +204,9 @@ async function handleGlobalAction(action, body) {
       if (!String(body.path || '').trim()) throw httpError(400, '請輸入專案資料夾路徑');
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw httpError(400, `資料夾不存在：${dir}`);
       if (!fs.existsSync(path.join(dir, CONFIG_FILE))) {
-        if (!body.init) return { needs_init: true, path: dir };
-        initProject(dir, {});
+        if (!body.init) return { needs_init: true, needs_git: !isGitRepo(dir), path: dir };
+        // 前端確認對話框已告知會 git init，所以這裡一併允許
+        initProject(dir, { gitInit: true });
       }
       return { project: addProject(dir, { name: body.name ? String(body.name).trim() : undefined }) };
     }

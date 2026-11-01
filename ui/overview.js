@@ -106,7 +106,8 @@ async function addProject(init = false) {
   const res = await act('/api/projects/add', { path, init });
   if (!res) return;
   if (res.needs_init) {
-    if (confirm(`${res.path}\n還沒有 .aipipe.json。要用預設設定初始化（aipipe init）並加入嗎？`)) await addProject(true);
+    const gitNote = res.needs_git ? '\n這個資料夾也還不是 git repo，會一併執行 git init（aipipe 用 git 追蹤、審查與還原 AI 的變更）。' : '';
+    if (confirm(`${res.path}\n還沒有 .aipipe.json。要用預設設定初始化（aipipe init）並加入嗎？${gitNote}`)) await addProject(true);
     return;
   }
   toast(`已加入 ${res.project.name}`);
