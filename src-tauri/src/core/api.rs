@@ -340,7 +340,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
             }
             "backlog" => {
                 let cfg = load_config(root)?;
-                return Ok(json!({ "items": read_backlog_with(root, &cfg), "path": cfg["backlog_path"] }));
+                return Ok(json!({ "items": read_backlog_with(root, &cfg)?, "path": cfg["backlog_path"] }));
             }
             "archive" => {
                 let cfg = load_config(root)?;

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::config::{cfg_str, load_config};
-use super::util::{now_iso, pretty, read_json};
+use super::util::{now_iso, write_atomic, write_json};
 use super::{AppError, Result};
 
 pub const BACKLOG_STATUSES: [&str; 3] = ["open", "in_progress", "done"];
@@ -15,12 +15,21 @@ fn file(root: &Path, cfg: &Value) -> PathBuf {
     root.join(cfg_str(cfg, "backlog_path"))
 }
 
-pub fn read_backlog_with(root: &Path, cfg: &Value) -> Vec<Value> {
-    read_json(file(root, cfg)).and_then(|d| d["items"].as_array().cloned()).unwrap_or_default()
+pub fn read_backlog_with(root: &Path, cfg: &Value) -> Result<Vec<Value>> {
+    let path = file(root, cfg);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(err) => return Err(AppError::new(format!("無法讀取需求待辦 {}：{err}；原始資料不會被覆寫", path.display()))),
+    };
+    let data: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|err| AppError::new(format!("需求待辦 {} 的 JSON 損壞：{err}；請先修復或從備份還原，原始資料不會被覆寫", path.display())))?;
+    data["items"].as_array().cloned()
+        .ok_or_else(|| AppError::new(format!("需求待辦 {} 缺少 items 陣列；原始資料不會被覆寫", path.display())))
 }
 
 pub fn read_backlog(root: &Path) -> Result<Vec<Value>> {
-    Ok(read_backlog_with(root, &load_config(root)?))
+    read_backlog_with(root, &load_config(root)?)
 }
 
 fn write_backlog(root: &Path, cfg: &Value, items: &[Value]) -> Result<()> {
@@ -28,7 +37,11 @@ fn write_backlog(root: &Path, cfg: &Value, items: &[Value]) -> Result<()> {
     if let Some(dir) = f.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(f, pretty(&json!({ "version": 1, "items": items })) + "\n")?;
+    if f.exists() {
+        let backup = f.with_file_name(format!("{}.bak", f.file_name().unwrap_or_default().to_string_lossy()));
+        write_atomic(&backup, &fs::read_to_string(&f)?)?;
+    }
+    write_json(&f, &json!({ "version": 1, "items": items }))?;
     Ok(())
 }
 
@@ -42,11 +55,13 @@ fn clean(text: Option<&Value>, max: usize) -> String {
 }
 
 fn mutate<T>(root: &Path, f: impl FnOnce(&mut Vec<Value>) -> Result<T>) -> Result<T> {
-    let cfg = load_config(root)?;
-    let mut items = read_backlog_with(root, &cfg);
-    let out = f(&mut items)?;
-    write_backlog(root, &cfg, &items)?;
-    Ok(out)
+    super::home::with_lock(&format!("backlog-{}", super::projects::project_id(root)), || {
+        let cfg = load_config(root)?;
+        let mut items = read_backlog_with(root, &cfg)?;
+        let out = f(&mut items)?;
+        write_backlog(root, &cfg, &items)?;
+        Ok(out)
+    })
 }
 
 fn position(items: &[Value], id: &str) -> Result<usize> {

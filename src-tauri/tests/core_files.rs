@@ -322,6 +322,46 @@ fn 需求待辦_新增_編輯_排序_刪除() {
 }
 
 #[test]
+fn 損壞需求待辦拒絕當成空清單_不覆寫原始檔() {
+    let root = make_project();
+    let path = root.join("docs/aipipe/backlog.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for raw in ["{broken", "{}", "{\"items\":null}"] {
+        fs::write(&path, raw).unwrap();
+        assert!(backlog::read_backlog(&root).is_err());
+        assert!(backlog::add_item(&root, Some(&json!("new")), None).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+    }
+}
+
+#[test]
+fn 需求待辦支援_bom_並在更新前保留備份() {
+    let root = make_project();
+    let path = root.join("docs/aipipe/backlog.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let raw = "\u{feff}{\"version\":1,\"items\":[{\"id\":\"old\",\"title\":\"original\",\"status\":\"open\"}]}";
+    fs::write(&path, raw).unwrap();
+    backlog::add_item(&root, Some(&json!("new")), None).unwrap();
+    assert_eq!(backlog::read_backlog(&root).unwrap().len(), 2);
+    assert_eq!(fs::read_to_string(path.with_file_name("backlog.json.bak")).unwrap(), raw);
+}
+
+#[test]
+fn 同時新增需求不會互相覆蓋() {
+    let root = make_project();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8).map(|i| {
+            let root = &root;
+            scope.spawn(move || backlog::add_item(root, Some(&json!(format!("item-{i}"))), None).unwrap())
+        }).collect();
+        for handle in handles { handle.join().unwrap(); }
+    });
+    let items = backlog::read_backlog(&root).unwrap();
+    assert_eq!(items.len(), 8);
+    for i in 0..8 { assert!(items.iter().any(|item| item["title"] == format!("item-{i}"))); }
+}
+
+#[test]
 fn 封存_建立_日期_功能_資料夾_下一個功能不覆蓋上一個() {
     let dir = make_project();
     let cfg = default_config();

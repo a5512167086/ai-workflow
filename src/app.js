@@ -543,10 +543,13 @@ let dragId = null;
 async function loadBacklog() {
   try {
     const data = await api('/api/backlog');
+    $('#bl-error').hidden = true;
     backlog = data.items;
     $('#bl-path').textContent = data.path;
     renderBacklog();
   } catch (err) {
+    $('#bl-error').hidden = false;
+    $('#bl-error').textContent = err.message;
     toast(err.message, true);
   }
 }
