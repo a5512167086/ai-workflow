@@ -4,6 +4,14 @@ version = "0.1.1"
 description = "aipipe 桌面版"
 edition = "2021"
 
+[lib]
+name = "aipipe"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aipipe-desktop"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -11,7 +19,21 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
-serde_json = "1"
+# preserve_order：寫回 JSON 時保留欄位順序，與 Node 版產生的檔案一致。
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+unicode-normalization = "0.1"
+yaml-rust2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1

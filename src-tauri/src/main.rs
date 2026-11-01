@@ -94,7 +94,7 @@ fn show_main(app: &AppHandle) {
 fn show_error(app: &AppHandle, message: &str) {
     if let Some(w) = app.get_webview_window("main") {
         let msg = serde_json::to_string(message).unwrap_or_default();
-        let _ = w.eval(&format!(
+        let _ = w.eval(format!(
             "(() => {{ const m = document.getElementById('msg'); if (!m) return; m.textContent = '無法啟動 aipipe 本機服務'; \
              document.getElementById('bar')?.remove(); const p = document.createElement('p'); p.className = 'err'; p.textContent = {msg}; m.after(p); }})()"
         ));
