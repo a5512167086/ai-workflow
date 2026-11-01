@@ -164,7 +164,29 @@ fn server_url(port: State<ServerPort>) -> String {
     format!("http://localhost:{}/", port.0)
 }
 
+/// 帶參數啟動時當 CLI 用（GUI 也用這個方式在背景啟動獨立的流程程序）；不認得的指令回報錯誤，不開視窗。
+fn run_cli_if_requested() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() {
+        return;
+    }
+    // release 版是 Windows 子系統程式，沒有自己的主控台；從終端機執行時接到父程序的主控台。
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
+    }
+    let code = match aipipe::core::cli::main(&args) {
+        Ok(code) => code,
+        Err(err) => {
+            eprintln!("aipipe: {}", err.message);
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
 fn main() {
+    run_cli_if_requested();
     let port = free_port();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

@@ -145,18 +145,24 @@ pub fn commit_all(root: &Path, message: &str) -> Result<Option<String>> {
     head_sha(root)
 }
 
-/// git revert 任務的 commit。舊 Task Master 的 tasks.json 代表目前的任務狀態，不跟著歷史倒回：
-/// revert 前先存下內容並還原成 HEAD 版本，revert 後再寫回。
-pub fn revert_commit(root: &Path, sha: &str) -> Result<Option<String>> {
-    let rel = ".taskmaster/tasks/tasks.json";
-    let file = root.join(rel);
-    let saved = fs::read(&file).ok();
-    let tracked = git(root, &["ls-files", "--error-unmatch", rel], &[])?.code == 0;
-    if saved.is_some() && tracked {
-        git_ok(root, &["checkout", "HEAD", "--", rel], &[])?;
+/// git revert 任務的 commit。keep 裡的檔案（舊 Task Master 的 tasks.json、功能封存的 meta.json／tasks.json）
+/// 代表目前的狀態，不跟著歷史倒回：revert 前先存下內容並還原成 HEAD 版本（否則未 commit 的變更會擋住 revert），
+/// revert 後再寫回。
+pub fn revert_commit(root: &Path, sha: &str, keep: &[String]) -> Result<Option<String>> {
+    let mut saved = Vec::new();
+    for rel in keep {
+        let file = root.join(rel);
+        let Ok(data) = fs::read(&file) else { continue };
+        if git(root, &["ls-files", "--error-unmatch", rel], &[])?.code == 0 {
+            git_ok(root, &["checkout", "HEAD", "--", rel], &[])?;
+        }
+        saved.push((file, data));
     }
     let result = git_ok(root, &["revert", "--no-edit", sha], &[]);
-    if let Some(data) = saved {
+    for (file, data) in saved {
+        if let Some(dir) = file.parent() {
+            fs::create_dir_all(dir)?;
+        }
         fs::write(&file, data)?;
     }
     result?;
