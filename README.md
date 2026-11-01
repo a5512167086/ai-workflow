@@ -29,7 +29,7 @@ cd ai-workflow
 npm install -g .
 ```
 
-之後在任何專案裡都能用 `aipipe`。不想全域安裝也可以 `node <路徑>/bin/aipipe.js <指令>`。
+之後在任何專案裡都能用 `aipipe`。不想全域安裝也可以 `node <路徑>/legacy/bin/aipipe.js <指令>`。
 
 ## 快速開始
 
@@ -295,9 +295,9 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 
 ## 桌面版（Windows）
 
-`desktop/` 是 Tauri 2 外殼，視窗內容就是上面的網頁 UI，不另外寫前端。
+`src-tauri/` 是 Tauri 2 外殼，視窗內容就是 `src/` 的網頁 UI。Node 核心暫時放在 `legacy/`，正在改寫成 Rust。
 
-- **不用裝 Node 就能跑 aipipe**：aipipe（`bin/` + `src/` + `ui/`）用 esbuild 合併後，以 Node SEA 打包成 `aipipe-sidecar.exe`，UI 檔案內嵌在 exe 裡。app 啟動時挑一個沒被佔用的本機連接埠啟動它，結束 app 時停掉它。
+- **不用裝 Node 就能跑 aipipe**：aipipe（`legacy/bin/` + `legacy/src/` + 前端 `src/`）用 esbuild 合併後，以 Node SEA 打包成 `aipipe-sidecar.exe`，UI 檔案內嵌在 exe 裡。app 啟動時挑一個沒被佔用的本機連接埠啟動它，結束 app 時停掉它。
 - **原生功能**：總覽的「選擇資料夾」用系統對話框；系統匣圖示（左鍵開視窗、右鍵「結束 aipipe」）；關閉視窗會縮到系統匣，背景繼續監看；專案進入等待核准、等待測試、功能待測試、需要人工處理、錯誤時跳 Windows 通知。
 - **CLI 呼叫不變**：一樣只呼叫本機已登入的 claude（可設在 WSL）、codex，清掉 API key 的規則一樣。
 - 由 UI 啟動的 `aipipe run` 是獨立程序，結束 app 不會中斷正在跑的流程（和 CLI 版一樣）。sidecar 則會監看外殼的 pid，app 當掉或被強制關閉時也會自己結束。
@@ -307,12 +307,11 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 自己建置（需要 Node 20+、Rust stable、VS 2022 C++ Build Tools；WebView2 Windows 11 內建）：
 
 ```bash
-cd desktop
 npm install
 npm run build        # = npm run sidecar（打包 aipipe-sidecar.exe）+ tauri build
 ```
 
-安裝檔在 `desktop/src-tauri/target/release/bundle/nsis/`。`npm run icons` 從 `web/icon.svg` 重新產生圖示。
+安裝檔在 `src-tauri/target/release/bundle/nsis/`。`npm run icons` 從 `legacy/web/icon.svg` 重新產生圖示。
 
 桌面版的限制：
 

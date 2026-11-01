@@ -20,7 +20,7 @@ import { addProject, getProject, listProjects, projectId, projectSummary, remove
 import { queueEntryFor, queueSnapshot, setMaxConcurrent } from './queue.js';
 import { aipipeDir, ensureDirs, isPidAlive, logPath, readState, readText } from './state.js';
 
-const UI_DIR = IS_SEA ? '' : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
+const UI_DIR = IS_SEA ? '' : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 const ASSETS = {
   'index.html': 'text/html; charset=utf-8',
   'overview.html': 'text/html; charset=utf-8',
@@ -31,7 +31,7 @@ const ASSETS = {
   'style.css': 'text/css; charset=utf-8',
 };
 
-/** UI 靜態檔：開發時從 ui/ 讀（改了重新整理就生效），SEA 版從 exe 內嵌的資源讀。 */
+/** UI 靜態檔：開發時從前端 src/ 讀（改了重新整理就生效），SEA 版從 exe 內嵌的資源讀。 */
 function uiFile(name) {
   return seaAsset(name) ?? fs.readFileSync(path.join(UI_DIR, name));
 }

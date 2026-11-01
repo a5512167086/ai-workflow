@@ -1,4 +1,4 @@
-// 把 aipipe（bin/aipipe.js + src/ + ui/）打包成單一 exe（Node SEA），給 Tauri 當 sidecar。
+// 把 aipipe（legacy/bin/aipipe.js + legacy/src/ + 前端 src/）打包成單一 exe（Node SEA），給 Tauri 當 sidecar。
 // aipipe 本身包含 Node；Claude Code／Codex 至少安裝一個，任務引擎與預設 Skills 直接打包。
 //
 // 步驟：esbuild 合併成一個 CJS → node --experimental-sea-config 產生 blob（UI 檔案當 asset 內嵌）
@@ -9,11 +9,11 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-const DESKTOP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ROOT = path.resolve(DESKTOP, '..');
-const DIST = path.join(DESKTOP, 'dist');
+const LEGACY = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(LEGACY, '..');
+const DIST = path.join(LEGACY, 'dist');
 const TRIPLE = 'x86_64-pc-windows-msvc';
-const OUT = path.join(DESKTOP, 'src-tauri', 'binaries', `aipipe-sidecar-${TRIPLE}${process.platform === 'win32' ? '.exe' : ''}`);
+const OUT = path.join(ROOT, 'src-tauri', 'binaries', `aipipe-sidecar-${TRIPLE}${process.platform === 'win32' ? '.exe' : ''}`);
 const UI_FILES = ['index.html', 'overview.html', 'app.js', 'overview.js', 'common.js', 'markdown.js', 'style.css'];
 
 fs.rmSync(DIST, { recursive: true, force: true });
@@ -22,7 +22,7 @@ fs.mkdirSync(path.dirname(OUT), { recursive: true });
 
 console.log('1/3 esbuild：合併成 dist/aipipe.cjs');
 await build({
-  entryPoints: [path.join(ROOT, 'bin', 'aipipe.js')],
+  entryPoints: [path.join(LEGACY, 'bin', 'aipipe.js')],
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -41,14 +41,14 @@ const seaConfig = {
   disableExperimentalSEAWarning: true,
   useCodeCache: false,
   useSnapshot: false,
-  assets: Object.fromEntries(UI_FILES.map((f) => [f, path.join(ROOT, 'ui', f)])),
+  assets: Object.fromEntries(UI_FILES.map((f) => [f, path.join(ROOT, 'src', f)])),
 };
 fs.writeFileSync(path.join(DIST, 'sea-config.json'), JSON.stringify(seaConfig, null, 2));
 execFileSync(process.execPath, ['--experimental-sea-config', path.join(DIST, 'sea-config.json')], { stdio: 'inherit' });
 
-console.log(`3/3 注入到 ${path.relative(DESKTOP, OUT)}`);
+console.log(`3/3 注入到 ${path.relative(ROOT, OUT)}`);
 fs.copyFileSync(process.execPath, OUT);
-const postject = path.join(DESKTOP, 'node_modules', 'postject', 'dist', 'cli.js');
+const postject = path.join(ROOT, 'node_modules', 'postject', 'dist', 'cli.js');
 execFileSync(process.execPath, [postject, OUT, 'NODE_SEA_BLOB', seaConfig.output, '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'], { stdio: 'inherit' });
 
 // 冒煙測試：exe 要能自己跑 aipipe 的 help。

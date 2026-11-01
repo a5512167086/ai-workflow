@@ -1,6 +1,0 @@
-node_modules/
-dist/
-src-tauri/target/
-src-tauri/gen/
-# sidecar 是建置產物（約 90 MB），由 npm run sidecar 產生
-src-tauri/binaries/

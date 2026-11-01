@@ -1,0 +1,4 @@
+/target/
+/gen/
+# sidecar 是建置產物（約 90 MB），由 npm run sidecar 產生
+/binaries/
