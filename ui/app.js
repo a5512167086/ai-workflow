@@ -11,15 +11,20 @@ const PRD_TEXT = {
   none: '尚無', drafting: '起草中', reviewing: '審查中', revising: '修訂中',
   awaiting_approval: '等待核准', approved: '已核准',
 };
+const PRIORITY_TEXT = { high: '高', medium: '中', low: '低' };
 const COLUMNS = [
   ['todo', '待辦'], ['doing', '進行中'], ['review', '審查中'], ['test', '等待測試'], ['done', '完成'],
 ];
+// 需要人回應的流程狀態：「我測完了，繼續」在這些狀態下變成主要按鈕。
+const NEEDS_HUMAN = ['waiting', 'feature_test', 'stuck', 'error'];
 
 let snap = null;
 let selected = null;
 let subtab = 'log';
 let detail = null;
 const logs = {};
+
+const icon = (name, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {
@@ -34,10 +39,11 @@ async function api(path, body) {
 
 function toast(msg, bad = false) {
   const el = $('#toast');
-  el.textContent = msg;
+  el.innerHTML = `${icon(bad ? 'alert' : 'check')}<span></span>`;
+  el.querySelector('span').textContent = msg;
   el.className = `toast${bad ? ' bad' : ''}`;
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => el.classList.add('hidden'), 4000);
+  toast.t = setTimeout(() => el.classList.add('hidden'), bad ? 7000 : 4000);
 }
 
 async function act(path, body, okMsg) {
@@ -64,18 +70,52 @@ function column(task, ts) {
 function renderTop() {
   const { state, config, root } = snap;
   $('#project').textContent = root;
+  $('#project').title = root;
   const st = state.pipeline.status;
   const pill = $('#pipeline-status');
-  pill.textContent = STATUS_TEXT[st] || st;
+  pill.querySelector('.pill-text').textContent = STATUS_TEXT[st] || st;
   pill.className = `pill ${st}`;
+  pill.setAttribute('aria-label', `流程狀態：${STATUS_TEXT[st] || st}`);
   $('#pipeline-reason').textContent = state.pipeline.reason || '';
-  for (const b of $$('.seg button')) b.classList.toggle('on', b.dataset.mode === config.mode);
+  $('#pipeline-reason').title = state.pipeline.reason || '';
+  for (const b of $$('.seg button')) {
+    const on = b.dataset.mode === config.mode;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', String(on));
+  }
+}
+
+function renderStepper() {
+  const { state, tasks } = snap;
+  const ps = state.prd.status;
+  const tg = state.task_gen;
+  const tasksDone = tg?.status === 'done' || tasks.length > 0;
+  const order = ['draft', 'review', 'approve', 'tasks'];
+  let current;
+  if (ps === 'none' || ps === 'drafting') current = 'draft';
+  else if (ps === 'reviewing' || ps === 'revising') current = 'review';
+  else if (ps === 'awaiting_approval') current = 'approve';
+  else current = tasksDone ? null : 'tasks';
+  const idx = current ? order.indexOf(current) : order.length;
+  for (const li of $$('#prd-stepper li')) {
+    const i = order.indexOf(li.dataset.step);
+    li.classList.toggle('done', i < idx);
+    li.classList.toggle('current', i === idx);
+    if (i === idx) li.setAttribute('aria-current', 'step');
+    else li.removeAttribute('aria-current');
+  }
 }
 
 function renderPrd() {
   const { state, prd } = snap;
-  $('#prd-status').textContent = PRD_TEXT[state.prd.status] || state.prd.status;
-  $('#prd-busy').textContent = snap.prdBusy ? '（AI 處理中，log 在「流程 log」的 prd）' : state.prd.error ? `上次錯誤：${state.prd.error}` : '';
+  const chip = $('#prd-status');
+  chip.textContent = PRD_TEXT[state.prd.status] || state.prd.status;
+  chip.className = `chip ${state.prd.status}`;
+  const busyEl = $('#prd-busy');
+  const busyText = snap.prdBusy ? 'AI 處理中，log 在「流程 log」的 prd' : state.prd.error ? `上次錯誤：${state.prd.error}` : '';
+  busyEl.textContent = busyText;
+  busyEl.classList.toggle('hidden', !busyText);
+  busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
   $('#prd-text').textContent = prd || '（尚無）';
   const busy = snap.prdBusy || snap.runnerAlive || snap.taskGenBusy;
   $('#btn-prd-new').disabled = busy;
@@ -85,6 +125,10 @@ function renderPrd() {
   const tg = state.task_gen;
   $('#task-gen').textContent = snap.taskGenBusy ? 'Task Master 產生任務中…'
     : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '';
+  const badge = $('#tab-prd-badge');
+  badge.textContent = state.prd.status === 'awaiting_approval' ? '待核准' : '';
+  badge.classList.toggle('attn', state.prd.status === 'awaiting_approval');
+  renderStepper();
 }
 
 async function loadRounds() {
@@ -92,7 +136,7 @@ async function loadRounds() {
     const data = await api('/api/prd');
     const box = $('#prd-rounds');
     box.innerHTML = '';
-    if (!data.rounds.length) box.textContent = '（尚無）';
+    if (!data.rounds.length) box.innerHTML = '<p class="empty">（尚無）</p>';
     const KIND = { draft: '初稿', review: '審查', revise: '修訂', user_feedback: '使用者意見' };
     for (const r of data.rounds) {
       const d = document.createElement('details');
@@ -114,47 +158,93 @@ function renderBoard() {
   const board = $('#board');
   board.innerHTML = '';
   const cols = Object.fromEntries(COLUMNS.map(([k, label]) => {
-    const el = document.createElement('div');
+    const el = document.createElement('section');
     el.className = 'col';
-    el.innerHTML = `<h4><span>${label}</span><span class="muted"></span></h4>`;
+    el.dataset.col = k;
+    el.setAttribute('aria-label', label);
+    el.innerHTML = `<h3><span>${label}</span><span class="count"></span></h3>`;
     board.append(el);
     return [k, el];
   }));
+  const doneIds = new Set(tasks.filter((t) => column(t, state.tasks[String(t.id)]) === 'done').map((t) => String(t.id)));
   const counts = {};
   for (const t of tasks) {
     const ts = state.tasks[String(t.id)];
     const col = column(t, ts);
     counts[col] = (counts[col] || 0) + 1;
-    const el = document.createElement('div');
-    el.className = `task${ts?.phase === 'stuck' ? ' stuck' : ''}${selected === String(t.id) ? ' selected' : ''}`;
-    el.innerHTML = '<div class="id"></div><div class="title"></div><div class="deps"></div><div class="step"></div><div class="err"></div>';
-    el.querySelector('.id').textContent = `#${t.id}・${t.priority || ''}・TM:${t.status}`;
+    const stuck = ts?.phase === 'stuck';
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = `task${stuck ? ' stuck' : ''}${selected === String(t.id) ? ' selected' : ''}`;
+    el.setAttribute('aria-pressed', String(selected === String(t.id)));
+    el.innerHTML = '<div class="t-top"><span class="id"></span><span class="tag prio"></span><span class="tag tm"></span></div>'
+      + '<div class="title"></div><div class="deps"></div><div class="step"></div><div class="err"></div>';
+    el.querySelector('.id').textContent = `#${t.id}`;
+    const prio = el.querySelector('.prio');
+    if (t.priority) {
+      prio.textContent = `${PRIORITY_TEXT[t.priority] || t.priority}優先`;
+      prio.classList.add(t.priority);
+    } else prio.remove();
+    el.querySelector('.tm').textContent = `TM:${t.status}`;
     el.querySelector('.title').textContent = t.title;
-    el.querySelector('.deps').textContent = t.dependencies?.length ? `依賴：${t.dependencies.map((d) => '#' + d).join(' ')}` : '';
-    el.querySelector('.step').textContent = ts?.step ? `${ts.step}${ts.fix_round ? `（修正 ${ts.fix_round}/${snap.config.max_fix_rounds}）` : ''}` : '';
-    el.querySelector('.err').textContent = ts?.error || '';
+    if (t.dependencies?.length) {
+      const deps = el.querySelector('.deps');
+      deps.innerHTML = `${icon('link')}<span>依賴</span>`;
+      for (const d of t.dependencies) {
+        const chip = document.createElement('span');
+        const met = doneIds.has(String(d));
+        chip.className = `dep${met ? ' met' : ''}`;
+        chip.textContent = `#${d}`;
+        chip.title = met ? `#${d} 已完成` : `#${d} 尚未完成`;
+        deps.append(chip);
+      }
+    }
+    if (ts?.step) {
+      const step = el.querySelector('.step');
+      step.textContent = `${ts.step}${ts.fix_round ? `（修正 ${ts.fix_round}/${snap.config.max_fix_rounds}）` : ''}`;
+      if (ts.fix_round) {
+        const pct = Math.min(100, Math.round((ts.fix_round / (snap.config.max_fix_rounds || 1)) * 100));
+        step.insertAdjacentHTML('afterend', `<div class="bar" aria-hidden="true"><span style="width:${pct}%"></span></div>`);
+      }
+    }
+    if (ts?.error || stuck) {
+      const err = el.querySelector('.err');
+      err.innerHTML = `${icon('alert')}<span></span>`;
+      err.querySelector('span').textContent = ts.error || '需要處理';
+    }
     el.onclick = () => selectTask(String(t.id));
     cols[col].append(el);
   }
-  for (const [k, el] of Object.entries(cols)) el.querySelector('h4 .muted').textContent = counts[k] || 0;
-  if (!tasks.length) board.insertAdjacentHTML('beforebegin', '');
+  for (const [k, el] of Object.entries(cols)) {
+    el.querySelector('h3 .count').textContent = counts[k] || 0;
+    if (!counts[k]) el.insertAdjacentHTML('beforeend', '<p class="empty">（無）</p>');
+  }
 
   const alive = snap.runnerAlive;
   const busy = alive || snap.prdBusy || snap.taskGenBusy;
   const st = state.pipeline.status;
+  const needsHuman = NEEDS_HUMAN.includes(st);
   $('#btn-start').disabled = busy || !tasks.length || state.prd.status !== 'approved';
   $('#btn-pause').disabled = !alive || state.control.pause_requested;
-  $('#btn-continue').disabled = busy || !['waiting', 'feature_test', 'stuck', 'error'].includes(st);
+  $('#btn-continue').disabled = busy || !needsHuman;
+  // 每個畫面只有一個主要按鈕：等待人工時換成「繼續」。
+  $('#btn-continue').classList.toggle('primary', needsHuman && !busy);
+  $('#btn-start').classList.toggle('primary', !(needsHuman && !busy));
   $('#runner-info').textContent = alive
     ? `runner pid ${state.runner.pid}${state.control.pause_requested ? '・將在目前任務結束後暫停' : ''}`
     : !tasks.length ? '還沒有任務：先在 PRD 頁核准並產生任務' : '';
+  const badge = $('#tab-board-badge');
+  badge.textContent = tasks.length ? `${counts.done || 0}/${tasks.length}` : '';
+  badge.classList.toggle('attn', needsHuman);
 }
 
 async function selectTask(id) {
+  const first = selected !== id;
   selected = id;
   $('#detail').classList.remove('hidden');
   renderBoard();
   await loadDetail();
+  if (first) $('#detail').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
 }
 
 async function loadDetail() {
@@ -173,24 +263,35 @@ function renderDetail() {
   const ts = detail.state || {};
   const t = detail.task || {};
   $('#d-title').textContent = `#${detail.id} ${t.title || ''}`;
+  const check = ts.last_check_ok == null ? ['—', ''] : ts.last_check_ok ? ['通過', 'ok'] : ['失敗', 'bad'];
   const meta = [
     ['步驟', ts.step || ts.phase || '未開始'],
     ['修正輪數', `${ts.fix_round || 0} / ${snap.config.max_fix_rounds}`],
     ['嘗試次數', ts.attempts || 0],
-    ['驗證', ts.last_check_ok == null ? '—' : ts.last_check_ok ? '通過' : '失敗'],
-    ['審查', ts.review_verdict || '—'],
-    ['commit', ts.commit ? ts.commit.slice(0, 8) : '—'],
+    ['驗證', ...check],
+    ['審查', ts.review_verdict || '—', ts.review_verdict === 'PASS' || ts.review_verdict === 'APPROVE' ? 'ok' : ts.review_verdict ? 'bad' : ''],
+    ['commit', ts.commit ? ts.commit.slice(0, 8) : '—', 'mono'],
   ];
-  $('#d-meta').innerHTML = '';
-  for (const [k, v] of meta) {
-    const span = document.createElement('span');
-    span.innerHTML = `${k}：<b></b>`;
-    span.querySelector('b').textContent = v;
-    $('#d-meta').append(span);
+  const dl = $('#d-meta');
+  dl.innerHTML = '';
+  for (const [k, v, cls] of meta) {
+    const box = document.createElement('div');
+    box.innerHTML = '<dt></dt><dd></dd>';
+    box.querySelector('dt').textContent = k;
+    const dd = box.querySelector('dd');
+    dd.textContent = v;
+    dd.title = String(v);
+    if (cls) dd.className = cls;
+    dl.append(box);
   }
   $('#d-rerun').disabled = snap.runnerAlive;
   $('#d-revert').parentElement.title = ts.commit ? `會 git revert ${ts.commit.slice(0, 8)}` : '手動模式沒有 commit：會把這個任務改過的檔案還原到任務開始前（之後任務對同檔案的修改也會一起還原）';
-  for (const b of $$('.subtabs button')) b.classList.toggle('active', b.dataset.sub === subtab);
+  for (const b of $$('.subtabs button')) {
+    const on = b.dataset.sub === subtab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
   const body = $('#d-body');
   const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
   body.textContent = {
@@ -220,7 +321,7 @@ function renderLogSelect() {
 function renderLog() {
   const body = $('#log-body');
   const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
-  body.textContent = logs[$('#log-scope').value] || '';
+  body.textContent = logs[$('#log-scope').value] || '（尚無 log）';
   if (atBottom) body.scrollTop = body.scrollHeight;
 }
 
@@ -276,22 +377,81 @@ function connect() {
   });
 }
 
-function bind() {
-  for (const b of $$('.tabs button')) {
-    b.onclick = () => {
-      for (const x of $$('.tabs button')) x.classList.toggle('active', x === b);
-      for (const s of $$('.tab')) s.classList.toggle('active', s.id === `tab-${b.dataset.tab}`);
-    };
+// ---------- 主題：系統 → 淺色 → 深色 ----------
+const THEMES = [['system', '跟隨系統', 'monitor'], ['light', '淺色', 'sun'], ['dark', '深色', 'moon']];
+function getTheme() {
+  try {
+    return localStorage.getItem('aipipe-theme') || 'system';
+  } catch {
+    return 'system';
   }
+}
+function applyTheme(theme) {
+  if (theme === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const [, label, ic] = THEMES.find(([k]) => k === theme) || THEMES[0];
+  const btn = $('#btn-theme');
+  btn.innerHTML = icon(ic);
+  btn.title = `主題：${label}（點擊切換）`;
+  btn.setAttribute('aria-label', btn.title);
+}
+
+// 方向鍵在 tablist 內移動焦點並切換（WAI-ARIA tabs pattern）。
+function tabKeys(buttons, activate) {
+  for (const b of buttons) {
+    b.addEventListener('keydown', (e) => {
+      const i = buttons.indexOf(b);
+      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: buttons.length - 1 }[e.key];
+      if (next === undefined) return;
+      e.preventDefault();
+      const target = buttons[(next + buttons.length) % buttons.length];
+      target.focus();
+      activate(target);
+    });
+  }
+}
+
+function showTab(b) {
+  for (const x of $$('.tabs button')) {
+    const on = x === b;
+    x.classList.toggle('active', on);
+    x.setAttribute('aria-selected', String(on));
+    x.tabIndex = on ? 0 : -1;
+  }
+  for (const s of $$('.tab')) {
+    const on = s.id === `tab-${b.dataset.tab}`;
+    s.classList.toggle('active', on);
+    s.hidden = !on;
+  }
+}
+
+function bind() {
+  let theme = getTheme();
+  applyTheme(theme);
+  $('#btn-theme').onclick = () => {
+    const keys = THEMES.map(([k]) => k);
+    const next = keys[(keys.indexOf(theme) + 1) % keys.length];
+    theme = next;
+    try {
+      localStorage.setItem('aipipe-theme', next);
+    } catch {
+      // 無法儲存時只在這次頁面生效
+    }
+    applyTheme(next);
+  };
+  const tabButtons = $$('.tabs button');
+  for (const b of tabButtons) b.onclick = () => showTab(b);
+  tabKeys(tabButtons, showTab);
   for (const b of $$('.seg button')) {
     b.onclick = () => act('/api/config/mode', { mode: b.dataset.mode }, `已切換為${b.textContent}模式`);
   }
-  for (const b of $$('.subtabs button')) {
-    b.onclick = () => {
-      subtab = b.dataset.sub;
-      renderDetail();
-    };
-  }
+  const subButtons = $$('.subtabs button');
+  const showSub = (b) => {
+    subtab = b.dataset.sub;
+    renderDetail();
+  };
+  for (const b of subButtons) b.onclick = () => showSub(b);
+  tabKeys(subButtons, showSub);
   for (const el of [...$$('[data-runtime]'), $('#wsl-distro')]) {
     el.addEventListener('input', () => {
       settingsDirty = true;
@@ -332,10 +492,15 @@ function bind() {
   $('#btn-pause').onclick = () => act('/api/run/pause', {}, '目前任務結束後會暫停');
   $('#btn-continue').onclick = () => act('/api/run/continue', {}, '繼續');
   $('#d-close').onclick = () => {
+    const id = selected;
     selected = null;
     detail = null;
     $('#detail').classList.add('hidden');
     renderBoard();
+    // 關閉後把焦點還給原本的任務卡
+    const cards = $$('#board .task');
+    const card = cards.find((c) => c.querySelector('.id').textContent === `#${id}`);
+    card?.focus();
   };
   $('#d-rerun').onclick = () => {
     const revert = $('#d-revert').checked;

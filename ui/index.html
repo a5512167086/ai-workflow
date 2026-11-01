@@ -3,125 +3,189 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>aipipe</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <a class="skip" href="#main">跳到主要內容</a>
+
+  <svg width="0" height="0" class="sprite" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-forward" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v4M12 17.5v.01"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14l4-4M8.5 16.5l-1 1a3.5 3.5 0 0 1-5-5l3-3a3.5 3.5 0 0 1 5 0M15.5 7.5l1-1a3.5 3.5 0 0 1 5 5l-3 3a3.5 3.5 0 0 1-5 0"/></symbol>
+  </svg>
+
   <header class="topbar">
-    <div class="brand">aipipe <span id="project" class="muted"></span></div>
-    <div class="status-line">
-      <span id="pipeline-status" class="pill">—</span>
-      <span id="pipeline-reason" class="muted"></span>
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
+      <span class="name">aipipe</span>
+      <span id="project" class="project mono" title=""></span>
     </div>
-    <div class="mode">
-      模式
-      <div class="seg" role="radiogroup" aria-label="模式">
-        <button data-mode="auto" type="button">自動</button>
-        <button data-mode="manual" type="button">手動</button>
+    <div class="status-line">
+      <span id="pipeline-status" class="pill" role="status" aria-atomic="true"><span class="dot" aria-hidden="true"></span><span class="pill-text">—</span></span>
+      <span id="pipeline-reason" class="reason"></span>
+    </div>
+    <div class="top-actions">
+      <div class="mode">
+        <span class="label" id="mode-label">模式</span>
+        <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+          <button data-mode="auto" type="button" role="radio" aria-checked="false">自動</button>
+          <button data-mode="manual" type="button" role="radio" aria-checked="false">手動</button>
+        </div>
       </div>
+      <button id="btn-theme" class="icon-btn" type="button" aria-label="主題：跟隨系統" title="主題：跟隨系統">
+        <svg class="ic"><use href="#i-monitor"/></svg>
+      </button>
     </div>
   </header>
 
-  <nav class="tabs">
-    <button data-tab="prd" class="active" type="button">PRD</button>
-    <button data-tab="board" type="button">任務看板</button>
-    <button data-tab="log" type="button">流程 log</button>
-    <button data-tab="settings" type="button">設定</button>
+  <nav class="tabs" role="tablist" aria-label="主要畫面">
+    <button data-tab="prd" class="active" type="button" role="tab" aria-selected="true" aria-controls="tab-prd" id="tabbtn-prd">PRD <span class="tab-badge" id="tab-prd-badge"></span></button>
+    <button data-tab="board" type="button" role="tab" aria-selected="false" aria-controls="tab-board" id="tabbtn-board" tabindex="-1">任務看板 <span class="tab-badge" id="tab-board-badge"></span></button>
+    <button data-tab="log" type="button" role="tab" aria-selected="false" aria-controls="tab-log" id="tabbtn-log" tabindex="-1">流程 log</button>
+    <button data-tab="settings" type="button" role="tab" aria-selected="false" aria-controls="tab-settings" id="tabbtn-settings" tabindex="-1">設定</button>
   </nav>
 
-  <main>
-    <section id="tab-prd" class="tab active">
-      <div class="controls">
-        <span>狀態：<b id="prd-status">—</b></span>
-        <span id="prd-busy" class="muted"></span>
-      </div>
-      <div id="prd-new" class="card">
-        <label for="idea">想法</label>
-        <textarea id="idea" rows="3" placeholder="例如：加入 CSV 匯出功能，可選欄位與日期範圍"></textarea>
-        <button id="btn-prd-new" type="button">起草 PRD</button>
-      </div>
-      <div class="split">
-        <div class="card grow">
-          <h3>目前 PRD</h3>
-          <pre id="prd-text" class="doc">（尚無）</pre>
+  <main id="main" tabindex="-1">
+    <section id="tab-prd" class="tab active" role="tabpanel" aria-labelledby="tabbtn-prd">
+      <ol class="stepper" id="prd-stepper" aria-label="PRD 流程進度">
+        <li data-step="draft"><span class="num">1</span><span>起草</span></li>
+        <li data-step="review"><span class="num">2</span><span>交叉審查</span></li>
+        <li data-step="approve"><span class="num">3</span><span>核准</span></li>
+        <li data-step="tasks"><span class="num">4</span><span>產生任務</span></li>
+      </ol>
+
+      <div class="prd-layout">
+        <div class="col-main">
+          <div id="prd-new" class="card">
+            <div class="card-head">
+              <h2>新想法</h2>
+              <span class="hint">作者 AI 起草，審查 AI 交叉審查</span>
+            </div>
+            <label for="idea" class="field-label">想法</label>
+            <textarea id="idea" rows="3" placeholder="例如：加入 CSV 匯出功能，可選欄位與日期範圍"></textarea>
+            <div class="row end">
+              <button id="btn-prd-new" type="button"><svg class="ic"><use href="#i-sparkle"/></svg>起草 PRD</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>目前 PRD</h2>
+              <span class="meta-inline">狀態 <b id="prd-status" class="chip">—</b></span>
+            </div>
+            <p id="prd-busy" class="notice hidden" role="status"></p>
+            <pre id="prd-text" class="doc tall">（尚無）</pre>
+          </div>
         </div>
-        <div class="card side">
-          <h3>每輪紀錄</h3>
-          <div id="prd-rounds"></div>
-        </div>
-      </div>
-      <div class="card" id="prd-actions">
-        <button id="btn-prd-approve" class="primary" type="button">核准 PRD</button>
-        <label for="feedback">或附意見要求再改：</label>
-        <textarea id="feedback" rows="3" placeholder="要修改的地方"></textarea>
-        <button id="btn-prd-revise" type="button">要求再改</button>
-        <hr>
-        <button id="btn-tasks" type="button">用 Task Master 產生任務</button>
-        <span id="task-gen" class="muted"></span>
+
+        <aside class="col-side">
+          <div class="card" id="prd-actions">
+            <div class="card-head"><h2>決定</h2></div>
+            <button id="btn-prd-approve" class="primary block" type="button"><svg class="ic"><use href="#i-check"/></svg>核准 PRD</button>
+            <div class="divider"><span>或</span></div>
+            <label for="feedback" class="field-label">附意見要求再改</label>
+            <textarea id="feedback" rows="3" placeholder="要修改的地方"></textarea>
+            <button id="btn-prd-revise" class="block" type="button"><svg class="ic"><use href="#i-edit"/></svg>要求再改</button>
+            <hr>
+            <button id="btn-tasks" class="block" type="button"><svg class="ic"><use href="#i-list"/></svg>用 Task Master 產生任務</button>
+            <p id="task-gen" class="hint center" role="status"></p>
+          </div>
+
+          <div class="card rounds-card">
+            <div class="card-head"><h2>每輪紀錄</h2></div>
+            <div id="prd-rounds" class="rounds"></div>
+          </div>
+        </aside>
       </div>
     </section>
 
-    <section id="tab-board" class="tab">
-      <div class="controls">
-        <button id="btn-start" class="primary" type="button">開始</button>
-        <button id="btn-pause" type="button">暫停</button>
-        <button id="btn-continue" type="button">我測完了，繼續</button>
-        <span id="runner-info" class="muted"></span>
+    <section id="tab-board" class="tab" role="tabpanel" aria-labelledby="tabbtn-board" hidden>
+      <div class="toolbar">
+        <div class="btn-group">
+          <button id="btn-start" class="primary" type="button"><svg class="ic"><use href="#i-play"/></svg>開始</button>
+          <button id="btn-pause" type="button"><svg class="ic"><use href="#i-pause"/></svg>暫停</button>
+          <button id="btn-continue" type="button"><svg class="ic"><use href="#i-forward"/></svg>我測完了，繼續</button>
+        </div>
+        <span id="runner-info" class="hint mono-ish"></span>
       </div>
-      <div id="board" class="board"></div>
-      <div id="detail" class="card hidden">
+      <div class="board-wrap">
+        <div id="board" class="board"></div>
+      </div>
+
+      <div id="detail" class="card detail hidden" aria-labelledby="d-title">
         <div class="detail-head">
-          <h3 id="d-title"></h3>
-          <button id="d-close" type="button" aria-label="關閉">✕</button>
+          <h2 id="d-title"></h2>
+          <button id="d-close" class="icon-btn" type="button" aria-label="關閉任務詳情"><svg class="ic"><use href="#i-x"/></svg></button>
         </div>
-        <div id="d-meta" class="meta"></div>
-        <div class="controls">
-          <label><input type="checkbox" id="d-revert"> 重跑前還原這個任務的變更</label>
-          <button id="d-rerun" type="button">重跑任務</button>
+        <dl id="d-meta" class="meta"></dl>
+        <div class="row detail-actions">
+          <label class="check"><input type="checkbox" id="d-revert"> 重跑前還原這個任務的變更</label>
+          <button id="d-rerun" type="button"><svg class="ic"><use href="#i-redo"/></svg>重跑任務</button>
         </div>
-        <div class="subtabs">
-          <button data-sub="log" class="active" type="button">即時 log</button>
-          <button data-sub="checks" type="button">test 輸出</button>
-          <button data-sub="reviews" type="button">審查意見</button>
-          <button data-sub="diff" type="button">diff</button>
-          <button data-sub="task" type="button">任務內容</button>
+        <div class="subtabs" role="tablist" aria-label="任務詳情內容">
+          <button data-sub="log" class="active" type="button" role="tab" aria-selected="true" aria-controls="d-body">即時 log</button>
+          <button data-sub="checks" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">test 輸出</button>
+          <button data-sub="reviews" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">審查意見</button>
+          <button data-sub="diff" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">diff</button>
+          <button data-sub="task" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">任務內容</button>
         </div>
-        <pre id="d-body" class="doc log"></pre>
+        <pre id="d-body" class="doc log" role="tabpanel" tabindex="0"></pre>
       </div>
     </section>
 
-    <section id="tab-settings" class="tab">
-      <div class="card">
-        <h3>CLI 執行環境</h3>
-        <p class="muted">每個 CLI 可以在 Windows 原生或 WSL 裡執行。下一次呼叫 CLI 時生效。</p>
-        <table class="settings">
-          <tbody>
-            <tr><th>claude</th><td><select data-runtime="claude"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
-            <tr><th>codex</th><td><select data-runtime="codex"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
-            <tr><th>task-master</th><td><select data-runtime="task_master"><option value="windows">Windows</option><option value="wsl">WSL</option></select></td></tr>
-            <tr><th><label for="wsl-distro">WSL 發行版</label></th><td><input id="wsl-distro" type="text" placeholder="空白＝預設發行版，例如 Ubuntu"></td></tr>
-          </tbody>
-        </table>
-        <div class="controls">
-          <button id="btn-save-runtime" class="primary" type="button">儲存</button>
-          <button id="btn-doctor" type="button">檢查 CLI（doctor）</button>
+    <section id="tab-settings" class="tab" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
+      <div class="settings-layout">
+        <div class="card">
+          <div class="card-head"><h2>CLI 執行環境</h2></div>
+          <p class="hint">每個 CLI 可以在 Windows 原生或 WSL 裡執行。下一次呼叫 CLI 時生效。</p>
+          <div class="form-grid">
+            <label for="rt-claude" class="mono">claude</label>
+            <select id="rt-claude" data-runtime="claude"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
+            <label for="rt-codex" class="mono">codex</label>
+            <select id="rt-codex" data-runtime="codex"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
+            <label for="rt-tm" class="mono">task-master</label>
+            <select id="rt-tm" data-runtime="task_master"><option value="windows">Windows</option><option value="wsl">WSL</option></select>
+            <label for="wsl-distro">WSL 發行版</label>
+            <input id="wsl-distro" type="text" placeholder="空白＝預設發行版，例如 Ubuntu">
+          </div>
+          <div class="row">
+            <button id="btn-save-runtime" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button>
+            <button id="btn-doctor" type="button"><svg class="ic"><use href="#i-pulse"/></svg>檢查 CLI（doctor）</button>
+          </div>
+          <pre id="doctor-out" class="doc hidden" role="status"></pre>
         </div>
-        <pre id="doctor-out" class="doc hidden"></pre>
-      </div>
-      <div class="card">
-        <h3>目前設定（.aipipe.json）</h3>
-        <pre id="config-json" class="doc"></pre>
+        <div class="card">
+          <div class="card-head"><h2>目前設定</h2><span class="hint mono">.aipipe.json</span></div>
+          <pre id="config-json" class="doc"></pre>
+        </div>
       </div>
     </section>
 
-    <section id="tab-log" class="tab">
-      <div class="controls">
+    <section id="tab-log" class="tab" role="tabpanel" aria-labelledby="tabbtn-log" hidden>
+      <div class="toolbar">
+        <label for="log-scope" class="field-label inline">來源</label>
         <select id="log-scope"></select>
+        <span class="hint">捲到最底時會自動跟隨新輸出</span>
       </div>
-      <pre id="log-body" class="doc log"></pre>
+      <pre id="log-body" class="doc log tall" tabindex="0"></pre>
     </section>
   </main>
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="/app.js"></script>
 </body>
 </html>
