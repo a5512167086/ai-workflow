@@ -1,10 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主視窗：本機載入頁與 sidecar 的 aipipe UI（http://localhost:<隨機埠>）",
+  "description": "主視窗：本機前端（../src），透過 api／watch_project／pick_folder command 與事件呼叫後端",
   "windows": ["main"],
-  "remote": {
-    "urls": ["http://localhost:*/*", "http://127.0.0.1:*/*"]
-  },
-  "permissions": ["core:default", "allow-pick-folder", "allow-server-url"]
+  "permissions": ["core:default"]
 }

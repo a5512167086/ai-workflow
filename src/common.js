@@ -7,9 +7,10 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 const icon = (name, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
-// 從 /p/<id>/ 開的專案頁用 /api/p/<id>/...；舊網址（aipipe ui --cwd 的首頁）用 /api/...。
-const PROJECT_ID = location.pathname.match(/^\/p\/([0-9a-f]{10})\/?$/)?.[1] || null;
-const API_BASE = PROJECT_ID ? `/api/p/${PROJECT_ID}` : '/api';
+// 專案頁是 index.html?p=<id>，API 路徑用 /api/p/<id>/...。
+const PROJECT_ID = new URLSearchParams(location.search).get('p')?.match(/^[0-9a-f]{10}$/)?.[0] || null;
+const API_BASE = `/api/p/${PROJECT_ID}`;
+const projectHref = (id) => `index.html?p=${id}`;
 
 /** path 一律寫成 /api/...；專案範圍的 API 會自動換成目前專案的前綴。 */
 function apiUrl(path) {
@@ -17,15 +18,26 @@ function apiUrl(path) {
   return path.replace(/^\/api/, API_BASE);
 }
 
+/** 後端在 Rust（Tauri command `api`），路徑與回傳格式和舊版 HTTP API 相同。 */
 async function api(path, body) {
-  const res = await fetch(apiUrl(path), body === undefined ? {} : {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Aipipe': '1' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
+  try {
+    return await window.__TAURI__.core.invoke('api', { method: body === undefined ? 'GET' : 'POST', path: apiUrl(path), body: body ?? null });
+  } catch (err) {
+    throw new Error(String(err?.message ?? err));
+  }
+}
+
+/**
+ * 訂閱後端推送的事件（取代 EventSource）。handlers 的鍵是事件名稱；專案頁的 state／log 會自動加上專案 id。
+ * 專案頁要先呼叫 watch_project 讓後端開始監看。
+ */
+async function subscribe(handlers) {
+  const { listen } = window.__TAURI__.event;
+  for (const [name, fn] of Object.entries(handlers)) {
+    const event = name === 'projects' ? name : `${name}-${PROJECT_ID}`;
+    await listen(event, (e) => fn(e.payload));
+  }
+  if (PROJECT_ID && !('projects' in handlers)) await window.__TAURI__.core.invoke('watch_project', { id: PROJECT_ID });
 }
 
 function toast(msg, bad = false) {
@@ -100,5 +112,5 @@ function tabKeys(buttons, activate) {
   }
 }
 
-/** 桌面版（Tauri）提供的原生功能；在一般瀏覽器裡是 null。 */
-const desktop = window.__TAURI__?.core?.invoke ? { invoke: window.__TAURI__.core.invoke } : null;
+/** 桌面版（Tauri）提供的原生功能。 */
+const desktop = { invoke: window.__TAURI__.core.invoke };

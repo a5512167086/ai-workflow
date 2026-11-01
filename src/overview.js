@@ -37,7 +37,7 @@ function render() {
     const pct = p.progress?.total ? Math.round((p.progress.done / p.progress.total) * 100) : 0;
     card.innerHTML = `
       <div class="pc-head">
-        <h3 class="pc-name"><a id="pc-${p.id}" href="/p/${p.id}/"></a></h3>
+        <h3 class="pc-name"><a id="pc-${p.id}" href="${projectHref(p.id)}"></a></h3>
         <span class="pill ${cls}"><span class="dot" aria-hidden="true"></span><span class="pill-text"></span></span>
       </div>
       <p class="pc-path mono"></p>
@@ -49,7 +49,7 @@ function render() {
       <p class="pc-reason"></p>
       <div class="pc-actions">
         <button type="button" class="icon-btn" data-act="remove">${icon('trash')}</button>
-        <a class="btn primary" href="/p/${p.id}/">${icon('forward')}開啟</a>
+        <a class="btn primary" href="${projectHref(p.id)}">${icon('forward')}開啟</a>
       </div>`;
     card.querySelector('.pc-name a').textContent = p.name;
     card.querySelector('.pill-text').textContent = label;
@@ -116,14 +116,12 @@ async function addProject(init = false) {
 }
 
 function connect() {
-  const es = new EventSource('/api/projects/events');
-  es.addEventListener('projects', (e) => {
-    data = JSON.parse(e.data);
-    render();
-  });
-  es.addEventListener('error', () => {
-    $('#queue-line').textContent = '與 aipipe 連線中斷，重新連線中…';
-  });
+  subscribe({
+    projects: (payload) => {
+      data = payload;
+      render();
+    },
+  }).catch((err) => toast(err.message ?? String(err), true));
 }
 
 function bind() {

@@ -1,5 +1,6 @@
 pub mod agent_errors;
 pub mod agents;
+pub mod api;
 pub mod archive;
 pub mod backlog;
 pub mod builtin_skills;
@@ -23,5 +24,6 @@ pub mod state;
 pub mod tasks;
 pub mod usage;
 pub mod util;
+pub mod watch;
 
 pub use error::{AppError, Result};

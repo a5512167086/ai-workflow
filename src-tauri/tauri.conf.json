@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "identifier": "dev.aipipe.desktop",
   "build": {
-    "frontendDist": "../legacy/web"
+    "frontendDist": "../src"
   },
   "app": {
     "withGlobalTauri": true,
@@ -12,7 +12,7 @@
       {
         "label": "main",
         "title": "aipipe",
-        "url": "index.html",
+        "url": "overview.html",
         "width": 1320,
         "height": 880,
         "minWidth": 400,
@@ -26,15 +26,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
-    "externalBin": ["binaries/aipipe-sidecar"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
     "shortDescription": "AI 開發流程工具",
     "longDescription": "用本機已登入的 Claude Code / Codex CLI 跑 PRD → 交叉審查 → 拆任務 → 實作與審查 → 人工測試的流程。",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["TradChinese", "English"],
+        "languages": [
+          "TradChinese",
+          "English"
+        ],
         "displayLanguageSelector": false
       }
     }

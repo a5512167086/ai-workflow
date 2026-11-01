@@ -448,20 +448,20 @@ async function loadInitialLogs() {
 }
 
 function connect() {
-  const es = new EventSource(apiUrl('/api/events'));
-  es.addEventListener('state', (e) => onState(JSON.parse(e.data)));
-  es.addEventListener('log', (e) => {
-    const { scope, text } = JSON.parse(e.data);
-    const isNew = !(scope in logs);
-    logs[scope] = (logs[scope] || '') + text;
-    if (logs[scope].length > 400000) logs[scope] = logs[scope].slice(-300000);
-    if (isNew) renderLogSelect();
-    else if ($('#log-scope').value === scope) renderLog();
-    if (detail && scope === `task-${detail.id}` && subtab === 'log') renderDetail();
-  });
-  es.addEventListener('error', () => {
-    $('#pipeline-reason').textContent = '與 aipipe 連線中斷，重新連線中…';
-  });
+  subscribe({
+    state: onState,
+    log: ({ scope, text }) => {
+      const isNew = !(scope in logs);
+      logs[scope] = (logs[scope] || '') + text;
+      if (logs[scope].length > 400000) logs[scope] = logs[scope].slice(-300000);
+      if (isNew) renderLogSelect();
+      else if ($('#log-scope').value === scope) renderLog();
+      if (detail && scope === `task-${detail.id}` && subtab === 'log') renderDetail();
+    },
+    error: ({ message }) => {
+      $('#pipeline-reason').textContent = `讀取專案狀態失敗：${message}`;
+    },
+  }).catch((err) => toast(err.message ?? String(err), true));
 }
 
 // ---------- 需求待辦清單 ----------
