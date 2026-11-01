@@ -396,6 +396,14 @@ export function startServer(root, { port = 4317, open = true, overview = false }
       const url = `http://localhost:${actual}${page}`;
       console.log(`aipipe UI：${url}${root ? `（專案：${root}）` : '（所有專案總覽）'}  Ctrl+C 結束`);
       if (open) openBrowser(url);
+      // 桌面版：外殼程式結束（包含當掉或被強制關閉）時跟著結束，不留下孤兒 sidecar。
+      // 由 UI 啟動的 aipipe run 是另外的獨立程序，不受影響。
+      const parent = Number(process.env.AIPIPE_PARENT_PID);
+      if (parent) {
+        setInterval(() => {
+          if (!isPidAlive(parent)) process.exit(0);
+        }, 2000).unref();
+      }
       resolve(server);
     });
   });

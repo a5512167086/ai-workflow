@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>aipipe</title>
+  <style>
+    /* 啟動畫面：sidecar 準備好之前顯示；配色同 docs/design-system.md */
+    :root { --bg: #F8FAFC; --text: #0F172A; --muted: #475569; --primary: #15803D; --danger: #B91C1C; --surface-2: #F1F5F9; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0F172A; --text: #F8FAFC; --muted: #94A3B8; --primary: #22C55E; --danger: #F87171; --surface-2: #272F42; } }
+    html, body { height: 100%; margin: 0; }
+    body { display: grid; place-items: center; background: var(--bg); color: var(--text);
+      font: 14px/1.6 "Segoe UI Variable Text", "Segoe UI", system-ui, "Microsoft JhengHei UI", "Microsoft JhengHei", sans-serif; }
+    .box { text-align: center; padding: 24px; max-width: 520px; }
+    .logo { width: 56px; height: 56px; border-radius: 12px; background: var(--primary); display: grid; place-items: center; margin: 0 auto 16px; }
+    .logo svg { width: 30px; height: 30px; fill: none; stroke: #fff; stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p { margin: 0; color: var(--muted); }
+    .err { color: var(--danger); margin-top: 12px; white-space: pre-wrap; text-align: left; background: var(--surface-2); padding: 10px 12px; border-radius: 6px; font-family: Consolas, monospace; font-size: 12.5px; }
+    .bar { height: 3px; width: 160px; margin: 18px auto 0; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+    .bar span { display: block; height: 100%; width: 40%; background: var(--primary); animation: slide 1.1s ease-in-out infinite alternate; }
+    @keyframes slide { from { transform: translateX(-20%); } to { transform: translateX(170%); } }
+    @media (prefers-reduced-motion: reduce) { .bar span { animation: none; width: 100%; } }
+  </style>
+</head>
+<body>
+  <main class="box" role="status" aria-live="polite">
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></div>
+    <h1>aipipe</h1>
+    <p id="msg">正在啟動本機服務…</p>
+    <div class="bar" id="bar" aria-hidden="true"><span></span></div>
+  </main>
+</body>
+</html>
