@@ -325,6 +325,27 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
 
 /* ---------- 任務詳情 ---------- */
 .detail { scroll-margin-top: 80px; }
+
+/*
+ * 看板分頁（寬度 > 760px）：整頁固定為視窗高度，看板延伸到底部，五欄等高，任務卡多時在欄內捲動。
+ * 打開任務詳情時，看板與詳情分攤高度（詳情最多 55%），兩者各自在內部捲動，整頁不捲動。
+ * 看板分頁也取消 main 的 max-width，寬螢幕上用滿寬度。
+ */
+@media (min-width: 761px) {
+  body:has(#tab-board:not([hidden])) { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  body:has(#tab-board:not([hidden])) main { flex: 1; min-height: 0; width: 100%; max-width: none; display: flex; flex-direction: column; }
+  #tab-board:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #tab-board .toolbar { flex: none; }
+  #tab-board .board-wrap { flex: 1 1 320px; min-height: 240px; overflow-y: hidden; display: flex; margin-bottom: 0; }
+  #tab-board .detail { margin-top: var(--s-4); }
+  #tab-board .board { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  #tab-board .col { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 0; }
+  #tab-board .col > * { flex-shrink: 0; } /* 欄位高度固定後，任務卡不能被壓扁，多出來的改成捲動 */
+  #tab-board .col h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: var(--s-3) 0 var(--s-2); background: var(--surface); }
+  #tab-board .detail:not(.hidden) { flex: 0 1 55%; min-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #tab-board .detail > * { flex: none; }
+  #tab-board .detail #d-body { flex: 1 1 auto; min-height: 120px; max-height: none; }
+}
 .detail-head { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); }
 .detail-head h2 { font-size: 16px; }
 .meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: var(--s-2); margin: 0 0 var(--s-3); }
