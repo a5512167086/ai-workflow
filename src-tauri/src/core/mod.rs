@@ -1,15 +1,23 @@
+pub mod agent_errors;
 pub mod archive;
 pub mod backlog;
 pub mod builtin_skills;
+pub mod capabilities;
 pub mod config;
+pub mod doctor;
 pub mod error;
+pub mod git;
 pub mod home;
+pub mod init;
+pub mod proc;
 pub mod projects;
 pub mod prompts;
 pub mod queue;
+pub mod runtime;
 pub mod skills;
 pub mod state;
 pub mod tasks;
+pub mod usage;
 pub mod util;
 
 pub use error::{AppError, Result};
