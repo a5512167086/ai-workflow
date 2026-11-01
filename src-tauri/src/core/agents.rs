@@ -209,7 +209,9 @@ fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write:
         }
     } else {
         // dontAsk：沒有預先允許的工具一律拒絕；再明確禁止編輯類工具。
-        args.extend(["--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"].map(String::from));
+        let denied = if scope.starts_with("chat-") { "Edit,Write,NotebookEdit,mcp__*" } else { "Edit,Write,NotebookEdit" };
+        args.extend(["--permission-mode", "dontAsk", "--disallowedTools", denied].map(String::from));
+        if scope.starts_with("chat-") { args.extend(["--tools", "Read,Glob,Grep"].map(String::from)); }
     }
     let (model, effort) = model_for(cfg, role, "claude");
     if !model.is_empty() {
@@ -258,9 +260,10 @@ fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write:
     let res = {
         let mut on_out = |d: &str| buffer.push(d, &mut handle);
         let mut on_err = |d: &str| append_log(root, scope, d.trim_end());
-        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(prompt), timeout_sec: timeout, on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
+        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(prompt), timeout_sec: timeout, cancel_file: scope.strip_prefix("chat-").and_then(|turn| super::chat::cancel_file(root, turn)), on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
     };
     buffer.finish(&mut handle);
+    if res.cancelled { return Ok(CliOutcome { ok: false, text: final_text, error: Some("使用者已停止回覆".into()) }); }
     if res.timed_out {
         return Ok(CliOutcome { ok: false, text: final_text, error: Some(format!("逾時（{timeout}s）")) });
     }
@@ -326,10 +329,11 @@ fn run_codex(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: 
     let res = {
         let mut on_out = |d: &str| buffer.push(d, &mut handle);
         let mut on_err = |d: &str| append_log(root, scope, d.trim_end());
-        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(prompt), timeout_sec: timeout, on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
+        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(prompt), timeout_sec: timeout, cancel_file: scope.strip_prefix("chat-").and_then(|turn| super::chat::cancel_file(root, turn)), on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
     };
     buffer.finish(&mut handle);
     let text = fs::read_to_string(&out_file).unwrap_or_else(|_| if last_message.is_empty() { res.stdout.clone() } else { last_message.clone() });
+    if res.cancelled { return Ok(CliOutcome { ok: false, text, error: Some("使用者已停止回覆".into()) }); }
     if res.timed_out {
         return Ok(CliOutcome { ok: false, text, error: Some(format!("逾時（{timeout}s）")) });
     }

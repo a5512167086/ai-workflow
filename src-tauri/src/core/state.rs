@@ -50,6 +50,10 @@ pub fn read_state(root: &Path) -> Value {
 
 /// 讀取→修改→寫回；每次都重新讀檔，避免覆蓋另一個程序剛寫入的欄位。
 pub fn update_state<T>(root: &Path, f: impl FnOnce(&mut Value) -> T) -> Result<T> {
+    super::home::with_project_lock(root, "state", || update_state_locked(root, f))
+}
+
+fn update_state_locked<T>(root: &Path, f: impl FnOnce(&mut Value) -> T) -> Result<T> {
     ensure_dirs(root)?;
     let mut state = read_state(root);
     let out = f(&mut state);
@@ -153,5 +157,18 @@ mod tests {
         assert!(s["pipeline"]["updated_at"].is_string());
         assert!(is_pid_alive(std::process::id()));
         assert!(!is_pid_alive_value(&Value::Null));
+    }
+
+    #[test]
+    fn 對話與任務同時更新狀態不會互相覆蓋() {
+        let root = temp_dir("state-concurrent-");
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..12).map(|index| {
+                let root = &root;
+                scope.spawn(move || update_state(root, |state| { state["tasks"][index.to_string()] = json!({ "phase": "done" }); }).unwrap())
+            }).collect();
+            for worker in workers { worker.join().unwrap(); }
+        });
+        assert_eq!(read_state(&root)["tasks"].as_object().unwrap().len(), 12);
     }
 }

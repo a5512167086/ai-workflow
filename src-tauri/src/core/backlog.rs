@@ -55,7 +55,7 @@ fn clean(text: Option<&Value>, max: usize) -> String {
 }
 
 fn mutate<T>(root: &Path, f: impl FnOnce(&mut Vec<Value>) -> Result<T>) -> Result<T> {
-    super::home::with_lock(&format!("backlog-{}", super::projects::project_id(root)), || {
+    super::home::with_project_lock(root, "backlog", || {
         let cfg = load_config(root)?;
         let mut items = read_backlog_with(root, &cfg)?;
         let out = f(&mut items)?;

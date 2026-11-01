@@ -319,6 +319,7 @@ pub struct RunResult {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    pub cancelled: bool,
 }
 
 #[derive(Default)]
@@ -327,6 +328,7 @@ pub struct RunOpts<'a> {
     pub input: Option<&'a str>,
     pub env: Option<Vec<(OsString, OsString)>>,
     pub timeout_sec: u64,
+    pub cancel_file: Option<PathBuf>,
     pub on_stdout: Option<&'a mut dyn FnMut(&str)>,
     pub on_stderr: Option<&'a mut dyn FnMut(&str)>,
 }
@@ -376,7 +378,18 @@ fn spawn_piped(mut cmd: Command, env: Option<Vec<(OsString, OsString)>>) -> std:
 
 /// 執行子程序。input 會寫入 stdin（長 prompt 一律走 stdin，避開命令列長度限制）。不因非零結束碼回傳錯誤。
 pub fn run_with(spec: Option<&CliSpec>, args: &[String], shell_line: Option<&str>, mut opts: RunOpts) -> Result<RunResult> {
-    let cmd = build_command(spec, args, opts.cwd, shell_line)?;
+    if opts.cancel_file.as_ref().is_some_and(|file| file.exists()) { return Ok(RunResult { code: -1, cancelled: true, ..Default::default() }); }
+    // WSL 查詢放入獨立程序群組，停止時連同 Linux 端 CLI 結束，而不只關掉 wsl.exe。
+    let mut owned_spec = spec.cloned(); let mut owned_args = args.to_vec();
+    let mut linux_pid_file = None;
+    if let (Some(spec), Some(cancel)) = (owned_spec.as_mut().filter(|spec| spec.wsl), opts.cancel_file.as_ref()) {
+        let pid_file = cancel.with_extension("pid"); let _ = std::fs::remove_file(&pid_file);
+        let linux_path = spec.to_path(&pid_file)?;
+        let mut wrapped = vec!["--wait".into(), "/bin/sh".into(), "-c".into(), "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\"".into(), "aipipe-chat".into(), linux_path, spec.bin.clone()];
+        wrapped.extend(owned_args); owned_args = wrapped; spec.bin = "/usr/bin/setsid".into(); linux_pid_file = Some(pid_file);
+    }
+    let spec = owned_spec.as_ref();
+    let cmd = build_command(spec, &owned_args, opts.cwd, shell_line)?;
     let mut child = spawn_piped(cmd, opts.env.take()).map_err(|e| AppError::new(format!("無法執行 {}：{e}", spec.map(|s| s.label.as_str()).unwrap_or(shell_line.unwrap_or("")))))?;
     let (tx, rx) = mpsc::channel();
     let readers = [pump(child.stdout.take().unwrap(), tx.clone(), false), pump(child.stderr.take().unwrap(), tx, true)];
@@ -406,17 +419,34 @@ pub fn run_with(spec: Option<&CliSpec>, args: &[String], shell_line: Option<&str
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        if !result.cancelled && opts.cancel_file.as_ref().is_some_and(|file| file.exists()) {
+            result.cancelled = true;
+            stop_run(spec, linux_pid_file.as_deref(), child.id());
+        }
         if opts.timeout_sec > 0 && !result.timed_out && start.elapsed() > Duration::from_secs(opts.timeout_sec) {
             result.timed_out = true;
-            kill_tree(child.id());
+            stop_run(spec, linux_pid_file.as_deref(), child.id());
         }
     }
     for r in readers {
         let _ = r.join();
     }
     let status = child.wait()?;
-    result.code = if result.timed_out { -1 } else { status.code().unwrap_or(-1) };
+    if let Some(file) = linux_pid_file { let _ = std::fs::remove_file(file); }
+    result.code = if result.timed_out || result.cancelled { -1 } else { status.code().unwrap_or(-1) };
     Ok(result)
+}
+
+fn stop_run(spec: Option<&CliSpec>, pid_file: Option<&Path>, pid: u32) {
+    if let Some(spec) = spec.filter(|spec| spec.wsl) {
+        if let Some(group) = pid_file.and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| text.trim().parse::<u32>().ok()).filter(|pid| *pid > 1) {
+            let mut command = Command::new("wsl.exe"); let mut args = wsl_base_args(&spec.distro);
+            args.extend(["--cd".into(), "/".into(), "-e".into(), "/bin/kill".into(), "-KILL".into(), "--".into(), format!("-{group}")]);
+            command.args(args); hide_window(&mut command);
+            let _ = run_capture(command, Duration::from_secs(3));
+        }
+    }
+    kill_tree(pid);
 }
 
 pub fn run(spec: &CliSpec, args: &[String], opts: RunOpts) -> Result<RunResult> {
@@ -612,5 +642,17 @@ mod tests {
         assert!(r.timed_out);
         assert_eq!(r.code, -1);
         assert!(start.elapsed() < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn 停止標記會中止執行中的程序() {
+        let root = super::super::util::temp_dir("cancel-process-");
+        let marker = root.join("stop"); let write_marker = marker.clone();
+        let thread = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(250)); std::fs::write(write_marker, "stop").unwrap(); });
+        let slow = if cfg!(windows) { "ping -n 30 127.0.0.1 >NUL" } else { "sleep 30" };
+        let started = Instant::now();
+        let result = run_shell(slow, RunOpts { cancel_file: Some(marker), timeout_sec: 15, ..Default::default() }).unwrap();
+        thread.join().unwrap();
+        assert!(result.cancelled); assert!(!result.timed_out); assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

@@ -622,6 +622,7 @@ function onState(data) {
   const prevPrd = snap?.state.prd.rounds.length;
   const prevStatus = snap?.state.prd.status;
   snap = data;
+  if (typeof renderChatContext === 'function') renderChatContext();
   const blocked = data.state.usage_blocked;
   $('#quota-notice').hidden = !blocked || quotaDismissed === JSON.stringify(blocked) || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
   $('#quota-message').textContent = blocked ? `${blocked.message}。可確認後改用另一個 AI 繼續；實作與審查會分開建立 session。` : '';
@@ -664,6 +665,7 @@ function connect() {
       if (logs[scope].length > 400000) logs[scope] = logs[scope].slice(-300000);
       if (isNew) renderLogSelect();
       else if ($('#log-scope').value === scope) renderLog();
+      if (scope.startsWith('chat-') && typeof renderChatLive === 'function') renderChatLive();
       if (detail && scope === `task-${detail.id}` && subtab === 'log') renderDetail();
     },
     error: ({ message }) => {
@@ -1036,7 +1038,7 @@ function renderRecords() {
 }
 
 // ---------- 設定：AI 角色與模型 ----------
-const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）' };
+const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）', chat: '專案對話' };
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 let modelOptions = null;
 let modelDraft = null;
@@ -1052,6 +1054,7 @@ async function loadModels() {
     }
     $('#models-status').textContent = modelOptions.codex.error || '';
     renderModels();
+    if (typeof renderChatOptions === 'function') renderChatOptions();
   } catch (err) {
     $('#models-status').textContent = err.message;
   }
@@ -1069,7 +1072,7 @@ function renderModels(force = false) {
   if (!force && $('#role-models').contains(document.activeElement)) return;
   if (!modelsDirty) {
     modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
-    for (const [role, parent] of [['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer']]) {
+    for (const [role, parent] of [['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer'], ['chat', 'author']]) {
       modelDraft.roles[role] ??= modelDraft.roles[parent];
       modelDraft.models[role] ??= structuredClone(modelDraft.models[parent] || {});
     }
@@ -1144,6 +1147,7 @@ function renderModels(force = false) {
 function showTab(b) {
   if (!b) return;
   if (b.dataset.tab === 'settings' && !SETTINGS_ONLY) { location.href = `overview.html#settings=${PROJECT_ID}`; return; }
+  if (b.dataset.tab === 'chat' && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }
   if (b.dataset.tab === 'settings') loadQueue();
   if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
@@ -1279,6 +1283,7 @@ async function runAction(path, body = {}, message) {
 }
 
 function bind() {
+  if (typeof bindChat === 'function') bindChat();
   tabKeys($$('[data-board-view]'), button => button.click());
   window.addEventListener('resize', () => {
     $('.board-canvas').inert = selected !== null && !!window.matchMedia?.('(max-width: 999px)')?.matches;
@@ -1412,7 +1417,10 @@ bind();
 bindSkills();
 bindBacklog();
 if (SETTINGS_ONLY || location.hash === '#settings') showTab($('#tabbtn-settings'));
-api('/api/state').then(onState).catch((err) => toast(err.message, true));
+api('/api/state').then(data => {
+  onState(data);
+  if (!$('#tab-chat').hidden && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }
+}).catch((err) => toast(err.message, true));
 loadInitialLogs();
 connect();
 loadBacklog();

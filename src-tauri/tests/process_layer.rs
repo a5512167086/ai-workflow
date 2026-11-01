@@ -13,6 +13,24 @@ use common::*;
 use serde_json::json;
 
 #[test]
+fn 停止_wsl_查詢會結束_linux_程序群組() {
+    if !has_wsl() { return; }
+    let root = project(); let marker = root.join("turn.cancel"); let pid_file = marker.with_extension("pid");
+    let spec = aipipe::core::proc::CliSpec { wsl: true, bin: "/bin/sleep".into(), label: "WSL sleep".into(), ..Default::default() };
+    let stop = marker.clone();
+    let stopper = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while !pid_file.exists() && started.elapsed() < std::time::Duration::from_secs(10) { std::thread::sleep(std::time::Duration::from_millis(20)); }
+        let group = fs::read_to_string(pid_file).ok(); fs::write(stop, "stop").unwrap(); group
+    });
+    let result = run(&spec, &["30".into()], RunOpts { cwd: Some(&root), cancel_file: Some(marker), timeout_sec: 15, ..Default::default() }).unwrap();
+    let group = stopper.join().unwrap(); assert!(result.cancelled, "{result:?}"); assert!(!result.timed_out);
+    let group = group.unwrap_or_else(|| panic!("沒有取得 Linux pid：{result:?}"));
+    let probe = Command::new("wsl.exe").args(["-e", "/bin/kill", "-0", "--", &format!("-{}", group.trim())]).output().unwrap();
+    assert!(!probe.status.success(), "Linux CLI 群組仍然存在");
+}
+
+#[test]
 fn snapshot_tree_與_restore_to_tree_不動_index_可還原任務變更() {
     let dir = project();
     git(&dir, &["init", "-q", "-b", "main"]);

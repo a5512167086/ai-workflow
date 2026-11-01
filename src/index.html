@@ -40,7 +40,7 @@
     <div class="brand">
       <a class="icon-btn back-link" href="overview.html" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
       <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
-      <span class="name">aipipe <small class="hint">v0.2.0</small></span>
+      <span class="name">aipipe <small class="hint">v0.3.0</small></span>
       <span id="project" class="project mono" title=""></span>
     </div>
     <div class="status-line">
@@ -56,8 +56,9 @@
   </header>
 
   <nav class="tabs" role="tablist" aria-label="主要畫面">
+    <button data-tab="chat" class="active" type="button" role="tab" aria-selected="true" aria-controls="tab-chat" id="tabbtn-chat">專案對話 <span class="tab-badge" id="tab-chat-badge"></span></button>
     <button data-tab="backlog" type="button" role="tab" aria-selected="false" aria-controls="tab-backlog" id="tabbtn-backlog" tabindex="-1">需求待辦 <span class="tab-badge" id="tab-backlog-badge"></span></button>
-    <button data-tab="prd" class="active" type="button" role="tab" aria-selected="true" aria-controls="tab-prd" id="tabbtn-prd">PRD <span class="tab-badge" id="tab-prd-badge"></span></button>
+    <button data-tab="prd" type="button" role="tab" aria-selected="false" aria-controls="tab-prd" id="tabbtn-prd" tabindex="-1">PRD <span class="tab-badge" id="tab-prd-badge"></span></button>
     <button data-tab="board" type="button" role="tab" aria-selected="false" aria-controls="tab-board" id="tabbtn-board" tabindex="-1">任務看板 <span class="tab-badge" id="tab-board-badge"></span></button>
     <button data-tab="records" type="button" role="tab" aria-selected="false" aria-controls="tab-records" id="tabbtn-records" tabindex="-1">紀錄</button>
     <button data-tab="usage" type="button" role="tab" aria-selected="false" aria-controls="tab-usage" id="tabbtn-usage" tabindex="-1">用量</button>
@@ -67,6 +68,23 @@
 
   <main id="main" tabindex="-1">
     <div id="quota-notice" class="notice" hidden><p id="quota-message"></p><button id="quota-retry" type="button">確認並以另一個 AI 繼續</button><button id="quota-cancel" type="button">取消</button></div>
+    <section id="tab-chat" class="tab active" role="tabpanel" aria-labelledby="tabbtn-chat">
+      <div class="chat-layout">
+        <aside class="card chat-sidebar" aria-label="專案對話紀錄"><div class="card-head"><h2>對話紀錄</h2><button id="chat-new" type="button">新增對話</button></div><ul id="chat-history" class="chat-history"></ul><p class="hint">對話保存在本專案，重新開啟仍可接續。</p></aside>
+        <div class="card chat-main">
+          <div class="chat-heading"><div><span class="eyebrow">專案助理 · 唯讀對話</span><h2 id="chat-title">開始聊聊這個專案</h2></div><div class="btn-group"><button id="chat-new-mobile" class="chat-mobile" type="button">新增對話</button><button id="chat-rename" type="button" disabled>改名</button><button id="chat-delete" type="button" disabled>刪除</button></div></div>
+          <select id="chat-mobile-history" class="chat-mobile" aria-label="選擇歷史對話"><option value="">新對話</option></select>
+          <p id="chat-context" class="chat-context hint" role="status">會帶入最新流程、任務、PRD 與交接文件；也可請 AI 檢查程式碼。</p>
+          <div id="chat-messages" class="chat-messages" tabindex="0" role="region" aria-label="對話訊息"></div>
+          <p id="chat-status" class="hint" role="status"></p>
+          <form id="chat-form" class="chat-composer">
+            <div class="chat-options"><label for="chat-provider">AI<select id="chat-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><details class="chat-model-options"><summary>模型與推理設定</summary><div class="chat-model-fields"><label for="chat-model">模型<input id="chat-model" type="text" list="models-claude" placeholder="沿用對話角色預設"></label><label for="chat-effort">推理強度<select id="chat-effort"><option value="">預設</option></select></label><p id="chat-model-hint" class="hint">空白沿用首頁「專案對話」角色的設定。</p></div></details></div>
+            <label class="sr-only" for="chat-input">詢問專案</label><textarea id="chat-input" rows="3" maxlength="20000" placeholder="問問目前的進度、執行問題，或請 AI 畫出專案架構圖…"></textarea>
+            <div class="chat-send-row"><span class="hint">Enter 傳送 · Shift+Enter 換行 · 不修改專案檔案</span><button id="chat-stop" type="button" hidden>停止回覆</button><button id="chat-retry" type="button" hidden>重試這則訊息</button><button id="chat-send" type="submit" class="primary">傳送</button></div>
+          </form>
+        </div>
+      </div>
+    </section>
     <section id="tab-backlog" class="tab" role="tabpanel" aria-labelledby="tabbtn-backlog" hidden>
       <div class="backlog-layout">
         <div class="card">
@@ -112,7 +130,7 @@
       </div>
     </section>
 
-    <section id="tab-prd" class="tab active" role="tabpanel" aria-labelledby="tabbtn-prd">
+    <section id="tab-prd" class="tab" role="tabpanel" aria-labelledby="tabbtn-prd" hidden>
       <ol class="stepper" id="prd-stepper" aria-label="PRD 流程進度">
         <li data-step="draft"><span class="num">1</span><span>起草</span></li>
         <li data-step="review"><span class="num">2</span><span>交叉審查</span></li>
@@ -307,6 +325,8 @@
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="common.js"></script>
   <script src="markdown.js"></script>
+  <script src="diagrams.js"></script>
+  <script src="chat.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

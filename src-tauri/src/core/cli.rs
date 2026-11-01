@@ -129,6 +129,12 @@ pub fn main(argv: &[String]) -> Result<i32> {
     };
 
     match cmd {
+        Some("chat") => {
+            let id = args.get("id").ok_or_else(|| super::AppError::new("請指定對話 id"))?;
+            let turn = args.get("turn").ok_or_else(|| super::AppError::new("請指定對話回合"))?;
+            let chat = super::chat::run_turn(root, id, turn)?;
+            if chat["status"] != "done" { crate::bail!("{}", chat["error"].as_str().unwrap_or("對話未完成")); }
+        }
         Some("init") => {
             let mut git_init = args.flag("git_init");
             if !git_init && std::io::stdin().is_terminal() && !is_git_repo(root)? {

@@ -48,6 +48,7 @@ fn run(provider: &str, me: &Value, args: &[String]) {
     let record = json!({ "provider": provider, "pid": std::process::id(), "args": args, "prompt": prompt });
     let mut log = fs::OpenOptions::new().create(true).append(true).open(Path::new(".aipipe").join("calls.jsonl")).unwrap();
     writeln!(log, "{record}").unwrap();
+    if let Some(ms) = me["delay_ms"].as_u64() { std::thread::sleep(std::time::Duration::from_millis(ms)); }
 
     if let Some(w) = me.get("write") {
         let path = Path::new(w["path"].as_str().unwrap());

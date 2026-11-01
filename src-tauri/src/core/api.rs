@@ -162,6 +162,10 @@ fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
     match action {
+        "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
+        "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),
+        "chat/rename" => super::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
+        "chat/delete" => { super::chat::delete_chat(root, &text_field(body, "chatId"))?; Ok(json!({ "ok": true })) },
         "prd/new" => {
             busy_guard(&snap)?;
             let idea = text_field(body, "idea").trim().to_string();
@@ -329,6 +333,7 @@ fn percent_decode(s: &str) -> String {
 fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<Value> {
     if method == "GET" {
         match rest {
+            "chats" => return Ok(json!({ "items": super::chat::list_chats(root) })),
             "state" => return snapshot(root),
             "usage" => return Ok(usage_snapshot(root, &load_config(root)?)),
             "skills" => return Ok(json!({ "skills": list_skills(root), "stages": SKILL_STAGES, "config": load_config(root)?["skills"] })),
@@ -348,6 +353,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
             }
             _ => {}
         }
+        if let Some(id) = rest.strip_prefix("chat/") { return super::chat::get_chat(root, id); }
         if let Some(name) = rest.strip_prefix("archive/") {
             return read_archive(root, &percent_decode(name), &load_config(root)?);
         }

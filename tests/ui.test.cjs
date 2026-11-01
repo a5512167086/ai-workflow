@@ -11,8 +11,9 @@ function page() {
   w.structuredClone = structuredClone;
   w.__TAURI__ = { core: { invoke: async () => ({}) } };
   const common = fs.readFileSync('src/common.js', 'utf8');
+  const chat = ['markdown.js', 'diagrams.js', 'chat.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
   const app = fs.readFileSync('src/app.js', 'utf8').split('\nbind();')[0];
-  w.eval(`${common}\n${app}\nwindow.ui = {
+  w.eval(`${common}\n${chat}\n${app}\nwindow.ui = {
     bind, parseLog, renderLogTree, setLogTreeOpen, renderModels, renderSettings,
     openArchive, openCurrent, renderRecords, reviewsView,
     setSnap(value) { snap = value; },
@@ -20,7 +21,10 @@ function page() {
     setApi(fn) { api = fn; },
     setArchive(value) { recArchive = value; },
     archive() { return recArchive; }, renderUsage, runAction, renderPrd,
-    renderBoard, boardFacts, selectTask, renderTaskGates
+    renderBoard, boardFacts, selectTask, renderTaskGates,
+    sendChat, openChat, newChat, renderChatMessages, renderChatMarkdown,
+    setChat(value) { chatId = value?.id || null; chatSession = value; chatMessagesKey = ''; renderChatMessages(); renderChatControls(); },
+    chat() { return chatSession; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
@@ -202,5 +206,58 @@ test('慢速任務詳情回應不覆蓋後來選取的任務', async () => {
   resolvers['/api/task/2']({ id: '2', task: { title: 'second' }, state: {}, log: '', reviews: [] }); await second;
   resolvers['/api/task/1']({ id: '1', task: { title: 'first' }, state: {}, log: '', reviews: [] }); await first;
   assert.equal(doc.querySelector('#d-title').textContent, '#2 second');
+  dom.window.close();
+});
+
+test('專案對話只呼叫聊天 API，不啟動 PRD 或任務；失敗仍保留輸入', async () => {
+  const { dom, ui, doc } = page(); ui.setSnap(snapshot()); ui.bind();
+  doc.querySelector('#chat-input').value = '目前進度如何？';
+  const requests = [];
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body });
+    if (path === '/api/chat/send') return { id: 'chat1', title: '進度', status: 'done', messages: [{ id: 'u1', role: 'user', text: body.input }, { id: 'a1', role: 'assistant', text: '**正在測試**', provider: 'codex' }] };
+    return { items: [] };
+  });
+  await ui.sendChat();
+  assert.equal(requests[0].path, '/api/chat/send');
+  assert.equal(requests.some(request => /prd|run\/start|tasks\/generate/.test(request.path)), false);
+  assert.equal(doc.querySelector('.from-ai strong').textContent, '正在測試');
+  assert.equal(doc.querySelector('#chat-input').value, '');
+  doc.querySelector('#chat-input').value = '保留這個問題';
+  ui.setApi(async () => { throw new Error('CLI unavailable'); });
+  await ui.sendChat(); assert.equal(doc.querySelector('#chat-input').value, '保留這個問題');
+  dom.window.close();
+});
+
+test('對話切換保存草稿，原始 HTML 不會執行', async () => {
+  const { dom, ui, doc } = page(); ui.setSnap(snapshot()); ui.bind();
+  doc.querySelector('#chat-input').value = '新對話草稿';
+  ui.setApi(async () => ({ id: 'old', title: '舊對話', status: 'done', messages: [{ id: 'u', role: 'user', text: '<img src=x onerror=alert(1)>' }, { id: 'a', role: 'assistant', text: '<script>alert(1)</script>' }] }));
+  await ui.openChat('old'); assert.equal(doc.querySelector('#chat-messages img'), null); assert.equal(doc.querySelector('#chat-messages script'), null);
+  doc.querySelector('#chat-input').value = '追問草稿'; ui.newChat();
+  assert.equal(doc.querySelector('#chat-input').value, '新對話草稿');
+  await ui.openChat('old'); assert.equal(doc.querySelector('#chat-input').value, '追問草稿');
+  dom.window.close();
+});
+
+test('聊天的停止按鈕不會暫停專案任務', async () => {
+  const { dom, ui, doc } = page(); ui.setSnap(snapshot()); ui.bind();
+  const session = { id: 'active', title: '測試', status: 'running', turn: 'turn1', messages: [] }; ui.setChat(session);
+  const calls = []; ui.setApi(async (path, body) => { calls.push(path); return { ...session, cancelRequested: true }; });
+  await doc.querySelector('#chat-stop').onclick();
+  assert.deepEqual(calls, ['/api/chat/cancel']); assert.equal(doc.querySelector('#chat-stop').disabled, true);
+  dom.window.close();
+});
+
+test('Mermaid 使用 strict 模式繪圖，保留原始碼並且不把一般程式碼當成圖', async () => {
+  const { dom, ui, doc, w } = page();
+  w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
+  let configuration, rendered = 0;
+  w.mermaid = { initialize(value) { configuration = value; }, async render() { rendered++; return { svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Architecture</text></svg>' }; } };
+  const host = doc.createElement('div'); doc.body.append(host);
+  await ui.renderChatMarkdown(host, '```mermaid\nflowchart LR\nA-->B\n```\n```js\nconst x=1;\n```');
+  assert.equal(configuration.securityLevel, 'strict'); assert.equal(rendered, 1);
+  assert.equal(host.querySelectorAll('svg').length, 1); assert.match(host.querySelector('.diagram-source').textContent, /A-->B/);
+  assert.equal(host.querySelectorAll('pre[data-lang="js"]').length, 1);
   dom.window.close();
 });

@@ -26,3 +26,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+
+Mermaid (offline diagram rendering)
+https://github.com/mermaid-js/mermaid
+Version: 12.2.0
+Copyright (c) 2014 - 2022 Knut Sveidqvist
+MIT License. The complete license is bundled at vendor/MERMAID-LICENSE.txt.
