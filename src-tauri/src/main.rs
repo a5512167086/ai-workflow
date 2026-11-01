@@ -80,6 +80,15 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
         .map(|p| p.display().to_string())
 }
 
+#[tauri::command]
+async fn pick_reference_files(app: AppHandle) -> Vec<String> {
+    app.dialog().file().set_title("加入參考檔案").blocking_pick_files().unwrap_or_default().into_iter().filter_map(|p|p.into_path().ok()).map(|p|p.display().to_string()).collect()
+}
+#[tauri::command]
+async fn pick_reference_folder(app: AppHandle) -> Option<String> {
+    app.dialog().file().set_title("加入參考資料夾（建立快照）").blocking_pick_folder().and_then(|p|p.into_path().ok()).map(|p|p.display().to_string())
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -135,7 +144,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Watching(Mutex::new(HashSet::new())))
-        .invoke_handler(tauri::generate_handler![api, watch_project, pick_folder])
+        .invoke_handler(tauri::generate_handler![api, watch_project, pick_folder, pick_reference_files, pick_reference_folder])
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", "開啟 aipipe", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "結束 aipipe", true, None::<&str>)?;

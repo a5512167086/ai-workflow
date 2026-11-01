@@ -122,12 +122,14 @@ pub fn draft_prd(root: &Path, cfg: &Value, idea: &str, backlog_id: Option<&str>)
     if let Err(err) = archive_tasks(root, json!({})) {
         append_log(root, SCOPE, &format!("⚠ 封存上一個功能的任務清單失敗：{}", err.message));
     }
+    let references=if let Some(id)=backlog_id { super::references::ids(root,&super::backlog::get_item(root,id)?["references"])? } else { vec![] };
     with_error_state(root, || {
         update_state(root, |s| {
             for (k, v) in [
                 ("status", json!("drafting")), ("idea", json!(idea)), ("round", json!(0)), ("rounds", json!([])), ("version", json!(0)),
                 ("approved_at", Value::Null), ("error", json!("")), ("pid", json!(std::process::id())), ("archive_dir", Value::Null),
                 ("backlog_id", json!(backlog_id)),
+                ("references", json!(references)), ("reference_scope", json!(uuid::Uuid::new_v4().to_string())),
             ] {
                 s["prd"][k] = v;
             }

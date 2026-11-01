@@ -114,12 +114,13 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     let spec = resolve_cli_for(cfg, provider, root)?;
     let to_path = |p: &Path| spec.to_path(p).unwrap_or_else(|_| p.to_string_lossy().into_owned());
     let prepared = prepare_skills(root, cfg, opts.stage, opts.skills.as_deref(), &to_path)?;
-    let prompt = [opts.prompt.as_str(), prepared.text.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
+    let references = super::references::prepare(root,cfg,opts.stage,scope,&to_path)?;
+    let prompt = [opts.prompt.as_str(), prepared.text.as_str(), references.text.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
     let session_id = uuid::Uuid::new_v4().to_string();
     let session_file = aipipe_dir(root).join("sessions").join(format!("{session_id}.json"));
     let session = json!({
         "id": session_id, "provider": provider, "runtime": spec.runtime, "distro": cli_environment(cfg, provider, root).distro,
-        "stage": opts.stage.unwrap_or("skill"), "label": label, "skills": prepared.snapshots, "started_at": now_iso(), "status": "running",
+        "stage": opts.stage.unwrap_or("skill"), "label": label, "skills": prepared.snapshots, "references": references.snapshots, "started_at": now_iso(), "status": "running",
     });
     write_json(&session_file, &session)?;
     let mut telemetry = Telemetry::new(provider);
@@ -139,9 +140,9 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     fs::write(&prompt_file, &prompt)?;
     let started = Instant::now();
     let outcome = if provider == "codex" {
-        run_codex(root, cfg, opts.role, &prompt, opts.write, scope, &mut on_event)
+        run_codex(opts, &prompt, &references, &mut on_event)
     } else {
-        run_claude(root, cfg, opts.role, &prompt, opts.write, scope, &mut on_event)
+        run_claude(opts, &prompt, &references, &mut on_event)
     };
     let snapshot = telemetry.snapshot();
     let with_status = |status: &str, extra: Value| {
@@ -197,10 +198,13 @@ fn summarize_tool_input(input: &Value) -> String {
     v.chars().take(160).collect()
 }
 
-fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+fn run_claude(opts: &AgentOpts, prompt: &str, references: &super::references::Prepared, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+    let (root,cfg,role,write,scope)=(opts.root,opts.cfg,opts.role,opts.write,opts.scope);
     let spec = resolve_cli_for(cfg, "claude", root)?;
+    let input = claude_input(prompt, &references.images)?;
     // -p + stream-json 需要 --verbose 才會輸出逐步事件。
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].map(String::from).to_vec();
+    if !references.images.is_empty() { args.extend(["--input-format", "stream-json"].map(String::from)); }
     if write {
         args.extend(["--permission-mode", "acceptEdits"].map(String::from));
         let tools: Vec<&str> = cfg["claude"]["allowed_tools"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
@@ -260,7 +264,7 @@ fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write:
     let res = {
         let mut on_out = |d: &str| buffer.push(d, &mut handle);
         let mut on_err = |d: &str| append_log(root, scope, d.trim_end());
-        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(prompt), timeout_sec: timeout, cancel_file: scope.strip_prefix("chat-").and_then(|turn| super::chat::cancel_file(root, turn)), on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
+        run(&spec, &args, RunOpts { cwd: Some(root), input: Some(&input), timeout_sec: timeout, cancel_file: scope.strip_prefix("chat-").and_then(|turn| super::chat::cancel_file(root, turn)), on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), ..Default::default() })?
     };
     buffer.finish(&mut handle);
     if res.cancelled { return Ok(CliOutcome { ok: false, text: final_text, error: Some("使用者已停止回覆".into()) }); }
@@ -282,7 +286,8 @@ fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write:
 
 static READ_ONLY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^sandbox:\s*read-only").unwrap());
 
-fn run_codex(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+fn run_codex(opts: &AgentOpts, prompt: &str, references: &super::references::Prepared, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+    let (root,cfg,role,write,scope)=(opts.root,opts.cfg,opts.role,opts.write,opts.scope);
     let spec = resolve_cli_for(cfg, "codex", root)?;
     let tmp = aipipe_dir(root).join("tmp");
     fs::create_dir_all(&tmp)?;
@@ -302,6 +307,7 @@ fn run_codex(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: 
     if let Some(sandbox) = cfg["codex"]["windows_sandbox"].as_str().filter(|s| !s.is_empty() && spec.runtime == "windows") {
         args.extend(["-c".into(), format!("windows.sandbox=\"{sandbox}\"")]);
     }
+    for image in &references.images { args.extend(["--image".into(), spec.to_path(image)?]); }
     args.push("-".into()); // 從 stdin 讀 prompt
     let mut last_message = String::new();
     let mut handle = |line: &str| {
@@ -420,6 +426,19 @@ pub fn parse_verdict(text: &str, pass_words: &[&str]) -> (bool, String) {
             (pass_words.contains(&verdict.as_str()), verdict)
         }
     }
+}
+
+/// Structured stdin is required for Claude image attachments.
+pub fn claude_input(prompt: &str, images: &[std::path::PathBuf]) -> Result<String> {
+    use base64::Engine;
+    if images.is_empty() { return Ok(prompt.into()); }
+    let mut content=vec![json!({"type":"text","text":prompt})];
+    for path in images {
+        let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_lowercase();
+        let mime=match ext.as_str() { "jpg"|"jpeg"=>"image/jpeg", "webp"=>"image/webp", "gif"=>"image/gif", _=>"image/png" };
+        content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":base64::engine::general_purpose::STANDARD.encode(fs::read(path)?)}}));
+    }
+    Ok(format!("{}\n",json!({"type":"user","message":{"role":"user","content":content},"parent_tool_use_id":null})))
 }
 
 #[cfg(test)]

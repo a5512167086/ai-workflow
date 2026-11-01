@@ -1,5 +1,6 @@
 pub mod agent_errors;
 pub mod agents;
+pub mod references;
 pub mod api;
 pub mod archive;
 pub mod backlog;

@@ -7,7 +7,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::archive::{list_archives, read_archive};
-use super::backlog::{add_item, delete_item, get_item, read_backlog_with, reorder_items, update_item};
+use super::backlog::{delete_item, get_item, read_backlog_with, reorder_items, update_item};
 use super::cli::spawn_detached_cli;
 use super::config::{load_config, patch_config, CLI_NAMES, CONFIG_FILE, MODES, RUNTIMES, SKILL_STAGES};
 use super::doctor::doctor_report;
@@ -65,6 +65,8 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         "queue": if runner_alive { queue_entry_for(root).unwrap_or(Value::Null) } else { Value::Null },
         "prd": current_prd(root),
         "tasks": read_tasks(root).unwrap_or_default(),
+        "taskTag": super::tasks::current_tag(root).unwrap_or_default(),
+        "taskReferences": super::tasks::group_metadata(root).unwrap_or(Value::Null)["references"],
         "usage": usage_snapshot(root, &cfg),
         "state": state,
     }))
@@ -162,6 +164,19 @@ fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
     match action {
+        "references/suggest" => super::references::suggest(root,&text_field(body,"query")),
+        "references/import" => super::references::import(root,body),
+        "references/assign" => {
+            let refs=json!(super::references::ids(root,&body["references"])?);
+            match body["target"].as_str().unwrap_or("") {
+                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409,"目前功能已變更，請重新選取參考資料")); } super::tasks::update_feature_references(root,&snap["state"]["prd"]["archive_dir"],&refs)?; super::state::update_state(root,|s|s["prd"]["references"]=refs)?; },
+                "group" => { busy_guard(&snap)?; super::tasks::assign_references(root,"",&text_field(body,"tag"),refs)?; },
+                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body,"id")) { return Err(http(400,"任務 id 不正確")); } super::tasks::assign_references(root,&text_field(body,"id"),&text_field(body,"tag"),refs)?; },
+                "backlog" => { super::backlog::update_item(root,&text_field(body,"id"),&json!({"references":refs}))?; },
+                _ => return Err(http(400,"參考資料目標不正確")),
+            }
+            Ok(json!({"ok":true}))
+        }
         "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
         "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),
         "chat/rename" => super::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
@@ -289,10 +304,10 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             Ok(json!({ "config": patch_config(root, &json!({ "mode": body["mode"] }))? }))
         }
-        "backlog/add" => Ok(json!({ "item": add_item(root, body.get("title"), body.get("detail"))? })),
+        "backlog/add" => Ok(json!({ "item": super::backlog::add_item_with_references(root, body.get("title"), body.get("detail"), &body["references"])? })),
         "backlog/update" => {
             let mut patch = json!({});
-            for k in ["title", "detail", "status"] {
+            for k in ["title", "detail", "status", "references"] {
                 if let Some(v) = body.get(k).filter(|v| !v.is_null()) {
                     patch[k] = v.clone();
                 }
@@ -343,6 +358,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
                 let state = read_state(root);
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
             }
+            "references" => return Ok(json!({"items":super::references::list(root)})),
             "backlog" => {
                 let cfg = load_config(root)?;
                 return Ok(json!({ "items": read_backlog_with(root, &cfg)?, "path": cfg["backlog_path"] }));
@@ -508,6 +524,26 @@ mod tests {
             assert_eq!(state["task_gen"]["status"], if fail { "error" } else { "running" });
             assert_eq!(result["taskError"].is_string(), fail);
         }
+    }
+
+    #[test]
+    fn 參考資料拒絕過期的功能與任務群組_更新共用參考不重設任務狀態() {
+        let root=super::super::util::temp_dir("reference-api-");
+        super::super::config::save_config(&root,&super::super::config::default_config()).unwrap();
+        let reference=super::super::references::import(&root,&json!({"name":"spec.md","data":"c3BlYw=="})).unwrap();
+        super::super::state::update_state(&root,|s| { s["prd"]["reference_scope"]=json!("new-feature"); s["prd"]["archive_dir"]=json!("docs/prd/feature"); }).unwrap();
+        super::super::tasks::write_tasks(&root,&[json!({"id":1,"title":"existing","status":"done"})],Some("master"),json!({"reference_feature":"docs/prd/feature"})).unwrap();
+        super::super::tasks::set_status(&root,"1","review").unwrap();
+        super::super::tasks::set_status(&root,"1","done").unwrap();
+        let refs=json!([reference["id"]]);
+        let error=handle_action(&root,"references/assign",&json!({"target":"feature","featureScope":"old-feature","references":refs})).unwrap_err();
+        assert_eq!(error.status,409);
+        assert!(read_state(&root)["prd"]["references"].is_null());
+        handle_action(&root,"references/assign",&json!({"target":"feature","featureScope":"new-feature","references":refs})).unwrap();
+        assert_eq!(super::super::tasks::group_metadata(&root).unwrap()["references"],refs);
+        assert_eq!(read_tasks(&root).unwrap()[0]["status"],"done");
+        assert_eq!(handle_action(&root,"references/assign",&json!({"target":"task","tag":"old-tag","id":"1","references":refs})).unwrap_err().status,409);
+        assert_eq!(handle_action(&root,"references/assign",&json!({"target":"task","tag":"master","id":"1.1.1","references":refs})).unwrap_err().status,400);
     }
 
     #[test]

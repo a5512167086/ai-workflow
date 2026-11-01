@@ -465,3 +465,32 @@ pub fn set_status(root: &Path, id: &str, status: &str) -> Result<Value> {
 pub fn tasks_in(file: &Path) -> Vec<Value> {
     read_json(file).and_then(|v| v["tasks"].as_array().cloned()).unwrap_or_default()
 }
+
+pub fn group_metadata(root: &Path) -> Result<Value> {
+    let store=load_store(root)?; let tag=store["currentTag"].as_str().unwrap_or("master");
+    Ok(store["groups"][tag]["metadata"].clone())
+}
+pub fn assign_references(root: &Path, id: &str, tag: &str, references: Value) -> Result<()> {
+    mutate(root, |store| {
+        if store["currentTag"] != tag { crate::bail!(409; "任務群組已變更，請重新開啟任務"); }
+        if id.is_empty() { store["groups"][tag]["metadata"]["references"]=references; return Ok(()); }
+        let tasks=store["groups"][tag]["tasks"].as_array_mut().ok_or_else(|| AppError::new("沒有任務"))?;
+        let parts:Vec<_>=id.split('.').collect();
+        let task=tasks.iter_mut().find(|t| super::util::js_string(&t["id"])==parts[0]).ok_or_else(||AppError::new("找不到任務"))?;
+        if parts.len()==2 {
+            let child=task["subtasks"].as_array_mut().and_then(|ts|ts.iter_mut().find(|t|super::util::js_string(&t["id"])==parts[1])).ok_or_else(||AppError::new("找不到子任務"))?;
+            child["references"]=references;
+        } else { task["references"]=references; }
+        Ok(())
+    })
+}
+
+pub fn update_feature_references(root: &Path, feature: &Value, refs: &Value) -> Result<()> {
+    mutate(root, |store| {
+        let tag=store["currentTag"].as_str().unwrap_or("master").to_string();
+        if feature.is_string() && store["groups"][&tag]["metadata"]["reference_feature"]==*feature {
+            store["groups"][&tag]["metadata"]["references"]=refs.clone();
+        }
+        Ok(())
+    })
+}

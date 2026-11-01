@@ -803,3 +803,38 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
   #chat-status { max-height: 28px; overflow: auto; margin-top: 2px; font-size: 10px; }
   .chat-send-row > span { display: none; }.chat-send-row { justify-content: flex-end; margin-top: 4px; }
 }
+.reference-widget { flex: none; min-width: 0; margin: 6px 0; }
+.reference-toolbar { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.reference-add { font-size: 12px; padding: 5px 9px; white-space: nowrap; }
+.reference-chips { display: flex; flex-wrap: wrap; gap: 5px; max-height: 84px; overflow: auto; margin-top: 5px; }
+.reference-chips:empty { display: none; }
+.reference-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 240px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; font-size: 12px; }
+.reference-chip > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reference-chip button { border: 0; padding: 0 3px; min-height: 20px; background: transparent; }
+.reference-dialog { width: min(700px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+.reference-dialog::backdrop { background: #0007; }
+.reference-dialog-form { display: flex; flex-direction: column; gap: 12px; min-height: 0; max-height: calc(100dvh - 90px); }
+.reference-dialog-form p { margin: 0; }
+.reference-dialog .card-head { margin: 0; }
+.reference-dialog .row { flex: none; flex-wrap: wrap; }
+.reference-path { display: flex; gap: 8px; }
+.reference-path input { flex: 1; min-width: 0; }
+.reference-status { white-space: pre-wrap; font-size: 13px; overflow-wrap: anywhere; }
+.reference-library { flex: 1; min-height: 80px; max-height: 45dvh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
+.reference-library-item { display: flex; align-items: start; gap: 10px; padding: 9px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.reference-library-item:last-child { border-bottom: 0; }
+.reference-library-item input { width: auto; flex: none; margin-top: 4px; }
+.reference-library-item > span { min-width: 0; overflow-wrap: anywhere; }
+.reference-library-item small { display: block; white-space: pre-wrap; opacity: .7; font-size: 11px; }
+.reference-suggestions { position: fixed; z-index: 100; max-height: 240px; overflow: auto; padding: 5px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.reference-suggestions button { display: block; width: 100%; text-align: left; border: 0; border-radius: 4px; padding: 8px; overflow-wrap: anywhere; }
+.reference-suggestions button[aria-selected=true] { background: var(--accent-soft, #dbeafe); color: #17467b; }
+.chat-composer .reference-widget { margin: 0; }
+
+@media (max-height: 620px) {
+  .chat-messages { min-height: 0; }
+  .chat-composer .reference-chips { max-height: 32px; flex-wrap: nowrap; overflow-x: auto; }
+  .chat-composer .reference-chip { flex: none; }
+  .reference-dialog-form { overflow: auto; }
+  .reference-library { flex: none; max-height: 30dvh; }
+}

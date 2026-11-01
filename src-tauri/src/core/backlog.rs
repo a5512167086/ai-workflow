@@ -73,13 +73,17 @@ fn random_id() -> String {
 }
 
 pub fn add_item(root: &Path, title: Option<&Value>, detail: Option<&Value>) -> Result<Value> {
+    add_item_with_references(root,title,detail,&json!([]))
+}
+pub fn add_item_with_references(root: &Path, title: Option<&Value>, detail: Option<&Value>, references: &Value) -> Result<Value> {
+    let references=super::references::ids(root,references)?;
     let t = clean(title, 200);
     if t.is_empty() {
         crate::bail!(400; "請輸入需求標題");
     }
     mutate(root, |items| {
         let now = now_iso();
-        let item = json!({ "id": random_id(), "title": t, "detail": clean(detail, 20000), "status": "open", "created_at": now, "updated_at": now });
+        let item = json!({ "id": random_id(), "references": references, "title": t, "detail": clean(detail, 20000), "status": "open", "created_at": now, "updated_at": now });
         items.push(item.clone());
         Ok(item)
     })
@@ -87,9 +91,11 @@ pub fn add_item(root: &Path, title: Option<&Value>, detail: Option<&Value>) -> R
 
 /// patch 裡沒有的欄位不改（對應 JS 的 undefined）。
 pub fn update_item(root: &Path, id: &str, patch: &Value) -> Result<Value> {
+    let references=patch.get("references").map(|v|super::references::ids(root,v)).transpose()?;
     mutate(root, |items| {
         let i = position(items, id)?;
         let item = &mut items[i];
+        if let Some(refs)=references { item["references"]=json!(refs); }
         if let Some(title) = patch.get("title").filter(|v| !v.is_null()) {
             let t = clean(Some(title), 200);
             if t.is_empty() {

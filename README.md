@@ -343,3 +343,20 @@ npm run lint # cargo clippy -D warnings
 ```
 
 介面設計規範在 [docs/design-system.md](docs/design-system.md)。
+
+
+### 檔案與資料夾參考
+
+需求待辦、PRD、任務看板與專案對話都有「加入參考」。可選取檔案／資料夾、貼上完整路徑、重用已匯入的資料，也可拖放檔案或資料夾到對應區域。需求說明、PRD 修改意見及聊天輸入支援 `@` 搜尋專案檔案；聊天與需求輸入可以貼上剪貼簿圖片。
+
+- 需求的附件會在起草時帶入 PRD；功能參考會供 PRD 作者、雙人審查及拆任務使用，產生任務時固定在任務群組上。
+- 任務看板可調整該群組的共用參考。單一任務可再加入額外資料，子任務也會沿用父任務參考；實作、修正、審查、handover 都使用這些資料。
+- 聊天附件保存於對應使用者訊息，追問會沿用，切換聊天的未送出附件各自保留。完整對話附件不刪除；每次模型脈絡最多帶最近 24 份。
+- 資料保存於專案的 `.aipipe/references/<id>/`，包含原始快照、SHA-256 清單及 PDF 擷取文字。原始來源搬動或刪除後仍可使用。來源內容更新時，請重新加入建立新快照；移除附件只解除綁定，以保留歷史紀錄。
+- Windows 及 WSL 專案皆使用專案內快照路徑；WSL 專案可貼上同發行版的 `/home/...` 路徑，其他情況請選擇檔案或使用完整 `\\wsl.localhost\Ubuntu\...` 路徑。
+
+單檔最多 20 MB，每份資料夾最多 64 MB／2000 檔，一個綁定最多 24 份，本次執行合計最多 96 MB。資料夾匯入會排除 `.git`、`.aipipe`、`node_modules`、建置產物、`.env*`、`.pem`、`.key` 與連結。使用者明確選取的個別檔案可直接加入。
+
+PNG、JPEG、WebP、GIF 圖片會傳入 Claude 的結構化圖片訊息或 Codex 的 `--image`（單次最多 8 張、合計 20 MB）；資料夾內其他圖片可由 CLI 依需要讀取。PDF 保留原檔並擷取文字，掃描 PDF 沒有 OCR，會顯示提示。其他格式提供原始快照路徑，實際解析能力依 CLI 工具而定。文字內容與清單有節錄預算，完整快照仍可由 AI 讀取。
+
+互動參考 [Claude Code Desktop 官方說明](https://code.claude.com/docs/en/desktop)，圖片輸入使用 [Claude streaming input](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode) 與 [Codex CLI image 參數](https://learn.chatgpt.com/docs/cli/reference)。本功能沿用本機 CLI 訂閱登入。

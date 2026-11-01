@@ -12,7 +12,7 @@ function renderChatContext() {
     $('#chat-provider').value = snap.config.roles.chat || snap.config.roles.author || 'claude';
     chatDefaultsReady = true; renderChatOptions();
   }
-  $('#chat-context').textContent = `帶入最新流程、任務、PRD 與交接文件 · 目前：${STATUS_TEXT[snap.state.pipeline.status] || snap.state.pipeline.status}${chatSession?.contextTruncated ? ` · 最近 ${chatSession.contextMessages} 則帶入模型，完整紀錄仍保留` : ''}`;
+  $('#chat-context').textContent = `帶入最新流程、任務、PRD 與交接文件 · 目前：${STATUS_TEXT[snap.state.pipeline.status] || snap.state.pipeline.status}${chatSession?.contextTruncated ? ` · 最近 ${chatSession.contextMessages} 則帶入模型，完整紀錄仍保留` : ''}${chatSession?.contextReferencesTruncated ? ' · 參考資料帶入最近 24 份，較早的附件仍保留' : ''}`;
 }
 function renderChatOptions() {
   const provider = $('#chat-provider').value, model = $('#chat-model');
@@ -47,9 +47,10 @@ function renderChatHistory() {
   }
 }
 function renderChatControls() {
+  if (typeof renderReferenceWidgets === 'function') renderReferenceWidgets();
   const active = chatActive(chatSession);
   const anyActive = active || chatItems.some(chatActive);
-  $('#chat-send').disabled = chatSending || !!anyActive;
+  $('#chat-send').disabled = chatSending || !!anyActive || referencePending.has(`chat:${chatId || 'new'}`);
   $('#chat-stop').hidden = !active;
   $('#chat-stop').disabled = !!chatSession?.cancelRequested;
   $('#chat-stop').textContent = chatSession?.cancelRequested ? '正在停止…' : '停止回覆';
@@ -88,7 +89,7 @@ function renderChatMessages() {
     const body = document.createElement('div'); body.className = 'chat-message-body md';
     if (message.role === 'user') { body.textContent = message.text; body.classList.add('plain-text'); }
     else renderChatMarkdown(body, message.text).then(() => { if (atBottom && body.isConnected) host.scrollTop = host.scrollHeight; });
-    article.append(heading, body); host.append(article);
+    article.append(heading, body); if (message.references?.length) article.append(referenceChips(message.references)); host.append(article);
   }
   if (chatSession?.turn) {
     const activity = document.createElement('details'); activity.className = 'chat-activity';
@@ -147,13 +148,14 @@ async function pollChat() {
   finally { chatPollBusy = false; }
 }
 async function sendChat(retry = false) {
-  if (chatSending || chatActive(chatSession) || chatItems.some(chatActive)) return;
-  const input = $('#chat-input').value.trim(); if (!retry && !input) return;
+  if (chatSending || chatActive(chatSession) || chatItems.some(chatActive) || referencePending.has(`chat:${chatId || 'new'}`)) return;
+  const input = $('#chat-input').value.trim(); const referenceKey = `chat:${chatId || 'new'}`; const references = referenceDraft(referenceKey); if (!retry && !input && !references.length) return;
   chatSending = true; renderChatControls();
   const selection = chatSelection;
   try {
-    const session = await api('/api/chat/send', { chatId, input, retry, provider: $('#chat-provider').value, model: $('#chat-model').value, effort: $('#chat-effort').value });
+    const session = await api('/api/chat/send', { chatId, input, retry, references, provider: $('#chat-provider').value, model: $('#chat-model').value, effort: $('#chat-effort').value });
     if (selection === chatSelection) {
+      referenceDrafts.delete(referenceKey);
       chatDrafts.delete(chatId || 'new'); chatId = session.id; chatSession = session; chatMessagesKey = ''; $('#chat-input').value = '';
       renderChatMessages(); renderChatContext();
     }

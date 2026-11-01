@@ -439,3 +439,43 @@ fn 拆任務_實作_修正_交接各自套用模型() {
         assert!(calls.iter().any(|c| c["args"].as_array().unwrap().windows(2).any(|w| w[0] == "-m" && w[1] == model)), "{role}");
     }
 }
+
+#[test]
+fn 需求參考傳到雙人審查_拆任務與各執行角色_新功能不繼承() {
+    let (root, mut cfg)=git_project(pipeline_scenario());
+    cfg["roles"]["reviewer"]=json!("both");
+    cfg["cli"]["claude"]=json!(install_fake(&root,"claude").to_string_lossy());
+    save_config(&root,&cfg).unwrap();
+    let mut scenario=pipeline_scenario(); scenario["claude"]=json!({"text":"VERDICT: APPROVE"});
+    fs::write(root.join(".fake-cli.json"),scenario.to_string()).unwrap();
+    fs::write(root.join("reference.md"),"UNIQUE_REFERENCE_SPEC").unwrap();
+    let reference=aipipe::core::references::import(&root,&json!({"path":root.join("reference.md")})).unwrap();
+    let item=aipipe::core::backlog::add_item_with_references(&root,Some(&json!("報表")),None,&json!([reference["id"]])).unwrap();
+    draft_prd(&root,&cfg,"報表",item["id"].as_str()).unwrap();
+    approve_prd(&root,&cfg).unwrap(); generate_tasks(&root).unwrap();
+    assert_eq!(run_pipeline(&root,None,false).unwrap(),"waiting");
+    let records=calls(&root);
+    assert!(records.len()>=6);
+    for record in &records { assert!(record["prompt"].as_str().unwrap().contains("UNIQUE_REFERENCE_SPEC")); }
+    for stage in ["prd","prd_review","tasks","implement","code_review"] {
+        assert!(sessions(&root).iter().any(|s| s["stage"]==stage && s["references"][0]["id"]==reference["id"]),"{stage}");
+    }
+    draft_prd(&root,&cfg,"下一個功能",None).unwrap();
+    assert_eq!(read_state(&root)["prd"]["references"],json!([]));
+    assert!(!calls(&root).last().unwrap()["prompt"].as_str().unwrap().contains("UNIQUE_REFERENCE_SPEC"));
+}
+#[test]
+fn 圖片附件使用_claude_結構化輸入與_codex_image_旗標() {
+    let (root,mut cfg)=fixture(&["claude","codex"],json!({"claude":{"text":"ok"},"codex":{"text":"ok"}}));
+    fs::write(root.join("diagram.png"),[137,80,78,71]).unwrap();
+    let image=aipipe::core::references::import(&root,&json!({"path":root.join("diagram.png")})).unwrap();
+    cfg["_reference_ids"]=json!([image["id"]]);
+    for provider in ["claude","codex"] { assert!(run_agent(agent(&root,&cfg,provider,false,Some("prd"))).unwrap().ok); }
+    let records=calls(&root);
+    assert!(records[0]["args"].as_array().unwrap().contains(&json!("--input-format")));
+    let message:Value=serde_json::from_str(records[0]["prompt"].as_str().unwrap()).unwrap();
+    assert_eq!(message["message"]["content"][1]["type"],"image");
+    let args=records[1]["args"].as_array().unwrap();
+    let index=args.iter().position(|a|a=="--image").unwrap();
+    assert!(Path::new(args[index+1].as_str().unwrap()).exists());
+}

@@ -475,6 +475,7 @@ async function loadDetail() {
 
 function renderDetail() {
   if (!detail) return;
+  if (typeof renderReferenceWidgets === 'function') renderReferenceWidgets();
   const ts = detail.state || {};
   const t = detail.task || {};
   $('#d-title').textContent = `#${detail.id} ${t.title || ''}`;
@@ -622,6 +623,7 @@ function onState(data) {
   const prevPrd = snap?.state.prd.rounds.length;
   const prevStatus = snap?.state.prd.status;
   snap = data;
+  if (typeof renderReferenceWidgets === 'function') renderReferenceWidgets();
   if (typeof renderChatContext === 'function') renderChatContext();
   const blocked = data.state.usage_blocked;
   $('#quota-notice').hidden = !blocked || quotaDismissed === JSON.stringify(blocked) || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
@@ -729,12 +731,14 @@ function renderBacklog() {
       <div class="bl-actions">
         <button type="button" class="icon-btn" data-act="up" aria-label="往上移">${icon('up')}</button>
         <button type="button" class="icon-btn" data-act="down" aria-label="往下移">${icon('down')}</button>
+        <button type="button" data-act="references">參考</button>
         <button type="button" class="icon-btn" data-act="edit" aria-label="編輯">${icon('edit')}</button>
         <button type="button" class="icon-btn" data-act="delete" aria-label="刪除">${icon('trash')}</button>
         <button type="button" data-act="draft">${icon('sparkle')}起草 PRD</button>
       </div>`;
     li.querySelector('.bl-num').textContent = i + 1;
     li.querySelector('.bl-title').textContent = item.title;
+    li.querySelector('[data-act=references]').textContent = `參考 ${item.references?.length || 0}`;
     const chip = li.querySelector('.chip');
     chip.textContent = BACKLOG_STATUS[item.status] || item.status;
     chip.className = `chip bl-${item.status}`;
@@ -770,10 +774,11 @@ async function saveOrder(ids) {
 
 function bindBacklog() {
   $('#bl-add').onclick = async () => {
-    const data = await act('/api/backlog/add', { title: $('#bl-title').value, detail: $('#bl-detail').value }, '已新增需求');
+    const data = await act('/api/backlog/add', { title: $('#bl-title').value, detail: $('#bl-detail').value, references: referenceDraft('backlog') }, '已新增需求');
     if (data) {
       $('#bl-title').value = '';
       $('#bl-detail').value = '';
+      referenceDrafts.delete('backlog'); renderReferenceWidgets();
       await loadBacklog();
       $('#bl-title').focus();
     }
@@ -792,6 +797,8 @@ function bindBacklog() {
         return moveBacklog(id, -1);
       case 'down':
         return moveBacklog(id, 1);
+      case 'references':
+        return openReferenceDialog({ title: `需求參考：${item.title}`, target: 'backlog', id, ids: item.references || [] });
       case 'edit':
         editingId = id;
         return renderBacklog();
@@ -1283,6 +1290,7 @@ async function runAction(path, body = {}, message) {
 }
 
 function bind() {
+  if (typeof bindReferences === 'function') bindReferences();
   if (typeof bindChat === 'function') bindChat();
   tabKeys($$('[data-board-view]'), button => button.click());
   window.addEventListener('resize', () => {

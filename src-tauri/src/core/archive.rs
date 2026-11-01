@@ -124,6 +124,7 @@ pub fn archive_prd(root: &Path, cfg: &Value) -> Result<String> {
     write_meta(&dir, json!({
         "feature": feature,
         "idea": idea,
+        "references": state["prd"]["references"],
         "approved_at": now_iso(),
         "rounds": summary,
         "backlog_id": state["prd"].get("backlog_id").filter(|v| truthy(Some(v))).cloned().unwrap_or(Value::Null),

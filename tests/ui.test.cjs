@@ -11,9 +11,12 @@ function page() {
   w.structuredClone = structuredClone;
   w.__TAURI__ = { core: { invoke: async () => ({}) } };
   const common = fs.readFileSync('src/common.js', 'utf8');
-  const chat = ['markdown.js', 'diagrams.js', 'chat.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
+  const chat = ['markdown.js', 'diagrams.js', 'references.js', 'chat.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
   const app = fs.readFileSync('src/app.js', 'utf8').split('\nbind();')[0];
   w.eval(`${common}\n${chat}\n${app}\nwindow.ui = {
+    bindReferences, bindReferenceInput, renderReferenceWidgets, openReferenceDialog, referenceDraft, saveReferenceSelection,
+    setReferenceDraft(key, ids) { referenceDrafts.set(key, ids); },
+    catalog(items) { referenceCatalog = new Map(items.map(item => [item.id, item])); },
     bind, parseLog, renderLogTree, setLogTreeOpen, renderModels, renderSettings,
     openArchive, openCurrent, renderRecords, reviewsView,
     setSnap(value) { snap = value; },
@@ -260,4 +263,84 @@ test('Mermaid 使用 strict 模式繪圖，保留原始碼並且不把一般程�
   assert.equal(host.querySelectorAll('svg').length, 1); assert.match(host.querySelector('.diagram-source').textContent, /A-->B/);
   assert.equal(host.querySelectorAll('pre[data-lang="js"]').length, 1);
   dom.window.close();
+});
+
+
+test('附件跟隨聊天草稿，只有附件也可傳送；失敗保留附件', async () => {
+  const { dom, ui, doc } = page(); ui.setSnap(snapshot());
+  const reference = { id: 'ref-image', name: '設計.png', kind: 'file' }; ui.catalog([reference]);
+  ui.setReferenceDraft('chat:new', ['ref-image']); ui.renderReferenceWidgets();
+  assert.match(doc.querySelector('#chat-references').textContent, /設計.png/);
+  let request;
+  ui.setApi(async (path, body) => { if (path === '/api/chat/send') { request = body; throw Error('無法啟動'); } return { items: [] }; });
+  await ui.sendChat(); assert.deepEqual([...request.references], ['ref-image']);
+  assert.deepEqual([...ui.referenceDraft('chat:new')], ['ref-image']);
+  ui.setChat({id:'existing',messages:[],status:'done'}); ui.renderReferenceWidgets();
+  assert.doesNotMatch(doc.querySelector('#chat-references').textContent, /設計.png/);
+  ui.newChat(); assert.match(doc.querySelector('#chat-references').textContent, /設計.png/);
+  dom.window.close();
+});
+
+test('參考資料取消不套用，套用和移除只影響選取的草稿', async () => {
+  const { dom, ui, doc, w } = page(); ui.setSnap(snapshot());
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  const reference = {id:'ref-1',name:'規格.md',kind:'file',fileCount:1,totalBytes:12,sourcePath:'C:/spec.md'};
+  ui.catalog([reference]); ui.setApi(async () => ({items:[reference]}));
+  await ui.openReferenceDialog({title:'需求參考',key:'backlog',ids:[]});
+  const dialog=doc.querySelector('dialog'); dialog.querySelector('input[type=checkbox]').click(); dialog.close();
+  assert.equal(ui.referenceDraft('backlog').length,0);
+  await ui.openReferenceDialog({title:'需求參考',key:'backlog',ids:[]});
+  doc.querySelector('dialog input[type=checkbox]').click(); doc.querySelector('[data-apply]').click();
+  await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual([...ui.referenceDraft('backlog')],['ref-1']);
+  doc.querySelector('#bl-references .reference-chip button').click(); await new Promise(r=>setTimeout(r,0));
+  assert.equal(ui.referenceDraft('backlog').length,0); dom.window.close();
+});
+
+test('@ 選取專案檔案會加入快照，不會同時送出聊天', async () => {
+  const { dom, ui, doc, w } = page(); ui.setSnap(snapshot());
+  let sent=0;
+  ui.setApi(async (path, body) => {
+    if(path==='/api/references/suggest') return {items:[{name:'docs/spec.md',path:'C:/project/docs/spec.md',kind:'file'}]};
+    if(path==='/api/references/import') return {id:'snapshot-1',name:'spec.md',kind:'file'};
+    if(path==='/api/chat/send') sent++;
+    return {items:[]};
+  });
+  ui.bindReferences(); const input=doc.querySelector('#chat-input');
+  input.onkeydown=event=>{if(event.key==='Enter') sent++;};
+  input.focus(); input.value='請看 @spec'; input.setSelectionRange(input.value.length,input.value.length); input.dispatchEvent(new w.Event('input'));
+  await new Promise(r=>setTimeout(r,220));
+  assert.ok(doc.querySelector('.reference-suggestions'));
+  input.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await new Promise(r=>setTimeout(r,0));
+  assert.equal(sent,0); assert.match(input.value,/@spec.md/); assert.deepEqual([...ui.referenceDraft('chat:new')],['snapshot-1']);
+  dom.window.close();
+});
+
+
+test('貼上圖片傳送真正檔案內容並建立附件，不只插入檔名', async () => {
+  const { dom, ui, doc, w } = page(); ui.setSnap(snapshot());
+  let uploaded;
+  ui.setApi(async (path, body) => { if(path==='/api/references/import') { uploaded=body; return {id:'paste-1',name:body.name,kind:'file'}; } return {items:[]}; });
+  ui.bindReferences();
+  const event=new w.Event('paste',{bubbles:true,cancelable:true});
+  Object.defineProperty(event,'clipboardData',{value:{files:[new w.File([new Uint8Array([137,80,78,71])],'clipboard.png',{type:'image/png'})]}});
+  doc.querySelector('#chat-input').dispatchEvent(event); await new Promise(r=>setTimeout(r,30));
+  assert.equal(uploaded.data,'iVBORw=='); assert.equal(uploaded.name,'clipboard.png');
+  assert.deepEqual([...ui.referenceDraft('chat:new')],['paste-1']); assert.equal(event.defaultPrevented,true);
+  dom.window.close();
+});
+
+
+test('原生拖放使用真實路徑，綁定到游標所在的聊天區域', async () => {
+  const { dom, ui, doc, w } = page(); ui.setSnap(snapshot());
+  let dropped; const paths=[];
+  w.__TAURI__.webview={getCurrentWebview:()=>({onDragDropEvent: callback=>{dropped=callback;return Promise.resolve(()=>{});}})};
+  doc.elementFromPoint=()=>doc.querySelector('#chat-input');
+  ui.setApi(async (path,body)=>{if(path==='/api/references/import'){paths.push(body.path);return {id:`file-${paths.length}`,name:body.path,kind:'file'};} return {items:[]};});
+  ui.bindReferences();
+  await dropped({payload:{type:'drop',paths:['C:/external/設計.png','C:/external/source'],position:{x:100,y:100}}});
+  assert.deepEqual(paths,['C:/external/設計.png','C:/external/source']);
+  assert.deepEqual([...ui.referenceDraft('chat:new')],['file-1','file-2']);
+  assert.equal(ui.referenceDraft('backlog').length,0); dom.window.close();
 });

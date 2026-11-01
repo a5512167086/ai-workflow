@@ -75,7 +75,9 @@ fn turn_config(root: &Path, provider: &str, model: &str, effort: &str) -> Result
     Ok(cfg)
 }
 pub fn start_turn(root: &Path, body: &Value, launch: &dyn Fn(&str, &str) -> Result<u32>) -> Result<Value> {
-    let input = body["input"].as_str().unwrap_or("").trim();
+    let references=super::references::ids(root,&body["references"])?;
+    let text=body["input"].as_str().unwrap_or("").trim();
+    let input=if text.is_empty() && !references.is_empty() { "請分析附加的參考資料" } else { text };
     let retry = body["retry"] == true;
     if (!retry && input.is_empty()) || input.chars().count() > 20000 { crate::bail!(400; "請輸入 1–20000 字的訊息"); }
     let provider = body["provider"].as_str().unwrap_or("claude");
@@ -93,7 +95,7 @@ pub fn start_turn(root: &Path, body: &Value, launch: &dyn Fn(&str, &str) -> Resu
         if retry {
             if !messages.last().is_some_and(|message| message["role"] == "user") { crate::bail!(400; "這個對話沒有可重試的訊息"); }
         } else {
-            messages.push(json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "user", "text": input, "at": now_iso() }));
+            messages.push(json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "user", "text": input, "references": references, "at": now_iso() }));
         }
         for (key, value) in [("status", json!("pending")), ("pid", Value::Null), ("provider", json!(provider)), ("model", json!(model)), ("effort", json!(effort)), ("turn", json!(uuid::Uuid::new_v4().to_string())), ("error", json!("")), ("cancelRequested", json!(false))] { chat[key] = value; }
         save(root, &mut chat)?; Ok(chat)
@@ -114,6 +116,7 @@ pub fn conversation_prompt(root: &Path, cfg: &Value, chat: &Value) -> (String, u
         let length = text.chars().count();
         if length > budget && !history.is_empty() { break; }
         let text = clip(text, budget); budget = budget.saturating_sub(length);
+        let text = if message["references"].as_array().is_some_and(|ids|!ids.is_empty()) { format!("{text}\n[此訊息的參考資料 id：{}]",message["references"]) } else { text };
         history.push(format!("{}：\n{text}", if message["role"] == "user" { "使用者" } else { "AI" }));
         if budget == 0 { break; }
     }
@@ -134,9 +137,14 @@ pub fn run_turn(root: &Path, id: &str, turn: &str) -> Result<Value> {
     let result = (|| {
         if cancel.exists() { crate::bail!("使用者已停止回覆"); }
         let provider = chat["provider"].as_str().unwrap_or("claude");
-        let cfg = turn_config(root, provider, chat["model"].as_str().unwrap_or(""), chat["effort"].as_str().unwrap_or(""))?;
+        let mut cfg = turn_config(root, provider, chat["model"].as_str().unwrap_or(""), chat["effort"].as_str().unwrap_or(""))?;
+        let mut refs=vec![];
+        for message in chat["messages"].as_array().into_iter().flatten().rev() { for id in message["references"].as_array().into_iter().flatten() { if !refs.contains(id) { refs.push(id.clone()); } } }
+        let references_truncated=refs.len()>24; refs.truncate(24);
+        cfg["_reference_ids"]=json!(refs);
+        cfg["_visual_reference_ids"]=chat["messages"].as_array().and_then(|m|m.last()).map(|m|m["references"].clone()).unwrap_or(json!([]));
         let (prompt, count, truncated) = conversation_prompt(root, &cfg, &chat);
-        change(root, id, |chat| { chat["contextMessages"] = json!(count); chat["contextTruncated"] = json!(truncated); Ok(()) })?;
+        change(root, id, |chat| { chat["contextMessages"] = json!(count); chat["contextTruncated"] = json!(truncated); chat["contextReferencesTruncated"]=json!(references_truncated); Ok(()) })?;
         let scope = format!("chat-{turn}");
         let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: "專案對話", stage: Some("chat"), role: Some("chat"), skills: Some(vec![]) })?;
         if !result.ok { return Err(AppError::new(result.error_text())); }

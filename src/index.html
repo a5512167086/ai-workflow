@@ -40,7 +40,7 @@
     <div class="brand">
       <a class="icon-btn back-link" href="overview.html" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
       <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
-      <span class="name">aipipe <small class="hint">v0.3.0</small></span>
+      <span class="name">aipipe <small class="hint">v0.4.0</small></span>
       <span id="project" class="project mono" title=""></span>
     </div>
     <div class="status-line">
@@ -79,6 +79,7 @@
           <p id="chat-status" class="hint" role="status"></p>
           <form id="chat-form" class="chat-composer">
             <div class="chat-options"><label for="chat-provider">AI<select id="chat-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><details class="chat-model-options"><summary>模型與推理設定</summary><div class="chat-model-fields"><label for="chat-model">模型<input id="chat-model" type="text" list="models-claude" placeholder="沿用對話角色預設"></label><label for="chat-effort">推理強度<select id="chat-effort"><option value="">預設</option></select></label><p id="chat-model-hint" class="hint">空白沿用首頁「專案對話」角色的設定。</p></div></details></div>
+            <div id="chat-references" class="reference-widget"></div>
             <label class="sr-only" for="chat-input">詢問專案</label><textarea id="chat-input" rows="3" maxlength="20000" placeholder="問問目前的進度、執行問題，或請 AI 畫出專案架構圖…"></textarea>
             <div class="chat-send-row"><span class="hint">Enter 傳送 · Shift+Enter 換行 · 不修改專案檔案</span><button id="chat-stop" type="button" hidden>停止回覆</button><button id="chat-retry" type="button" hidden>重試這則訊息</button><button id="chat-send" type="submit" class="primary">傳送</button></div>
           </form>
@@ -92,6 +93,7 @@
           <label for="bl-title" class="field-label">標題</label>
           <input id="bl-title" type="text" maxlength="200" placeholder="例如：報表可以匯出 CSV">
           <label for="bl-detail" class="field-label spaced">說明（選填，支援 Markdown）</label>
+          <div id="bl-references" class="reference-widget"></div>
           <textarea id="bl-detail" rows="5" placeholder="背景、驗收條件、限制…"></textarea>
           <div class="row end"><button id="bl-add" class="primary" type="button"><svg class="ic"><use href="#i-plus"/></svg>新增</button></div>
         </div>
@@ -160,6 +162,7 @@
 
         <aside class="col-side">
           <div class="card" id="prd-actions">
+            <div id="prd-references" class="reference-widget"></div>
             <div class="card-head"><h2>決定</h2></div>
             <button id="btn-prd-approve" class="primary block" type="button"><svg class="ic"><use href="#i-check"/></svg>核准 PRD</button>
             <div class="divider"><span>或</span></div>
@@ -192,6 +195,7 @@
         <div class="board-feature"><span class="eyebrow">目前功能</span><h2 id="board-feature-title">尚未開始</h2><div id="board-progress" class="feature-progress" role="progressbar" aria-label="主線任務完成度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
         <dl id="board-metrics" class="board-metrics"></dl>
       </div>
+      <div id="board-references" class="reference-widget"></div>
       <div class="board-controls">
         <div class="seg" role="radiogroup" aria-label="任務檢視">
           <button id="board-view-kanban" data-board-view="kanban" type="button" role="radio" aria-checked="true">看板</button>
@@ -216,6 +220,7 @@
           <h2 id="d-title" tabindex="-1"></h2>
           <button id="d-close" class="icon-btn" type="button" aria-label="關閉任務詳情"><svg class="ic"><use href="#i-x"/></svg></button>
         </div>
+        <div id="task-references" class="reference-widget"></div>
         <details class="execution-details"><summary>執行資訊與 commit</summary><dl id="d-meta" class="meta"></dl></details>
         <section class="gate-section" aria-labelledby="d-gates-title"><h3 id="d-gates-title">完成條件</h3><ul id="d-gates" class="gate-list"></ul></section>
         <div class="row detail-actions">
@@ -326,6 +331,7 @@
   <script src="common.js"></script>
   <script src="markdown.js"></script>
   <script src="diagrams.js"></script>
+  <script src="references.js"></script>
   <script src="chat.js"></script>
   <script src="app.js"></script>
 </body>

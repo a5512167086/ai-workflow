@@ -289,7 +289,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         tasks::validate_tasks(&list)?;
         let feature = cfg_str(&cfg, "feature");
         let tag = tasks::use_feature_tag(root, &tag_slug(if feature.is_empty() { state["prd"]["idea"].as_str().unwrap_or("") } else { feature }))?;
-        tasks::write_tasks(root, &list, Some(&tag), json!({ "prd_version": state["prd"]["version"], "provider": res.provider, "sessionId": res.session_id }))?;
+        tasks::write_tasks(root, &list, Some(&tag), json!({ "references": state["prd"]["references"], "reference_feature": state["prd"]["archive_dir"], "prd_version": state["prd"]["version"], "provider": res.provider, "sessionId": res.session_id }))?;
         let count = tasks::read_tasks(root)?.len();
         update_state(root, |s| {
             s["task_gen"] = json!({ "status": "done", "pid": null, "error": "", "count": count, "via": "builtin", "tag": tag });

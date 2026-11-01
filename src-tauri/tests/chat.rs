@@ -152,3 +152,18 @@ fn claude_對話可讀專案_限制為讀檔工具並保存實際回覆() {
     assert!(args.windows(2).any(|a| a == [json!("--tools"), json!("Read,Glob,Grep")]));
     assert!(args.windows(2).any(|a| a == [json!("--disallowedTools"), json!("Edit,Write,NotebookEdit,mcp__*")]));
 }
+
+#[test]
+fn 只有附件可發問且追問沿用快照_重新讀取對話仍保留參考() {
+    let root=fixture(); fs::write(root.join("reference.md"),"UNIQUE_CHAT_REFERENCE").unwrap();
+    let item=aipipe::core::references::import(&root,&json!({"path":root.join("reference.md")})).unwrap();
+    let first=start(&root,json!({"provider":"codex","references":[item["id"]]}));
+    fs::remove_file(root.join("reference.md")).unwrap();
+    let done=run(&root,&first); assert_eq!(done["status"],"done");
+    let saved=chat::get_chat(&root,done["id"].as_str().unwrap()).unwrap();
+    assert_eq!(saved["messages"][0]["references"],json!([item["id"]]));
+    let second=start(&root,json!({"chatId":done["id"],"input":"繼續解釋","provider":"codex"}));
+    assert_eq!(run(&root,&second)["status"],"done");
+    let calls=fs::read_to_string(root.join(".aipipe/calls.jsonl")).unwrap();
+    for line in calls.lines() { let call:Value=serde_json::from_str(line).unwrap(); assert!(call["prompt"].as_str().unwrap().contains("UNIQUE_CHAT_REFERENCE")); }
+}
