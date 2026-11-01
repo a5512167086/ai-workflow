@@ -5,6 +5,8 @@
 - **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex exec`、`task-master`），不需要也不使用 API key。
 - **通用**：任何有 git 的軟體專案都能用，build/test/lint 指令寫在專案的 `.aipipe.json`。
 - **兩種模式**：自動（通過檢查就 commit，少停）與手動（不 commit，每個任務都停下來等你測）。
+- **多專案**：總覽畫面同時看多個專案；全域佇列讓多個專案輪流跑，不會一起燒掉訂閱額度。
+- **桌面版**：Windows 安裝檔（Tauri），不需要另外裝 Node 就能跑 aipipe 本身，流程停下來等你時跳通知。見[桌面版](#桌面版windows)。
 
 ## 需求
 
@@ -34,11 +36,13 @@ npm install -g .
 cd 你的專案            # 必須是 git repo
 aipipe init            # 建立 .aipipe.json、docs/ai-context.md、docs/index.md 範本
 aipipe doctor          # 檢查三個 CLI 是否找得到、是否已用訂閱登入
-aipipe ui              # 開 http://localhost:4317
+aipipe ui              # 開 http://localhost:4317：所有專案的總覽（目前專案會自動加入）
+aipipe ui --cwd .      # 直接開這個專案的畫面
 ```
 
-在 UI 裡依序：
+在專案畫面裡依序：
 
+0. **需求待辦**（選用）：先把想做的功能列進待辦、排好順序，按「起草 PRD」就用那一項開始。
 1. **PRD 頁**：輸入想法 →「起草 PRD」。作者 AI 起草，審查 AI 審，來回最多 `max_prd_rounds` 輪。右側可以展開每一輪的審查意見。
 2. 看完 PRD 後按「核准 PRD」，或在下方寫意見按「要求再改」（作者修訂後會再審一輪）。
 3. 按「用 Task Master 產生任務」。
@@ -57,9 +61,72 @@ aipipe continue                             # 我測完了，繼續
 aipipe rerun 3 --revert                     # 還原任務 3 的變更後重跑
 aipipe mode auto                            # 切換模式
 aipipe status
+aipipe prd --backlog <id>                   # 用需求待辦裡的一項起草 PRD
+aipipe projects list                        # 總覽裡的專案與狀態
+aipipe projects add [目錄]                  # 加入總覽（預設目前專案）
+aipipe projects remove <id|目錄|名稱>       # 移出總覽（不刪任何檔案）
+aipipe queue                                # 看全域執行佇列
+aipipe queue --max 2                        # 同時最多跑 2 個專案的流程
 ```
 
 在專案子目錄執行也可以，aipipe 會往上找 `.aipipe.json`；或用 `--cwd <路徑>` 指定專案。
+
+## 多專案總覽
+
+`aipipe ui` 不帶 `--cwd` 時首頁是總覽：每個專案一張卡片，顯示目前狀態（閒置、PRD 起草中、等待核准、排隊中、執行中、等待測試、功能待測試、需要人工處理…）、目前的功能、任務進度，點進去就是原本的單一專案畫面（網址 `/p/<id>/`）。需要你處理的專案會標出來，頂列顯示有幾個在等你。
+
+專案清單存在 `~/.aipipe/projects.json`（可以用環境變數 `AIPIPE_HOME` 換位置），依最近開啟排序。從總覽或 `aipipe projects add` 加入；資料夾還沒有 `.aipipe.json` 時，總覽會問你要不要用預設值初始化。移除只是移出清單，不會刪任何檔案。
+
+舊的單一專案 API（`/api/state`、`/api/events`…）仍然對應啟動 `aipipe ui` 時所在的專案；每個專案也都有 `/api/p/<id>/...`。
+
+## 需求待辦清單
+
+每個專案一份，存在 `docs/aipipe/backlog.json`（可以用 `.aipipe.json` 的 `backlog_path` 改），建議 commit。選 JSON 是因為要排序、要有穩定的 id 對應封存；內容很單純：
+
+```json
+{
+  "version": 1,
+  "items": [
+    { "id": "0aff2c310e", "title": "報表可以匯出 CSV", "detail": "Markdown 說明（選填）", "status": "open", "created_at": "…", "updated_at": "…" }
+  ]
+}
+```
+
+陣列順序就是優先順序。`status`：`open`（待辦）→ `in_progress`（已用它起草 PRD）→ `done`（功能通過人工測試，並記錄對應的封存資料夾 `feature`）。UI 可以新增、編輯、刪除，用拖曳或上／下按鈕排序（鍵盤也能操作）。
+
+## 功能封存
+
+每個功能核准的 PRD 會自動封存到 `docs/prd/<日期>-<功能>/`（`.aipipe.json` 的 `archive_dir` 可改），可以 commit：
+
+```
+docs/prd/2026-11-01-匯出-csv/
+  prd.md                     核准的 PRD
+  rounds/01-draft-r0-v1.md   每一輪：初稿、審查（含結論）、修訂、使用者意見
+  rounds/02-review-r1-revise-v1.md
+  tasks.json                 這個功能的任務清單（含最後狀態）
+  meta.json                  想法、核准／完成時間、Task Master tag、進度、待辦項目 id
+```
+
+- 核准 PRD 時建立；同一個功能重新核准會更新同一個資料夾。
+- 產生任務後、每次 `aipipe run` 結束時、功能完成時更新 `tasks.json`。
+- 開始下一個功能（起草新的 PRD）時一定建新資料夾；同一天同名的功能會加 `-2`、`-3`，不會覆蓋。
+- UI 的「歷史功能」分頁可以瀏覽每個封存的 PRD（Markdown 渲染）、每輪紀錄與任務清單。
+
+### 每個功能一個 Task Master tag
+
+`taskmaster.use_tags`（預設 `true`）讓每個功能的任務放在自己的 Task Master tag（例如 `f-20261101-csv`），開始新功能不會覆蓋上一個功能的 `tasks.json` 內容。產生任務時 aipipe 會執行 `task-master tags add <tag>`、`tags use <tag>`，再 `parse-prd --tag <tag>`；之後的 `next`、`set-status` 都作用在目前的 tag。已用 task-master 0.43.1 實測：`tags add`／`tags use` 可用、`set-status` 只改目前 tag、`next --format json` 讀目前 tag。
+
+限制：Task Master 的 tag 名稱只接受英數字、`-`、`_`，所以中文功能名稱會轉成 ASCII（全是中文時是 `feature`，加上日期與流水號區分）。目前的 tag 還是空的（例如全新專案的 `master`）時直接沿用。`tags` 指令失敗（舊版 Task Master）時會記在 log 並沿用目前的 tag，行為就和以前一樣。
+
+## 執行佇列
+
+所有專案的 `aipipe run` 共用一個全域佇列（`~/.aipipe/queue.json`），預設同時只跑 1 個，用 `aipipe queue --max <n>` 或總覽的「同時執行的流程上限」改（1–8）。
+
+- 輪不到的專案顯示「排隊中」，前面的停下來或做完後自動接上（每 1.5 秒檢查一次）。
+- 停下來等人的專案（等待核准、等待測試、需要人工處理）不佔名額：那時 `aipipe run` 已經結束。
+- 排隊中按「暫停」會放棄排隊。
+- 佇列由各個 run 程序自己維護，不需要 UI 開著；當掉的程序會被自動清掉，不會卡住名額。
+- 只有 `aipipe run`（含「繼續」「重跑」接著跑的部分）會排隊；起草 PRD 與產生任務不排隊。
 
 ## 每個任務做什麼
 
@@ -108,6 +175,8 @@ task-master next
   "context_files": ["docs/ai-context.md", "docs/index.md"],
   "handover_path": "docs/handovers/current_handover.md",
   "prd_path": ".taskmaster/docs/prd.md",  // 核准後的 PRD 寫在這裡，交給 Task Master
+  "backlog_path": "docs/aipipe/backlog.json",  // 需求待辦清單
+  "archive_dir": "docs/prd",        // 功能封存的上層資料夾
   "roles": {                        // 每個角色填 claude 或 codex
     "author": "claude",             // 起草／修訂 PRD
     "reviewer": "codex",            // 審查 PRD
@@ -126,7 +195,8 @@ task-master next
   "taskmaster": {
     "provider": "claude-code",      // claude-code 或 codex-cli（都走 CLI 訂閱，不用 API key）
     "model": "sonnet",
-    "parse_with": "auto"            // auto | task-master | agent，見下方
+    "parse_with": "auto",           // auto | task-master | agent，見下方
+    "use_tags": true                // 每個功能一個 Task Master tag，見「功能封存」
   }
 }
 ```
@@ -178,8 +248,19 @@ task-master next
   prd/                       各版 PRD（v1.md…）、每輪審查意見、使用者意見
   tasks/<id>/                checks.txt、review-N.md、diff.patch、implement.md
   tmp/                       每次送出的 prompt 與 codex 最後回覆
-.taskmaster/                 Task Master 的資料
+.taskmaster/                 Task Master 的資料（每個功能一個 tag）
 docs/handovers/current_handover.md
+docs/aipipe/backlog.json     需求待辦清單（建議 commit）
+docs/prd/<日期>-<功能>/      功能封存（建議 commit）
+```
+
+使用者目錄：
+
+```
+~/.aipipe/projects.json      總覽的專案清單
+~/.aipipe/queue.json         全域執行佇列（執行中、排隊中的 pid）
+~/.aipipe/config.json        全域設定（max_concurrent_runs）
+~/.aipipe/desktop-sidecar.log 桌面版 sidecar 的輸出
 ```
 
 `aipipe ui` 與 `aipipe run` 是不同程序，透過 `.aipipe/state.json` 溝通；UI 的按鈕會在背景啟動對應的 aipipe 指令（輸出寫到 `.aipipe/logs/process.log`）。關掉 UI 不會中斷正在跑的流程。
@@ -218,16 +299,46 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 - **Codex 的 workspace-write**：Windows 上 Codex 沒設 `windows.sandbox` 時，會把 `--sandbox workspace-write` 默默降成 read-only，實作者就改不了檔案。aipipe 會帶 `-c windows.sandbox="<codex.windows_sandbox>"`（Windows 預設 `elevated`）。如果 Codex 仍回報 read-only，該任務會直接停在「需要人工處理」並提示你改設定，不會白白耗掉修正輪數。`elevated` 需要 Codex 的 Windows 沙箱已完成一次性設定（裝過 Codex 桌面版通常已設定好）；不行的話改 `unelevated`。
 - npm 全域安裝的 `.cmd` 包裝檔（例如 `task-master.cmd`）會被解析成 `node <js 入口>` 直接執行，不經過 cmd.exe。
 
+## 桌面版（Windows）
+
+`desktop/` 是 Tauri 2 外殼，視窗內容就是上面的網頁 UI，不另外寫前端。
+
+- **不用裝 Node 就能跑 aipipe**：aipipe（`bin/` + `src/` + `ui/`）用 esbuild 合併後，以 Node SEA 打包成 `aipipe-sidecar.exe`，UI 檔案內嵌在 exe 裡。app 啟動時挑一個沒被佔用的本機連接埠啟動它，結束 app 時停掉它。
+- **原生功能**：總覽的「選擇資料夾」用系統對話框；系統匣圖示（左鍵開視窗、右鍵「結束 aipipe」）；關閉視窗會縮到系統匣，背景繼續監看；專案進入等待核准、等待測試、功能待測試、需要人工處理、錯誤時跳 Windows 通知。
+- **CLI 呼叫不變**：一樣只呼叫本機已登入的 claude（可設在 WSL）、codex、task-master，清掉 API key 的規則一樣。
+- 由 UI 啟動的 `aipipe run` 是獨立程序，結束 app 不會中斷正在跑的流程（和 CLI 版一樣）。sidecar 則會監看外殼的 pid，app 當掉或被強制關閉時也會自己結束。
+
+安裝：執行 `aipipe_0.1.0_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。
+
+自己建置（需要 Node 20+、Rust stable、VS 2022 C++ Build Tools；WebView2 Windows 11 內建）：
+
+```bash
+cd desktop
+npm install
+npm run build        # = npm run sidecar（打包 aipipe-sidecar.exe）+ tauri build
+```
+
+安裝檔在 `desktop/src-tauri/target/release/bundle/nsis/`。`npm run icons` 從 `web/icon.svg` 重新產生圖示。
+
+桌面版的限制：
+
+- claude、codex、task-master 仍要自己安裝。npm 裝的 CLI（例如 task-master、npm 版 codex）本身就需要 Node，所以實務上 Windows 端仍會有 Node；只用 WSL 裡的 CLI、或原生 exe 版的 claude／codex 時才真的不需要。aipipe 會從 PATH 找 `node` 來執行這些 `.js` CLI。
+- sidecar exe 約 94 MB（內含 Node 執行環境），安裝檔約 24 MB。exe 沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會提示。
+- 同時開兩個 app 會各自有一個 sidecar 和連接埠（彼此透過 `~/.aipipe` 共用專案清單與佇列），通知會重複。
+
 ## 限制
 
 - 自動模式需要 git 使用者身分（`git config user.name`／`user.email`），沒設定時 `run` 一開始就會報錯。
 - 從手動模式中途切到自動模式時，先前手動模式留下、尚未 commit 的變更會被併進下一個自動 commit。
 - 「暫停」在目前任務結束後才生效，不會中斷正在跑的 AI 呼叫。
-- 同一個專案同時只能有一個 `aipipe run`。
+- 同一個專案同時只能有一個 `aipipe run`；不同專案之間由全域佇列決定誰先跑。
+- 需求待辦的拖曳排序用 HTML5 drag and drop（滑鼠）；鍵盤與觸控請用上／下按鈕。
 - Claude 與 Codex 的訂閱用量上限照常適用；用量耗盡時 CLI 會回錯，該任務會停在「需要人工處理」。
 
 ## 開發
 
 ```bash
-npm test     # node:test 單元測試，不呼叫任何 AI
+npm test     # node:test 單元測試，不呼叫任何 AI（全域資料寫到暫存的 AIPIPE_HOME）
 ```
+
+介面設計規範在 [docs/design-system.md](docs/design-system.md)。
