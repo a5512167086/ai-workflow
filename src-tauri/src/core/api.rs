@@ -14,6 +14,7 @@ use super::doctor::doctor_report;
 use super::git::is_git_repo;
 use super::init::{init_project, InitOptions};
 use super::prd::{approve_prd, current_prd};
+use super::proc::{query_codex_rpc_with, resolve_cli_for};
 use super::projects::{add_project, get_project, list_projects, project_id, project_summary, remove_project, touch_project};
 use super::queue::{queue_entry_for, queue_snapshot, set_max_concurrent};
 use super::runner::request_pause;
@@ -80,12 +81,17 @@ fn prd_rounds(root: &Path, state: &Value) -> Vec<Value> {
 
 fn task_detail(root: &Path, id: &str) -> Result<Value> {
     let dir = aipipe_dir(root).join("tasks").join(id);
-    let mut reviews: Vec<(u64, String)> = fs::read_dir(&dir).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_else(|_| vec![])
+    // review-<n>.md，或雙人審查的 review-<n>-<claude|codex>.md
+    let mut reviews: Vec<(u64, String, String)> = fs::read_dir(&dir).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_else(|_| vec![])
         .into_iter()
-        .filter_map(|f| f.strip_prefix("review-").and_then(|r| r.strip_suffix(".md")).and_then(|n| n.parse().ok()).map(|n| (n, f.clone())))
+        .filter_map(|f| {
+            let stem = f.strip_prefix("review-")?.strip_suffix(".md")?.to_string();
+            let (n, provider) = stem.split_once('-').map(|(n, p)| (n.to_string(), p.to_string())).unwrap_or((stem, String::new()));
+            Some((n.parse().ok()?, provider, f.clone()))
+        })
         .collect();
     reviews.sort();
-    let reviews: Vec<Value> = reviews.into_iter().map(|(_, f)| json!({ "name": f, "text": read_text(dir.join(&f)) })).collect();
+    let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
     let task = read_tasks(root)?.into_iter().find(|t| super::util::js_string(&t["id"]) == id).unwrap_or(Value::Null);
     Ok(json!({
         "id": id,
@@ -234,6 +240,16 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
         }
+        "config/models" => {
+            // roles 與 models 一起存；validate 會擋掉不合法的值。
+            let mut patch = json!({});
+            for key in ["roles", "models"] {
+                if body[key].is_object() {
+                    patch[key] = body[key].clone();
+                }
+            }
+            Ok(json!({ "config": patch_config(root, &patch)? }))
+        }
         "config/mode" => {
             if !body["mode"].as_str().is_some_and(|m| MODES.contains(&m)) {
                 return Err(http(400, "模式不正確"));
@@ -288,6 +304,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
             "usage" => return Ok(usage_snapshot(root, &load_config(root)?)),
             "skills" => return Ok(json!({ "skills": list_skills(root), "stages": SKILL_STAGES, "config": load_config(root)?["skills"] })),
             "skills/runs" => return Ok(json!({ "runs": list_skill_runs(root) })),
+            "models" => return Ok(available_models(root, &load_config(root)?)),
             "prd" => {
                 let state = read_state(root);
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
@@ -314,6 +331,30 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
         return Err(http(404, "not found"));
     }
     handle_action(root, rest, body)
+}
+
+/// 設定頁的模型選單：Codex 從 CLI 的 model/list 取得（含各模型支援的推理強度）；Claude 用 CLI 接受的別名，也能填完整名稱。
+fn available_models(root: &Path, cfg: &Value) -> Value {
+    let efforts = |list: &[&str]| list.iter().map(|e| json!(e)).collect::<Vec<_>>();
+    let claude_models: Vec<Value> = ["fable", "opus", "sonnet", "haiku"].iter()
+        .map(|m| json!({ "id": m, "name": m, "efforts": efforts(&["low", "medium", "high", "xhigh", "max"]) }))
+        .collect();
+    let claude = json!({ "models": claude_models, "error": null });
+    let codex = match resolve_cli_for(cfg, "codex", root).and_then(|spec| query_codex_rpc_with(&spec, root, "model/list", Some(json!({})), 20)) {
+        Ok(result) => {
+            let models: Vec<Value> = result["data"].as_array().into_iter().flatten().filter(|m| m["hidden"] != true).map(|m| json!({
+                "id": m["model"].as_str().or(m["id"].as_str()).unwrap_or(""),
+                "name": m["displayName"].as_str().or(m["id"].as_str()).unwrap_or(""),
+                "description": m["description"],
+                "default": m["isDefault"] == true,
+                "efforts": m["supportedReasoningEfforts"].as_array().into_iter().flatten().filter_map(|e| e["reasoningEffort"].as_str()).collect::<Vec<_>>(),
+                "defaultEffort": m["defaultReasoningEffort"],
+            })).collect();
+            json!({ "models": models, "error": null })
+        }
+        Err(_) => json!({ "models": [], "error": "無法從 Codex CLI 取得模型清單，可以直接填模型名稱" }),
+    };
+    json!({ "claude": claude, "codex": codex })
 }
 
 pub fn projects_payload() -> Value {

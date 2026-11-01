@@ -264,7 +264,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         let prd = fs::read_to_string(root.join(cfg_str(&cfg, "prd_path")))?;
         let res = run_agent(AgentOpts {
             root, cfg: &cfg, provider: cfg_str(&cfg["roles"], "author"), prompt: tasks_from_prd_prompt(root, &cfg, &prd),
-            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None,
+            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("author"),
         })?;
         if !res.ok {
             crate::bail!("作者 AI 產生任務失敗：{}", res.error_text());
@@ -314,7 +314,7 @@ pub fn run_skill(root: &Path, name: &str, input: &str, provider: Option<&str>, p
     let label = format!("Skill {name}");
     let result = run_agent(AgentOpts {
         root, cfg: &cfg, provider: provider.unwrap_or(cfg_str(&cfg["roles"], "author")), prompt, write: false, scope: &scope, label: &label,
-        stage: None, skills: Some(vec![name.to_string()]),
+        stage: None, skills: Some(vec![name.to_string()]), role: None,
     }).and_then(|r| if r.ok { Ok(r) } else { Err(super::AppError::new(r.error_text())) });
     let out = match result {
         Ok(r) => {

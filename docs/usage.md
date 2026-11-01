@@ -3,7 +3,7 @@
 桌面版頂列顯示本專案已記錄的 token 處理量，點擊可開啟「用量」頁。此頁提供：
 
 - Claude Code／Codex 各自在目前專案執行環境的最近一次與累計用量。
-- 輸入、輸出與快取輸入的細項，以及最近 20 次執行。
+- 輸入、輸出與快取輸入的細項，以及可展開的最近 20 次執行。
 - CLI 有提供時，顯示訂閱額度的各視窗剩餘百分比、重設時間與資料擷取時間。
 - 有容量與最近一次請求占用資料時，顯示 context 剩餘 tokens 與百分比。
 
@@ -13,7 +13,7 @@ Token 處理量包括快取讀取；Claude 的 cache-read／cache-creation 分�
 
 訂閱額度由服務端依帳號與視窗計算，無法把本機累計 tokens 換算成固定剩餘 tokens。Codex 使用官方 app-server 的 `account/rateLimits/read` 查詢，沒有建立模型 thread／turn。開啟用量頁時查詢一次（60 秒內重開不重複），也可按「更新訂閱額度」。
 
-Claude 使用 `rate_limit_event` 回報的 utilization 與 resetsAt；未提供比例時顯示未知，即使回報 rejected 也不自行推算 0%。更新按鈕查詢 Codex，Claude 顯示最近一次執行事件。
+Claude 使用 `rate_limit_event` 回報的 utilization 與 resetsAt；未提供比例時顯示未知，即使回報 rejected 也不自行推算 0%。更新按鈕也會嘗試以 Claude CLI 的 `/usage` 查詢，CLI 未提供資料時顯示查詢狀態並保留既有快照。
 
 Context 與訂閱額度不同。Claude 的 context 數字以最後一次模型請求的 tokens 和該模型回報的 contextWindow 估算，並標示「估算」。不使用多輪累計 tokens 推算 context。Codex 若沒有提供容量及最近一次請求資料則顯示未知。
 

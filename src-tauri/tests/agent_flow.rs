@@ -42,7 +42,7 @@ fn sessions(root: &Path) -> Vec<Value> {
 }
 
 fn agent<'a>(root: &'a Path, cfg: &'a Value, provider: &'a str, write: bool, stage: Option<&'a str>) -> AgentOpts<'a> {
-    AgentOpts { root, cfg, provider, prompt: "Write a PRD.".into(), write, scope: "prd", label: "test", stage, skills: None }
+    AgentOpts { root, cfg, provider, prompt: "Write a PRD.".into(), write, scope: "prd", label: "test", stage, skills: None, role: None }
 }
 
 fn mode(m: &str) -> Value {
@@ -186,7 +186,7 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
             ])
         };
         let (root, cfg) = fixture(&[provider], json!({ provider: { "events": events } }));
-        let result = run_agent(AgentOpts { root: &root, cfg: &cfg, provider, prompt: "test".into(), write: false, scope: "test", label: "test", stage: None, skills: None }).unwrap();
+        let result = run_agent(AgentOpts { root: &root, cfg: &cfg, provider, prompt: "test".into(), write: false, scope: "test", label: "test", stage: None, skills: None, role: None }).unwrap();
         assert!(result.ok, "{:?}", result.error);
         assert_eq!(result.text, "done");
         let expected = if provider == "claude" { 130 } else { 110 };
@@ -203,7 +203,11 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
 // ---------- 整個流程 ----------
 
 fn git_project(scenario: Value) -> (PathBuf, Value) {
-    let (root, mut cfg) = fixture(&["codex"], scenario);
+    git_project_with(&["codex"], scenario)
+}
+
+fn git_project_with(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
+    let (root, mut cfg) = fixture(providers, scenario);
     for role in ["author", "reviewer", "implementer", "code_reviewer"] {
         cfg["roles"][role] = json!("codex");
     }
@@ -324,4 +328,68 @@ fn 自動模式在功能分支上逐任務_commit() {
     assert!(git(&root, &["log", "-1", "--format=%s"]).starts_with("Revert"));
     assert!(!root.join("auto.txt").exists());
     assert_eq!(fs::read_to_string(root.join(&archive).join("meta.json")).unwrap(), meta_before);
+}
+
+// ---------- 每個角色的模型、雙人審查 ----------
+
+#[test]
+fn 每個角色的模型與推理強度會帶給實際執行的_cli() {
+    let (root, mut cfg) = fixture(&["codex"], json!({ "codex": { "rules": [{ "contains": "PRD 審查者", "text": "VERDICT: APPROVE" }], "text": "# PRD" } }));
+    cfg["models"]["author"]["codex"] = json!({ "model": "m-author", "effort": "high" });
+    cfg["codex"]["model"] = json!("m-default");
+    draft_prd(&root, &cfg, "idea", None).unwrap();
+    let c = calls(&root);
+    let args = |i: usize| c[i]["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let (author, reviewer) = (args(0), args(1));
+    assert!(author.windows(2).any(|w| w == ["-m", "m-author"]), "{author:?}");
+    assert!(author.contains(&"model_reasoning_effort=\"high\"".to_string()), "{author:?}");
+    // 審查者沒有自己的設定：用 codex.model，不帶推理強度。
+    assert!(reviewer.windows(2).any(|w| w == ["-m", "m-default"]), "{reviewer:?}");
+    assert!(!reviewer.iter().any(|a| a.starts_with("model_reasoning_effort")));
+}
+
+#[test]
+fn prd_雙人審查分別保存兩份意見_修訂時依_ai_分段() {
+    let scenario = json!({
+        "claude": { "rules": [{ "contains": "PRD 審查者", "text": "Claude 覺得可以
+VERDICT: APPROVE" }], "text": "# PRD" },
+        "codex": { "rules": [{ "contains": "PRD 審查者", "text": "Codex 要求補驗收標準
+VERDICT: REVISE" }], "text": "# PRD" },
+    });
+    let (root, mut cfg) = fixture(&["claude", "codex"], scenario);
+    cfg["roles"]["reviewer"] = json!("both");
+    cfg["max_prd_rounds"] = json!(1);
+    draft_prd(&root, &cfg, "idea", None).unwrap();
+    let rounds = read_state(&root)["prd"]["rounds"].as_array().unwrap().clone();
+    let reviews: Vec<(String, String)> = rounds.iter().filter(|r| r["kind"] == "review").map(|r| (r["provider"].as_str().unwrap().into(), r["verdict"].as_str().unwrap().into())).collect();
+    assert_eq!(reviews, vec![("claude".to_string(), "APPROVE".to_string()), ("codex".to_string(), "REVISE".to_string())]);
+    assert!(root.join(".aipipe/prd/review-1-claude.md").exists() && root.join(".aipipe/prd/review-1-codex.md").exists());
+    // 有一份沒通過就修訂，修訂者看到兩份分開的意見。
+    let revise = calls(&root).into_iter().find(|c| c["prompt"].as_str().unwrap().contains("請根據審查者的意見修訂")).unwrap();
+    let prompt = revise["prompt"].as_str().unwrap();
+    assert!(prompt.contains("### Claude 審查意見（APPROVE）") && prompt.contains("### Codex 審查意見（REVISE）"), "{prompt}");
+}
+
+#[test]
+fn 程式碼雙人審查_兩份都通過才算通過() {
+    let mut scenario = pipeline_scenario();
+    scenario["claude"] = json!({ "rules": [{ "contains": "程式碼審查者", "text": "Claude 看過
+VERDICT: PASS" }] });
+    let (root, mut cfg) = git_project_with(&["claude", "codex"], scenario);
+    cfg["roles"]["code_reviewer"] = json!("both");
+    save_config(&root, &cfg).unwrap();
+    let file = root.join(cfg["prd_path"].as_str().unwrap());
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "# PRD").unwrap();
+    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    generate_tasks(&root).unwrap();
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
+    let dir = root.join(".aipipe/tasks/1");
+    assert!(fs::read_to_string(dir.join("review-1-claude.md")).unwrap().contains("Claude 看過"));
+    assert!(dir.join("review-1-codex.md").exists());
+    let ts = &read_state(&root)["tasks"]["1"];
+    assert_eq!(ts["review_verdict"], "PASS");
+    assert_eq!(ts["review_verdicts"], json!({ "claude": "PASS", "codex": "PASS" }));
+    let labels: Vec<String> = sessions(&root).iter().filter(|s| s["stage"] == "code_review").map(|s| s["label"].as_str().unwrap().into()).collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
 }

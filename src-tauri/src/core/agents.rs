@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use super::agent_errors::{explain_usage_limit, usage_limit, UsageLimit};
 use super::capabilities::{other_provider, probe_provider, select_provider};
+use super::config::model_for;
 use super::proc::{last_lines, resolve_cli_for, run, RunOpts};
 use super::runtime::cli_environment;
 use super::skills::prepare_skills;
@@ -27,6 +28,8 @@ pub struct AgentOpts<'a> {
     pub scope: &'a str,
     pub label: &'a str,
     pub stage: Option<&'a str>,
+    /// 角色（author／reviewer／implementer／code_reviewer），決定要用的模型與推理強度。
+    pub role: Option<&'a str>,
     /// 明確指定的 Skills；None 時用 cfg.skills[stage]。
     pub skills: Option<Vec<String>>,
 }
@@ -123,9 +126,9 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     fs::write(&prompt_file, &prompt)?;
     let started = Instant::now();
     let outcome = if provider == "codex" {
-        run_codex(root, cfg, &prompt, opts.write, scope, &mut on_event)
+        run_codex(root, cfg, opts.role, &prompt, opts.write, scope, &mut on_event)
     } else {
-        run_claude(root, cfg, &prompt, opts.write, scope, &mut on_event)
+        run_claude(root, cfg, opts.role, &prompt, opts.write, scope, &mut on_event)
     };
     let snapshot = telemetry.snapshot();
     let with_status = |status: &str, extra: Value| {
@@ -181,7 +184,7 @@ fn summarize_tool_input(input: &Value) -> String {
     v.chars().take(160).collect()
 }
 
-fn run_claude(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+fn run_claude(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
     let spec = resolve_cli_for(cfg, "claude", root)?;
     // -p + stream-json 需要 --verbose 才會輸出逐步事件。
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].map(String::from).to_vec();
@@ -195,8 +198,12 @@ fn run_claude(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, 
         // dontAsk：沒有預先允許的工具一律拒絕；再明確禁止編輯類工具。
         args.extend(["--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"].map(String::from));
     }
-    if let Some(model) = cfg["claude"]["model"].as_str().filter(|m| !m.is_empty()) {
-        args.extend(["--model".into(), model.into()]);
+    let (model, effort) = model_for(cfg, role, "claude");
+    if !model.is_empty() {
+        args.extend(["--model".into(), model]);
+    }
+    if !effort.is_empty() {
+        args.extend(["--effort".into(), effort]);
     }
     let (mut final_text, mut is_error, mut error_text) = (String::new(), false, String::new());
     let mut handle = |line: &str| {
@@ -259,7 +266,7 @@ fn run_claude(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, 
 
 static READ_ONLY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^sandbox:\s*read-only").unwrap());
 
-fn run_codex(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
+fn run_codex(root: &Path, cfg: &Value, role: Option<&str>, prompt: &str, write: bool, scope: &str, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
     let spec = resolve_cli_for(cfg, "codex", root)?;
     let tmp = aipipe_dir(root).join("tmp");
     fs::create_dir_all(&tmp)?;
@@ -268,8 +275,12 @@ fn run_codex(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, o
         "exec".into(), "--json".into(), "--sandbox".into(), if write { "workspace-write" } else { "read-only" }.into(),
         "-C".into(), spec.to_path(root)?, "--color".into(), "never".into(), "-o".into(), spec.to_path(&out_file)?,
     ];
-    if let Some(model) = cfg["codex"]["model"].as_str().filter(|m| !m.is_empty()) {
-        args.extend(["-m".into(), model.into()]);
+    let (model, effort) = model_for(cfg, role, "codex");
+    if !model.is_empty() {
+        args.extend(["-m".into(), model]);
+    }
+    if !effort.is_empty() {
+        args.extend(["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]);
     }
     // 唯讀角色也帶上，否則 Windows 上 Codex 連讀檔用的 shell 指令都無法啟動。
     if let Some(sandbox) = cfg["codex"]["windows_sandbox"].as_str().filter(|s| !s.is_empty() && spec.runtime == "windows") {
@@ -321,6 +332,61 @@ fn run_codex(root: &Path, cfg: &Value, prompt: &str, write: bool, scope: &str, o
         });
     }
     Ok(CliOutcome { ok: true, text, error: None })
+}
+
+/// 一份審查結果。
+#[derive(Clone, Debug)]
+pub struct Review {
+    pub provider: String,
+    pub text: String,
+    pub pass: bool,
+    pub verdict: String,
+    pub result: AgentResult,
+}
+
+pub fn provider_name(provider: &str) -> &'static str {
+    if provider == "claude" { "Claude" } else { "Codex" }
+}
+
+/// 依角色設定審查一次，或在 both 時由 Claude 與 Codex 各審一次（依序執行，log 不會交錯）。
+/// both 但只有一個 AI 可用時只跑那一個；任何一份審查失敗就回傳錯誤。
+pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> {
+    let role = base.role.unwrap_or("reviewer");
+    let mut providers = super::config::role_providers(base.cfg, role);
+    if providers.len() > 1 {
+        let available: Vec<String> = providers.iter().filter(|p| probe_provider(base.root, base.cfg, p)["available"] == true).cloned().collect();
+        if available.is_empty() {
+            providers.truncate(1); // 交給 run_agent 回報「沒有可用的 AI」
+        } else {
+            if available.len() < providers.len() {
+                append_log(base.root, base.scope, &format!("雙人審查：只有 {} 可用，改為單人審查", available.join("、")));
+            }
+            providers = available;
+        }
+    }
+    let dual = providers.len() > 1;
+    let mut reviews = Vec::new();
+    for provider in providers {
+        let label = if dual { format!("{}（{}）", base.label, provider_name(&provider)) } else { base.label.to_string() };
+        let result = run_agent(AgentOpts {
+            root: base.root, cfg: base.cfg, provider: &provider, prompt: base.prompt.clone(), write: base.write, scope: base.scope,
+            label: &label, stage: base.stage, skills: base.skills.clone(), role: base.role,
+        })?;
+        if !result.ok {
+            crate::bail!("{}審查 AI 失敗：{}", if dual { format!("{} ", provider_name(&provider)) } else { String::new() }, result.error_text());
+        }
+        let (pass, verdict) = parse_verdict(&result.text, pass_words);
+        reviews.push(Review { provider: result.provider.clone(), text: result.text.clone(), pass, verdict, result });
+    }
+    Ok(reviews)
+}
+
+/// 給修訂者看的審查意見：雙人審查時依 AI 分段。
+pub fn combine_reviews(reviews: &[Review]) -> String {
+    if reviews.len() == 1 {
+        return reviews[0].text.clone();
+    }
+    reviews.iter().map(|r| format!("### {} 審查意見（{}）\n\n{}", provider_name(&r.provider), r.verdict, r.text)).collect::<Vec<_>>().join("\n\n")
 }
 
 static VERDICT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)VERDICT\s*\**\s*[:：]\s*\**\s*([A-Z_]+)").unwrap());

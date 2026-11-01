@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-use super::agents::{parse_verdict, run_agent, AgentOpts};
+use super::agents::{combine_reviews, run_agent, run_reviews, AgentOpts};
 use super::archive::archive_tasks;
 use super::backlog::update_item;
 use super::config::{cfg_str, load_config};
@@ -117,7 +117,7 @@ fn skills_for(cfg: &Value, stage: &str, task: &Value) -> Vec<String> {
 /// run_agent 的捷徑：角色換成 cfg.roles 裡的 provider。
 #[allow(clippy::too_many_arguments)]
 fn agent(root: &Path, cfg: &Value, role: &str, prompt: String, write: bool, scope: &str, label: &str, stage: &str, skills: Option<Vec<String>>) -> Result<super::agents::AgentResult> {
-    run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], role), prompt, write, scope, label, stage: Some(stage), skills })
+    run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], role), prompt, write, scope, label, stage: Some(stage), skills, role: Some(role) })
 }
 
 /// 執行單一任務：實作 → 驗證 → 審查 → 修正（最多 max_fix_rounds 輪）→ 更新 handover →
@@ -191,13 +191,21 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         fs::write(dir.join("diff.patch"), &diff).map_err(AppError::from)?;
         let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
         let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
-        let review = agent(root, cfg, "code_reviewer", code_review_prompt(&task, shown, &summary), false, scope, &format!("程式碼審查 第 {} 次", round + 1), "code_review", Some(skills_for(cfg, "code_review", &task)))?;
-        if !review.ok {
-            return Err(TaskError::Stuck(format!("審查 AI 失敗：{}", review.error_text())));
+        let label = format!("程式碼審查 第 {} 次", round + 1);
+        let reviews = run_reviews(AgentOpts {
+            root, cfg, provider: "", prompt: code_review_prompt(&task, shown, &summary), write: false, scope, label: &label,
+            stage: Some("code_review"), skills: Some(skills_for(cfg, "code_review", &task)), role: Some("code_reviewer"),
+        }, &["PASS"]).map_err(|e| TaskError::Stuck(e.message))?;
+        // 雙人審查時每個 AI 一個檔案（review-<n>-<ai>.md），兩份都 PASS 才算通過。
+        let mut verdicts = json!({});
+        for r in &reviews {
+            let name = if reviews.len() > 1 { format!("review-{}-{}.md", round + 1, r.provider) } else { format!("review-{}.md", round + 1) };
+            fs::write(dir.join(name), &r.text).map_err(AppError::from)?;
+            verdicts[r.provider.as_str()] = json!(r.verdict);
         }
-        let (pass, verdict) = parse_verdict(&review.text, &["PASS"]);
-        fs::write(dir.join(format!("review-{}.md", round + 1)), &review.text).map_err(AppError::from)?;
-        set_task(root, id, json!({ "review_verdict": verdict, "reviews": round + 1 }))?;
+        let pass = reviews.iter().all(|r| r.pass);
+        let verdict = if reviews.len() == 1 { reviews[0].verdict.clone() } else if pass { "PASS".into() } else { "FAIL".into() };
+        set_task(root, id, json!({ "review_verdict": verdict, "review_verdicts": verdicts, "reviews": round + 1 }))?;
         if pass {
             break;
         }
@@ -206,7 +214,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         }
         round += 1;
         set_task(root, id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
-        let fix = agent(root, cfg, "implementer", fix_review_prompt(cfg, &task, &review.text, round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
+        let fix = agent(root, cfg, "implementer", fix_review_prompt(cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
         if !fix.ok {
             return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
         }

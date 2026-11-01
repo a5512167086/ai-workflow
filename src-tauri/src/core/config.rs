@@ -27,7 +27,11 @@ pub fn default_config() -> Value {
         // 需求待辦清單與功能封存，都放在專案裡可以 commit。
         "backlog_path": "docs/aipipe/backlog.json",
         "archive_dir": "docs/prd",
+        // reviewer／code_reviewer 可以是 both：Claude 與 Codex 各審一次，兩份都通過才算通過。
         "roles": { "author": "claude", "reviewer": "codex", "implementer": "claude", "code_reviewer": "codex" },
+        // 每個角色、每個 AI 的模型與推理強度；空字串＝沿用 claude.model／codex.model（再空就是 CLI 預設）。
+        // 依實際執行的 AI 取用，所以單 AI 模式或額度切換時也會套用對應的設定。
+        "models": default_models(),
         "max_fix_rounds": 3,
         "max_prd_rounds": 2,
         "num_tasks": 0,
@@ -44,15 +48,47 @@ pub fn default_config() -> Value {
         "cli": { "claude": "", "codex": "" },
         "claude": {
             "model": "",
+            "effort": "",
             // 實作者在 -p 模式下額外允許的工具，例如 "Bash(npm test:*)"；預設只允許編輯。
             "allowed_tools": []
         },
         "codex": {
             "model": "",
+            "effort": "",
             // Windows 上 Codex 需要 windows.sandbox 才會真的啟用 workspace-write，否則會默默降成 read-only。
             "windows_sandbox": if cfg!(windows) { "elevated" } else { "" }
         }
     })
+}
+
+fn default_models() -> Value {
+    let pair = || json!({ "claude": { "model": "", "effort": "" }, "codex": { "model": "", "effort": "" } });
+    json!({ "author": pair(), "reviewer": pair(), "implementer": pair(), "code_reviewer": pair() })
+}
+
+/// 可以設成 both（雙人審查）的角色。
+pub const REVIEW_ROLES: [&str; 2] = ["reviewer", "code_reviewer"];
+
+/// 角色實際要跑的 AI：both 展開成兩個。
+pub fn role_providers(cfg: &Value, role: &str) -> Vec<String> {
+    match cfg["roles"][role].as_str().unwrap_or("claude") {
+        "both" => PROVIDERS.iter().map(|p| p.to_string()).collect(),
+        p => vec![p.to_string()],
+    }
+}
+
+/// 某個角色用某個 AI 時的 (模型, 推理強度)；角色沒設定就用該 AI 的全域設定。
+pub fn model_for(cfg: &Value, role: Option<&str>, provider: &str) -> (String, String) {
+    let pick = |key: &str| {
+        role.and_then(|r| cfg["models"][r][provider][key].as_str()).filter(|s| !s.is_empty())
+            .or(cfg[provider][key].as_str()).unwrap_or("").to_string()
+    };
+    (pick("model"), pick("effort"))
+}
+
+/// 模型名稱與推理強度只允許安全字元（會變成 CLI 參數）。
+fn safe_token(v: &str) -> bool {
+    v.chars().all(|c| c.is_ascii_alphanumeric() || "._:-[]/".contains(c))
 }
 
 /// 物件遞迴合併，其他型別（含陣列）直接覆蓋。
@@ -91,8 +127,24 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
         errors.push(format!("mode 必須是 {}", MODES.join(" / ")));
     }
     for role in ROLES {
-        if !cfg["roles"].get(role).and_then(Value::as_str).is_some_and(|p| PROVIDERS.contains(&p)) {
-            errors.push(format!("roles.{role} 必須是 {}", PROVIDERS.join(" / ")));
+        let review = REVIEW_ROLES.contains(&role);
+        if !cfg["roles"].get(role).and_then(Value::as_str).is_some_and(|p| PROVIDERS.contains(&p) || (review && p == "both")) {
+            errors.push(format!("roles.{role} 必須是 {}{}", PROVIDERS.join(" / "), if review { " / both" } else { "" }));
+        }
+        for provider in PROVIDERS {
+            for key in ["model", "effort"] {
+                let v = &cfg["models"][role][provider][key];
+                if !(v.is_null() || v.as_str().is_some_and(safe_token)) {
+                    errors.push(format!("models.{role}.{provider}.{key} 格式不正確"));
+                }
+            }
+        }
+    }
+    for provider in PROVIDERS {
+        for key in ["model", "effort"] {
+            if !cfg[provider][key].as_str().is_none_or(safe_token) {
+                errors.push(format!("{provider}.{key} 格式不正確"));
+            }
         }
     }
     for key in ["max_fix_rounds", "max_prd_rounds"] {
@@ -215,6 +267,24 @@ mod tests {
         let mut c = default_config();
         c["backlog_path"] = json!("C:\\abs\\b.json");
         assert!(!validate_config(&c).is_empty());
+    }
+
+    #[test]
+    fn 角色模型_both_與格式檢查() {
+        let mut cfg = default_config();
+        cfg["claude"]["model"] = json!("sonnet");
+        cfg["models"]["implementer"]["claude"] = json!({ "model": "opus", "effort": "high" });
+        assert_eq!(model_for(&cfg, Some("implementer"), "claude"), ("opus".into(), "high".into()));
+        assert_eq!(model_for(&cfg, Some("reviewer"), "claude"), ("sonnet".into(), "".into()));
+        assert_eq!(model_for(&cfg, None, "codex"), ("".into(), "".into()));
+        cfg["roles"]["code_reviewer"] = json!("both");
+        assert!(validate_config(&cfg).is_empty());
+        assert_eq!(role_providers(&cfg, "code_reviewer"), ["claude", "codex"]);
+        cfg["roles"]["implementer"] = json!("both");
+        cfg["models"]["author"]["codex"]["model"] = json!("x; rm -rf");
+        let errors = validate_config(&cfg);
+        assert!(errors.iter().any(|e| e.starts_with("roles.implementer")));
+        assert!(errors.iter().any(|e| e.starts_with("models.author.codex.model")));
     }
 
     #[test]

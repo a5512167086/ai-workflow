@@ -464,6 +464,11 @@ pub fn run_capture(mut cmd: Command, timeout: Duration) -> std::io::Result<(Opti
 
 /// 查詢 Codex 控制面（JSON-RPC over stdio），不建立對話也不跑模型。
 pub fn query_codex_rpc(spec: &CliSpec, cwd: &Path, method: &str, timeout_sec: u64) -> Result<Value> {
+    query_codex_rpc_with(spec, cwd, method, None, timeout_sec)
+}
+
+/// 同 query_codex_rpc，可以帶 params（例如 model/list）。
+pub fn query_codex_rpc_with(spec: &CliSpec, cwd: &Path, method: &str, params: Option<Value>, timeout_sec: u64) -> Result<Value> {
     let cmd = build_command(Some(spec), &["app-server".into()], Some(cwd), None)?;
     let mut cmd = cmd;
     cmd.env_clear().envs(clean_env());
@@ -514,7 +519,11 @@ pub fn query_codex_rpc(spec: &CliSpec, cwd: &Path, method: &str, timeout_sec: u6
                 return finish(&mut child, Err(AppError::new("CLI 不支援額度查詢初始化")));
             }
             let _ = send(json!({ "method": "initialized", "params": {} }));
-            let _ = send(json!({ "id": 2, "method": method }));
+            let mut request = json!({ "id": 2, "method": method });
+            if let Some(p) = &params {
+                request["params"] = p.clone();
+            }
+            let _ = send(request);
         } else if message["id"] == 2 {
             if !message["error"].is_null() {
                 return finish(&mut child, Err(AppError::new("無法取得訂閱額度，請確認 CLI 版本與登入狀態")));

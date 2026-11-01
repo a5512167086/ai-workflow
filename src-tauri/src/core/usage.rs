@@ -1,12 +1,15 @@
 //! 用量與訂閱額度（對應 legacy/src/usage.js）。存在 .aipipe/usage.json。
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::home::with_lock;
-use super::proc::{query_codex_rpc, resolve_cli_for, CliSpec};
+use super::home::{aipipe_home, with_lock};
+use super::proc::{query_codex_rpc, resolve_cli_for, run, CliSpec, RunOpts};
 use super::runtime::cli_environment;
 use super::util::{now_iso, read_json, resolve, write_json};
 use super::Result;
@@ -200,7 +203,7 @@ impl Telemetry {
             if ty == "rate_limit_event" && event["rate_limit_info"].is_object() {
                 let info = &event["rate_limit_info"];
                 let used = number(&info["utilization"]).filter(|r| *r <= 1.0).map(|r| r * 100.0);
-                let name = info["rateLimitType"].as_str().filter(|s| !s.is_empty()).unwrap_or("Claude 訂閱視窗").to_string();
+                let name = claude_window_name(info["rateLimitType"].as_str().filter(|s| !s.is_empty()).unwrap_or("Claude 訂閱視窗"));
                 let window = json!({
                     "name": name, "usedPercent": opt(used), "remainingPercent": opt(used.map(|u| 100.0 - u)),
                     "resetsAt": epoch(&info["resetsAt"]), "status": info["status"], "source": "claude-cli-event",
@@ -238,10 +241,72 @@ pub fn record_telemetry(root: &Path, session: &Value, telemetry: &Value) -> Resu
             "label": session["label"], "status": session["status"], "updatedAt": now_iso(),
             "tokens": telemetry["tokens"], "context": telemetry["context"],
         });
-        if telemetry["limits"].as_array().is_some_and(|l| !l.is_empty()) {
-            store["limits"][session_key(session).as_str()] = json!({ "windows": telemetry["limits"], "checkedAt": now_iso(), "error": null });
+    })?;
+    if let Some(windows) = telemetry["limits"].as_array().filter(|l| !l.is_empty()) {
+        merge_limits(&session_key(session), windows, Value::Null, false)?;
+    }
+    Ok(())
+}
+
+/// 訂閱額度屬於帳號而不是專案：存在 ~/.aipipe/limits.json，所有專案共用。鍵是 provider|runtime|distro。
+fn limits_file() -> PathBuf {
+    aipipe_home().join("limits.json")
+}
+
+/// 寫入一組額度視窗。replace=true 時整組取代（主動查詢的完整結果）；false 時依名稱合併（執行中 CLI 回報的單一視窗）。
+fn merge_limits(key: &str, windows: &[Value], error: Value, replace: bool) -> Result<()> {
+    with_lock("limits", || {
+        let mut all = read_json(limits_file()).filter(Value::is_object).unwrap_or(json!({}));
+        let mut merged: Vec<Value> = if replace { vec![] } else { all[key]["windows"].as_array().cloned().unwrap_or_default() };
+        for w in windows {
+            merged.retain(|old| old["name"] != w["name"]);
+            merged.push(w.clone());
         }
+        all[key] = json!({ "windows": merged, "checkedAt": now_iso(), "error": error });
+        write_json(&limits_file(), &all)
     })
+}
+
+/// Claude 事件的視窗名稱對應到 /usage 的名稱，兩種來源才能合併成同一個視窗。
+pub fn claude_window_name(event_name: &str) -> String {
+    match event_name {
+        "five_hour" => "Current session".into(),
+        "seven_day" => "Current week (all models)".into(),
+        "seven_day_opus" => "Current week (Opus)".into(),
+        "seven_day_sonnet" => "Current week (Sonnet only)".into(),
+        other => other.into(),
+    }
+}
+
+static CLAUDE_USAGE_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(.+?):\s*(\d+(?:\.\d+)?)%\s*used(?:\s*·\s*resets\s+(.+?))?\s*$").unwrap());
+
+/// 解析 `claude -p /usage` 的文字：「Current week (all models): 52% used · resets Nov 6, 6pm (Asia/Taipei)」。
+/// 重設時間是 CLI 給的文字（含時區），原樣保留在 resetsText。
+pub fn parse_claude_usage(text: &str) -> Vec<Value> {
+    text.lines().filter_map(|line| {
+        let c = CLAUDE_USAGE_LINE.captures(line)?;
+        let used: f64 = c[2].parse().ok()?;
+        let used = used.min(100.0);
+        Some(json!({
+            "name": c[1].trim(), "usedPercent": num(used), "remainingPercent": num(100.0 - used), "resetsAt": null,
+            "resetsText": c.get(3).map(|m| m.as_str().trim()), "source": "claude-usage-command",
+        }))
+    }).collect()
+}
+
+/// 用 `claude -p /usage` 查 Claude 訂閱額度：這是 CLI 本機處理的指令，不會啟動模型對話、不耗額度。
+pub fn query_claude_usage(spec: &CliSpec, cwd: &Path) -> Result<Vec<Value>> {
+    let args: Vec<String> = ["-p", "/usage", "--output-format", "json"].map(String::from).to_vec();
+    let res = run(spec, &args, RunOpts { cwd: Some(cwd), timeout_sec: 60, ..Default::default() })?;
+    let out = res.stdout.trim();
+    let parsed: Value = match (out.find('{'), out.rfind('}')) {
+        (Some(a), Some(b)) if a < b => serde_json::from_str(&out[a..=b]).unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
+    if res.code != 0 || parsed["is_error"] == true {
+        crate::bail!("Claude CLI 查詢失敗");
+    }
+    Ok(parse_claude_usage(parsed["result"].as_str().unwrap_or("")))
 }
 
 fn total_of(s: &Value) -> Option<f64> {
@@ -259,9 +324,12 @@ pub fn usage_snapshot_at(root: &Path, cfg: &Value, now: chrono::DateTime<chrono:
     let known: Vec<&Value> = sessions.iter().filter(|s| total_of(s).is_some()).collect();
     let total = (!known.is_empty()).then(|| known.iter().filter_map(|s| total_of(s)).sum::<f64>());
     let measured_sessions = known.len();
+    // 全域的額度優先；舊版存在專案裡的額度只在全域沒有資料時使用。
     let mut limit_map: HashMap<String, Value> = HashMap::new();
-    for (k, v) in store["limits"].as_object().into_iter().flatten() {
-        limit_map.insert(k.clone(), v.clone());
+    for source in [store["limits"].clone(), read_json(limits_file()).unwrap_or(Value::Null)] {
+        for (k, v) in source.as_object().into_iter().flatten() {
+            limit_map.insert(k.clone(), v.clone());
+        }
     }
     let providers: Vec<Value> = ["claude", "codex"].iter().map(|provider| {
         let env = cli_environment(cfg, provider, root);
@@ -296,22 +364,33 @@ pub fn usage_snapshot_at(root: &Path, cfg: &Value, now: chrono::DateTime<chrono:
 }
 
 pub fn refresh_usage_limits(root: &Path, cfg: &Value) -> Result<Value> {
-    refresh_usage_limits_with(root, cfg, &|spec, cwd, method| query_codex_rpc(spec, cwd, method, 15))
+    refresh_usage_limits_with(root, cfg, &|spec, cwd, method| query_codex_rpc(spec, cwd, method, 15), &query_claude_usage)
 }
 
-pub fn refresh_usage_limits_with(root: &Path, cfg: &Value, query: &dyn Fn(&CliSpec, &Path, &str) -> Result<Value>) -> Result<Value> {
-    let env = cli_environment(cfg, "codex", root);
-    let (windows, error) = match resolve_cli_for(cfg, "codex", root).and_then(|spec| query(&spec, root, "account/rateLimits/read")) {
-        Ok(result) => {
-            let windows = normalize_codex_limits(&result);
-            let error = if windows.is_empty() { json!("CLI 未提供訂閱額度資料") } else { Value::Null };
-            (windows, error)
+/// 同時查詢 Codex（app-server）與 Claude（/usage）的訂閱額度，都不會啟動模型對話。
+pub fn refresh_usage_limits_with(
+    root: &Path,
+    cfg: &Value,
+    codex: &(dyn Fn(&CliSpec, &Path, &str) -> Result<Value> + Sync),
+    claude: &(dyn Fn(&CliSpec, &Path) -> Result<Vec<Value>> + Sync),
+) -> Result<Value> {
+    let (codex_result, claude_result) = std::thread::scope(|s| {
+        let a = s.spawn(|| resolve_cli_for(cfg, "codex", root).and_then(|spec| codex(&spec, root, "account/rateLimits/read")).map(|r| normalize_codex_limits(&r)));
+        let b = s.spawn(|| resolve_cli_for(cfg, "claude", root).and_then(|spec| claude(&spec, root)));
+        (a.join().unwrap_or_else(|_| crate::bail!("查詢失敗")), b.join().unwrap_or_else(|_| crate::bail!("查詢失敗")))
+    });
+    for (provider, result, failed) in [
+        ("codex", codex_result, "無法查詢 Codex 額度：請確認 CLI 已安裝、登入且版本支援 app-server"),
+        ("claude", claude_result, "無法查詢 Claude 額度：請確認 Claude Code 已安裝並以訂閱登入"),
+    ] {
+        let env = cli_environment(cfg, provider, root);
+        let key = environment_key(provider, &env.runtime, &env.distro);
+        match result {
+            Ok(windows) if !windows.is_empty() => merge_limits(&key, &windows, Value::Null, true)?,
+            Ok(_) => merge_limits(&key, &[], json!("CLI 未提供訂閱額度資料"), false)?,
+            Err(_) => merge_limits(&key, &[], json!(failed), false)?,
         }
-        Err(_) => (vec![], json!("無法查詢 Codex 額度：請確認 CLI 已安裝、登入且版本支援 app-server")),
-    };
-    change(root, |store| {
-        store["limits"][environment_key("codex", &env.runtime, &env.distro).as_str()] = json!({ "windows": windows, "error": error, "checkedAt": now_iso() });
-    })?;
+    }
     Ok(usage_snapshot(root, cfg))
 }
 
@@ -398,12 +477,33 @@ mod tests {
         assert_eq!(snap["unknownSessions"], 1);
         let codex = |s: &Value| s["providers"].as_array().unwrap().iter().find(|r| r["provider"] == "codex").unwrap().clone();
         assert!(codex(&snap)["limits"].is_null());
+        cfg["cli"]["claude"] = cfg["cli"]["codex"].clone();
         let result = refresh_usage_limits_with(&root, &cfg, &|_, _, method| {
             assert_eq!(method, "account/rateLimits/read");
             Ok(json!({ "rateLimits": { "primary": { "usedPercent": 30, "windowDurationMins": 300, "resetsAt": 1000000000 } } }))
-        }).unwrap();
+        }, &|_, _| Ok(parse_claude_usage("Current week (all models): 52% used · resets Nov 6, 6pm (Asia/Taipei)"))).unwrap();
         let limits = codex(&result)["limits"].clone();
         assert_eq!(limits["windows"][0]["remainingPercent"], 70);
         assert_eq!(limits["windows"][0]["expired"], true);
+        // 額度存在全域，另一個專案也看得到；CLI 執行中回報的同名視窗會合併而不是整組覆蓋。
+        let other = temp_dir("aipipe-usage-other-");
+        let claude = |s: &Value| s["providers"].as_array().unwrap().iter().find(|r| r["provider"] == "claude").unwrap().clone();
+        assert_eq!(claude(&usage_snapshot(&other, &cfg))["limits"]["windows"][0]["remainingPercent"], 48);
+        let mut t = Telemetry::new("claude");
+        let event = t.accept(&json!({ "type": "rate_limit_event", "rate_limit_info": { "rateLimitType": "five_hour", "utilization": 0.5, "status": "allowed" } }));
+        record_telemetry(&other, &json!({ "id": "c", "provider": "claude", "runtime": "windows", "label": "x", "status": "done" }), &event).unwrap();
+        let names: Vec<Value> = claude(&usage_snapshot(&root, &cfg))["limits"]["windows"].as_array().unwrap().iter().map(|w| w["name"].clone()).collect();
+        assert_eq!(names, vec![json!("Current week (all models)"), json!("Current session")]);
+    }
+
+    #[test]
+    fn 解析_claude_usage_輸出() {
+        let text = "You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 68% used · resets Nov 2, 2:20am (Asia/Taipei)\nCurrent week (all models): 52% used · resets Nov 6, 6pm (Asia/Taipei)";
+        let w = parse_claude_usage(text);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0]["name"], "Current session");
+        assert_eq!(w[0]["remainingPercent"], 32);
+        assert_eq!(w[1]["resetsText"], "Nov 6, 6pm (Asia/Taipei)");
+        assert!(parse_claude_usage("no usage here").is_empty());
     }
 }

@@ -63,6 +63,10 @@ function renderTop() {
 }
 
 const tokenNumber = value => typeof value === 'number' ? value.toLocaleString('zh-TW') : '未知';
+const WINDOW_NAMES = {
+  'Current session': '目前 session（5 小時）', 'Current week (all models)': '本週（所有模型）',
+  'Current week (Opus)': '本週（Opus）', 'Current week (Sonnet only)': '本週（Sonnet）',
+};
 const usageTime = value => value ? new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + '（台北）' : '未提供';
 function renderUsage(usage = snap?.usage) {
   if (!usage) return;
@@ -83,18 +87,19 @@ function renderUsage(usage = snap?.usage) {
     paragraph(card, `輸入內含快取讀取 ${tokenNumber(latest?.tokens?.cacheReadTokens)} ／快取寫入 ${tokenNumber(latest?.tokens?.cacheWriteTokens)}`, 'hint');
     const quotaHeading = document.createElement('h3'); quotaHeading.textContent = '訂閱額度剩餘'; card.append(quotaHeading);
     const windows = provider.limits?.windows || [];
-    if (!windows.length) paragraph(card, provider.limits?.error || (provider.provider === 'claude' ? '未知：等待 Claude CLI 回報限額事件' : '未知：按「更新訂閱額度」查詢'), 'hint');
+    if (!windows.length) paragraph(card, provider.limits?.error || '未知：按「更新訂閱額度」查詢', 'hint');
     for (const window of windows) {
       const remaining = window.expired ? null : window.remainingPercent;
       const duration = window.windowMinutes ? `（${window.windowMinutes % 1440 === 0 ? window.windowMinutes / 1440 + ' 天' : window.windowMinutes % 60 === 0 ? window.windowMinutes / 60 + ' 小時' : window.windowMinutes + ' 分鐘'}視窗）` : '';
-      paragraph(card, `${window.name}${duration}：${typeof remaining === 'number' ? remaining.toFixed(1) + '%' : '未知'}${window.status === 'rejected' && !window.expired ? ' · 已觸及限額' : ''}`);
+      const name = WINDOW_NAMES[window.name] || window.name;
+      paragraph(card, `${name}${duration}：${typeof remaining === 'number' ? remaining.toFixed(1) + '%' : '未知'}${window.status === 'rejected' && !window.expired ? ' · 已觸及限額' : ''}`);
       if (typeof remaining === 'number') {
         const meter = document.createElement('progress'); meter.max = 100; meter.value = remaining;
-        meter.setAttribute('aria-label', `${window.name} 訂閱額度剩餘百分比`); card.append(meter);
+        meter.setAttribute('aria-label', `${name} 訂閱額度剩餘百分比`); card.append(meter);
       }
-      paragraph(card, `重設：${usageTime(window.resetsAt)}${window.expired ? '；視窗已過期，請更新' : ''}`, 'hint');
+      paragraph(card, `重設：${window.resetsText || usageTime(window.resetsAt)}${window.expired ? '；視窗已過期，請更新' : ''}`, 'hint');
     }
-    if (provider.limits?.checkedAt) paragraph(card, `額度資料擷取：${usageTime(provider.limits.checkedAt)} · ${provider.provider === 'codex' ? 'Codex 官方查詢' : 'Claude CLI 回報'}`, 'hint');
+    if (provider.limits?.checkedAt) paragraph(card, `額度資料擷取：${usageTime(provider.limits.checkedAt)} · ${provider.provider === 'codex' ? 'Codex 官方查詢' : 'Claude CLI'}・所有專案共用`, 'hint');
     const context = latest?.context;
     const contextHeading = document.createElement('h3'); contextHeading.textContent = '最近一次請求的 context 剩餘'; card.append(contextHeading);
     paragraph(card, context ? `${context.remainingPercent.toFixed(1)}% · ${tokenNumber(context.remainingTokens)} / ${tokenNumber(context.capacity)} tokens${context.estimated ? '（依最後一次模型請求估算）' : '（CLI 回報）'}` : '未知：CLI 未提供可用的 context 容量與占用資料', 'hint');
@@ -113,7 +118,7 @@ let usageRefreshBusy = false, lastUsageRefresh = 0;
 async function refreshUsage() {
   if (usageRefreshBusy) return;
   usageRefreshBusy = true; $('#btn-usage-refresh').disabled = true;
-  $('#usage-refresh-status').textContent = '正在查詢 Codex 訂閱額度；不會啟動模型對話。Claude 顯示最近一次 CLI 回報。';
+  $('#usage-refresh-status').textContent = '正在查詢 Claude 與 Codex 的訂閱額度（不會啟動模型對話、不耗額度）…';
   try {
     const usage = await api('/api/usage/refresh', {}); lastUsageRefresh = Date.now();
     if (snap) snap.usage = usage; renderUsage(usage);
@@ -149,7 +154,7 @@ function renderPrd() {
   chip.textContent = PRD_TEXT[state.prd.status] || state.prd.status;
   chip.className = `chip ${state.prd.status}`;
   const busyEl = $('#prd-busy');
-  const busyText = snap.prdBusy ? 'AI 處理中，log 在「流程 log」的 prd' : state.prd.error ? `上次錯誤：${state.prd.error}` : '';
+  const busyText = snap.prdBusy ? 'AI 處理中，可在「紀錄 → Log → PRD」查看輸出' : state.prd.error ? `上次錯誤：${state.prd.error}` : '';
   busyEl.textContent = busyText;
   busyEl.classList.toggle('hidden', !busyText);
   busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
@@ -224,6 +229,7 @@ async function loadRounds() {
   try {
     rounds = (await api('/api/prd')).rounds;
     renderRounds();
+    if (!$('#tab-records').hidden && recSel === null && recSub === 'rounds') renderRecords();
   } catch (err) {
     toast(err.message, true);
   }
@@ -232,6 +238,9 @@ async function loadRounds() {
 function renderBoard() {
   const { tasks, state } = snap;
   const board = $('#board');
+  // 重畫前記下捲動位置：點任務卡或收到狀態更新時不要跳回最上面。
+  const scrolls = Object.fromEntries($$('#board .col').map((c) => [c.dataset.col, c.scrollTop]));
+  const wrapLeft = $('.board-wrap').scrollLeft;
   board.innerHTML = '';
   const cols = Object.fromEntries(COLUMNS.map(([k, label]) => {
     const el = document.createElement('section');
@@ -294,7 +303,9 @@ function renderBoard() {
   for (const [k, el] of Object.entries(cols)) {
     el.querySelector('h3 .count').textContent = counts[k] || 0;
     if (!counts[k]) el.insertAdjacentHTML('beforeend', '<p class="empty">（無）</p>');
+    if (scrolls[k]) el.scrollTop = scrolls[k];
   }
+  $('.board-wrap').scrollLeft = wrapLeft;
 
   const alive = snap.runnerAlive;
   const busy = alive || snap.prdBusy || snap.taskGenBusy;
@@ -347,7 +358,8 @@ function renderDetail() {
     ['修正輪數', `${ts.fix_round || 0} / ${snap.config.max_fix_rounds}`],
     ['嘗試次數', ts.attempts || 0],
     ['驗證', ...check],
-    ['審查', ts.review_verdict || '—', ts.review_verdict === 'PASS' || ts.review_verdict === 'APPROVE' ? 'ok' : ts.review_verdict ? 'bad' : ''],
+    ['審查', ts.review_verdicts ? Object.entries(ts.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ') : ts.review_verdict || '—',
+      ts.review_verdict === 'PASS' || ts.review_verdict === 'APPROVE' ? 'ok' : ts.review_verdict ? 'bad' : ''],
     ['commit', ts.commit ? ts.commit.slice(0, 8) : '—', 'mono'],
   ];
   const dl = $('#d-meta');
@@ -371,15 +383,64 @@ function renderDetail() {
     b.tabIndex = on ? 0 : -1;
   }
   const body = $('#d-body');
-  const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
-  body.textContent = {
-    log: logs[`task-${detail.id}`] || '（尚無 log）',
+  body.classList.toggle('lg-host', subtab === 'log');
+  if (subtab === 'log') return renderLogTree(body, logs[`task-${detail.id}`]);
+  if (subtab === 'reviews') return body.replaceChildren(reviewsView(detail.reviews));
+  const pre = document.createElement('pre');
+  pre.className = 'plain';
+  pre.textContent = {
     checks: detail.checks || '（尚未執行驗證）',
-    reviews: detail.reviews.map((r) => `===== ${r.name} =====\n${r.text}`).join('\n\n') || '（尚無審查意見）',
     diff: detail.diff || '（尚無 diff）',
     task: JSON.stringify(t, null, 2) + (detail.implement ? `\n\n===== 實作回報 =====\n${detail.implement}` : ''),
   }[subtab];
-  if (subtab === 'log' && atBottom) body.scrollTop = body.scrollHeight;
+  body.replaceChildren(pre);
+}
+
+function verdictOf(text) {
+  return [...String(text || '').matchAll(/VERDICT\s*\**\s*[:：]\s*\**\s*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
+}
+
+function markdownBlock(text) {
+  const div = document.createElement('div');
+  div.className = 'md md-sm';
+  div.innerHTML = canRender() ? window.renderMarkdown(text || '') : `<pre>${escapeHtml(text || '')}</pre>`;
+  return div;
+}
+
+/** 每次審查一列（最新的在上面）；雙人審查時 Claude 與 Codex 的意見並排。 */
+function reviewsView(reviews) {
+  const frag = document.createDocumentFragment();
+  if (!reviews.length) {
+    frag.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: '（尚無審查意見）' }));
+    return frag;
+  }
+  const byRound = new Map();
+  for (const r of reviews) byRound.set(r.round, [...(byRound.get(r.round) || []), r]);
+  for (const [round, list] of [...byRound].reverse()) {
+    const sec = document.createElement('section');
+    sec.className = 'review-round';
+    const h = document.createElement('h4');
+    h.textContent = `第 ${round} 次審查${list.length > 1 ? '・雙人審查' : ''}`;
+    const pair = document.createElement('div');
+    pair.className = `review-pair cols-${list.length}`;
+    for (const r of list) {
+      const col = document.createElement('div');
+      const verdict = verdictOf(r.text);
+      col.className = `review-col ${verdict}`;
+      const head = document.createElement('div');
+      head.className = 'review-head';
+      head.innerHTML = '<span class="lg-who"></span><span class="chip"></span>';
+      const who = head.querySelector('.lg-who');
+      who.textContent = PROVIDER_LABEL[r.provider] || '審查者';
+      if (r.provider) who.classList.add(r.provider);
+      head.querySelector('.chip').textContent = verdict || '未判定';
+      col.append(head, markdownBlock(r.text));
+      pair.append(col);
+    }
+    sec.append(h, pair);
+    frag.append(sec);
+  }
+  return frag;
 }
 
 function renderLogSelect() {
@@ -389,7 +450,8 @@ function renderLogSelect() {
   sel.innerHTML = '';
   for (const s of scopes) {
     const o = document.createElement('option');
-    o.value = o.textContent = s;
+    o.value = s;
+    o.textContent = LOG_SCOPE_LABELS[s] || s.replace(/^task-/, '任務 ').replace(/^skill-.*/, 'Skill 會議');
     sel.append(o);
   }
   if (scopes.includes(cur)) sel.value = cur;
@@ -397,10 +459,8 @@ function renderLogSelect() {
 }
 
 function renderLog() {
-  const body = $('#log-body');
-  const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
-  body.textContent = logs[$('#log-scope').value] || '（尚無 log）';
-  if (atBottom) body.scrollTop = body.scrollHeight;
+  if ($('#tab-records').hidden || recSel !== null || recSub !== 'log') return;
+  renderLogTree($('#rec-body'), logs[$('#log-scope').value]);
 }
 
 let settingsDirty = false;
@@ -409,7 +469,7 @@ function renderSettings() {
   $('#config-json').textContent = JSON.stringify(config, null, 2);
   if (settingsDirty) return; // 不覆蓋使用者還沒儲存的選擇
   for (const s of $$('[data-runtime]')) s.value = config.runtime?.[s.dataset.runtime] || 'auto';
-  $('#wsl-distro').value = config.wsl_distro || '';
+  renderModels();
 }
 
 let detailTimer = null;
@@ -429,8 +489,9 @@ function onState(data) {
   if (prevPrd !== data.state.prd.rounds.length || prevStatus !== data.state.prd.status) {
     loadRounds();
     loadBacklog();
-    if (!$('#tab-history').hidden) loadHistory();
+    if (!$('#tab-records').hidden) loadHistory();
   }
+  if (!$('#tab-records').hidden && recSel === null && recSub !== 'log') renderRecords();
   clearTimeout(detailTimer);
   detailTimer = setTimeout(loadDetail, 300);
 }
@@ -645,7 +706,11 @@ function bindBacklog() {
 
 // ---------- 歷史功能（封存） ----------
 let archives = [];
-let currentArchive = null;
+
+const LOG_SCOPE_LABELS = { runner: '流程', prd: 'PRD', tasks: '拆任務', process: '背景程序' };
+let recSel = null; // null＝目前功能，否則是封存資料夾名稱
+let recSub = 'log';
+let recArchive = null;
 
 async function loadHistory() {
   try {
@@ -653,101 +718,269 @@ async function loadHistory() {
     archives = data.items;
     $('#hist-dir').textContent = data.dir;
     renderHistoryList();
-    if (!currentArchive && archives.length) openArchive(archives[0].name);
+    renderRecords();
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+function histButton(title, meta, active, onclick) {
+  const li = document.createElement('li');
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `hist-item${active ? ' active' : ''}`;
+  b.setAttribute('aria-current', active ? 'true' : 'false');
+  b.innerHTML = '<span class="hist-title"></span><span class="hist-meta"></span>';
+  b.querySelector('.hist-title').textContent = title;
+  b.querySelector('.hist-meta').textContent = meta;
+  b.onclick = onclick;
+  li.append(b);
+  return li;
+}
+
+function currentTitle() {
+  return (snap?.config.feature || snap?.state.prd.idea || '目前功能').split('\n')[0];
 }
 
 function renderHistoryList() {
   const ul = $('#hist-list');
   ul.innerHTML = '';
-  if (!archives.length) {
-    ul.innerHTML = '<li class="empty">還沒有封存的功能：核准 PRD 後會自動封存</li>';
-    return;
+  if (snap) {
+    const done = snap.tasks.filter((x) => x.status === 'done').length;
+    const prog = snap.tasks.length ? `${done}/${snap.tasks.length} 任務` : '尚未產生任務';
+    ul.append(histButton(currentTitle(), `目前功能・${prog}`, recSel === null, () => openCurrent()));
   }
-  for (const a of archives) {
-    const li = document.createElement('li');
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `hist-item${currentArchive === a.name ? ' active' : ''}`;
-    b.setAttribute('aria-current', currentArchive === a.name ? 'true' : 'false');
+  // 目前功能核准後也會有封存，避免重複列出。
+  const currentDir = snap?.state.prd.archive_dir || '';
+  const past = archives.filter((a) => !currentDir.endsWith(`/${a.name}`));
+  const sep = document.createElement('li');
+  sep.className = 'hist-sep';
+  sep.textContent = past.length ? '歷史功能' : '還沒有歷史功能：核准 PRD 後會自動封存';
+  ul.append(sep);
+  for (const a of past) {
     const title = (a.feature || a.idea || a.name).split('\n')[0];
     const prog = a.progress?.total ? `${a.progress.done}/${a.progress.total} 任務` : '尚未產生任務';
-    b.innerHTML = '<span class="hist-title"></span><span class="hist-meta"></span>';
-    b.querySelector('.hist-title').textContent = title;
-    b.querySelector('.hist-meta').textContent = `${a.name.slice(0, 10)}・${prog}${a.completed_at ? '・已完成' : ''}`;
-    b.onclick = () => openArchive(a.name);
-    li.append(b);
-    ul.append(li);
+    ul.append(histButton(title, `${a.name.slice(0, 10)}・${prog}${a.completed_at ? '・已完成' : ''}`, recSel === a.name, () => openArchive(a.name)));
   }
 }
 
-async function openArchive(name) {
-  currentArchive = name;
+function openCurrent() {
+  recSel = null;
+  recArchive = null;
   renderHistoryList();
-  const box = $('#hist-detail');
+  renderRecords();
+}
+
+async function openArchive(name) {
+  recSel = name;
+  recArchive = null;
+  if (recSub === 'log') recSub = 'prd';
+  renderHistoryList();
   try {
-    const a = await api(`/api/archive/${encodeURIComponent(name)}`);
-    const m = a.meta || {};
-    const title = (m.feature || m.idea || a.name).split('\n')[0];
-    const KIND = { draft: '初稿', review: '審查', revise: '修訂', 'user-feedback': '使用者意見' };
-    box.innerHTML = `<div class="card-head"><h2 id="hist-title"></h2><span class="hint mono" id="hist-path"></span></div>
-      <dl class="meta" id="hist-meta"></dl>
-      <h3 class="sub-h">PRD</h3><div class="md doc-frame" id="hist-prd"></div>
-      <h3 class="sub-h">每輪紀錄</h3><div class="rounds" id="hist-rounds"></div>
-      <h3 class="sub-h">任務清單</h3><div id="hist-tasks"></div>`;
-    box.querySelector('#hist-title').textContent = title;
-    box.querySelector('#hist-path').textContent = a.path;
-    const meta = [
-      ['核准時間', m.approved_at ? new Date(m.approved_at).toLocaleString('zh-TW') : '—'],
-      ['完成時間', m.completed_at ? new Date(m.completed_at).toLocaleString('zh-TW') : '—'],
-      ['任務群組', m.tm_tag || '—'],
-      ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—'],
-    ];
-    for (const [k, v] of meta) {
-      const d = document.createElement('div');
-      d.innerHTML = '<dt></dt><dd></dd>';
-      d.querySelector('dt').textContent = k;
-      d.querySelector('dd').textContent = v;
-      d.querySelector('dd').title = v;
-      box.querySelector('#hist-meta').append(d);
-    }
-    box.querySelector('#hist-prd').innerHTML = canRender() ? window.renderMarkdown(a.prd) : `<pre>${escapeHtml(a.prd)}</pre>`;
-    const rbox = box.querySelector('#hist-rounds');
-    if (!a.rounds.length) rbox.innerHTML = '<p class="empty">（沒有紀錄）</p>';
-    for (const r of a.rounds) {
-      const parts = r.name.replace(/\.md$/, '').split('-');
-      const kind = parts[1] === 'user' ? 'user-feedback' : parts[1];
-      const d = document.createElement('details');
-      d.className = `round ${/approve|pass/i.test(r.name) ? 'APPROVE' : /revise|fail/i.test(r.name) ? 'REVISE' : ''}`;
-      const s = document.createElement('summary');
-      s.textContent = `${KIND[kind] || kind}・${r.name.replace(/\.md$/, '')}`;
-      const body = document.createElement('div');
-      body.className = 'md md-sm';
-      body.innerHTML = canRender() ? window.renderMarkdown(r.text) : `<pre>${escapeHtml(r.text)}</pre>`;
-      d.append(s, body);
-      rbox.append(d);
-    }
-    const tbox = box.querySelector('#hist-tasks');
-    if (!a.tasks.length) tbox.innerHTML = '<p class="empty">（沒有任務清單）</p>';
-    else {
-      const rows = a.tasks
-        .map((t) => `<tr><td class="mono">#${escapeHtml(t.id)}</td><td>${escapeHtml(t.title)}</td><td>${escapeHtml(PRIORITY_TEXT[t.priority] || t.priority || '')}</td><td><span class="chip tm-${escapeHtml(t.status)}">${escapeHtml(t.status)}</span></td></tr>`)
-        .join('');
-      tbox.innerHTML = `<div class="md"><div class="md-table"><table><thead><tr><th>#</th><th>標題</th><th>優先</th><th>狀態</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
-    }
+    const archive = await api(`/api/archive/${encodeURIComponent(name)}`);
+    if (recSel !== name) return;
+    recArchive = archive;
+    renderRecords();
   } catch (err) {
-    box.innerHTML = '';
     toast(err.message, true);
   }
 }
 
+function setMeta(dl, rows) {
+  dl.innerHTML = '';
+  for (const [k, v] of rows) {
+    const d = document.createElement('div');
+    d.innerHTML = '<dt></dt><dd></dd>';
+    d.querySelector('dt').textContent = k;
+    d.querySelector('dd').textContent = v;
+    d.querySelector('dd').title = v;
+    dl.append(d);
+  }
+}
+
+function roundsView(list) {
+  const box = document.createElement('div');
+  box.className = 'rounds';
+  if (!list.length) box.innerHTML = '<p class="empty">（沒有紀錄）</p>';
+  for (const r of list) {
+    const d = document.createElement('details');
+    d.className = `round ${r.verdict || ''}`;
+    const s = document.createElement('summary');
+    s.textContent = r.title;
+    d.append(s, markdownBlock(r.text));
+    box.append(d);
+  }
+  return box;
+}
+
+function tasksView(tasks, states = {}) {
+  const box = document.createElement('div');
+  if (!tasks.length) {
+    box.innerHTML = '<p class="empty">（沒有任務清單）</p>';
+    return box;
+  }
+  const rows = tasks.map((x) => {
+    const ts = states[String(x.id)];
+    const step = ts ? `${ts.phase}${ts.step ? `：${ts.step}` : ''}` : '';
+    return `<tr><td class="mono">#${escapeHtml(x.id)}</td><td>${escapeHtml(x.title)}</td><td>${escapeHtml(PRIORITY_TEXT[x.priority] || x.priority || '')}</td><td><span class="chip tm-${escapeHtml(x.status)}">${escapeHtml(x.status)}</span></td><td>${escapeHtml(step)}</td></tr>`;
+  }).join('');
+  box.innerHTML = `<div class="md"><div class="md-table"><table><thead><tr><th>#</th><th>標題</th><th>優先</th><th>狀態</th><th>目前步驟</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return box;
+}
+
+const ROUND_KIND = { draft: '初稿', review: '審查', revise: '修訂', user_feedback: '使用者意見', 'user-feedback': '使用者意見' };
+
+/** 紀錄分頁右側：目前功能（含即時 log）或某個封存的歷史功能。 */
+function renderRecords() {
+  if (!snap) return;
+  const current = recSel === null;
+  if (!current && !recArchive) return;
+  const m = current ? {} : recArchive.meta || {};
+  $('#rec-title').textContent = current ? currentTitle() : (m.feature || m.idea || recArchive.name).split('\n')[0];
+  $('#rec-path').textContent = current ? (snap.state.prd.archive_dir || '') : recArchive.path;
+  const time = (v) => (v ? new Date(v).toLocaleString('zh-TW') : '—');
+  setMeta($('#rec-meta'), current ? [
+    ['PRD', snap.state.prd.status],
+    ['流程', snap.state.pipeline.status],
+    ['進度', snap.tasks.length ? `${snap.tasks.filter((x) => x.status === 'done').length} / ${snap.tasks.length}` : '—'],
+  ] : [
+    ['核准時間', time(m.approved_at)],
+    ['完成時間', time(m.completed_at)],
+    ['任務群組', m.tm_tag || '—'],
+    ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—'],
+  ]);
+  if (!current && recSub === 'log') recSub = 'prd';
+  for (const b of $$('[data-rec]')) {
+    const on = b.dataset.rec === recSub;
+    b.hidden = b.dataset.rec === 'log' && !current; // 封存的功能沒有 log
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  $('#rec-log-tools').hidden = recSub !== 'log';
+  const body = $('#rec-body');
+  body.classList.toggle('lg-host', recSub === 'log');
+  if (recSub === 'log') return renderLogTree(body, logs[$('#log-scope').value]);
+  const keep = body.scrollTop;
+  if (recSub === 'prd') {
+    const text = current ? snap.prd : recArchive.prd;
+    const doc = markdownBlock(text || '（還沒有 PRD）');
+    doc.classList.remove('md-sm');
+    body.replaceChildren(doc);
+  } else if (recSub === 'rounds') {
+    const list = current
+      ? rounds.map((r) => ({
+        title: `第 ${r.round} 輪・${ROUND_KIND[r.kind] || r.kind}・${PROVIDER_LABEL[r.provider] || r.provider}${r.verdict ? `・${r.verdict}` : ''}${r.version ? `・v${r.version}` : ''}`,
+        verdict: r.verdict, text: r.text,
+      }))
+      : recArchive.rounds.map((r) => {
+        const parts = r.name.replace(/\.md$/, '').split('-');
+        const kind = parts[1] === 'user' ? 'user-feedback' : parts[1];
+        return { title: `${ROUND_KIND[kind] || kind}・${r.name.replace(/\.md$/, '')}`, verdict: /approve|pass/i.test(r.name) ? 'APPROVE' : /revise|fail/i.test(r.name) ? 'REVISE' : '', text: r.text };
+      });
+    body.replaceChildren(roundsView(list));
+  } else {
+    body.replaceChildren(current ? tasksView(snap.tasks, snap.state.tasks) : tasksView(recArchive.tasks));
+  }
+  body.scrollTop = keep;
+}
+
+// ---------- 設定：AI 角色與模型 ----------
+const ROLE_LABELS = { author: 'PRD 作者（也負責拆任務）', reviewer: 'PRD 審查', implementer: '實作、修正與 handover', code_reviewer: '程式碼審查' };
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+let modelOptions = null;
+let modelDraft = null;
+let modelsDirty = false;
+
+async function loadModels() {
+  if (modelOptions) return;
+  $('#models-status').textContent = '正在從 CLI 讀取可用的模型…';
+  try {
+    modelOptions = await api('/api/models');
+    for (const p of ['claude', 'codex']) {
+      $(`#models-${p}`).replaceChildren(...modelOptions[p].models.map((m) => Object.assign(document.createElement('option'), { value: m.id, label: m.name })));
+    }
+    $('#models-status').textContent = modelOptions.codex.error || '';
+    renderModels();
+  } catch (err) {
+    $('#models-status').textContent = err.message;
+  }
+}
+
+function effortsFor(provider, model) {
+  if (provider === 'claude') return CLAUDE_EFFORTS;
+  const list = modelOptions?.codex.models || [];
+  const found = list.find((m) => m.id === model) || list.find((m) => m.default);
+  return found?.efforts?.length ? found.efforts : [...new Set(list.flatMap((m) => m.efforts || []))];
+}
+
+function renderModels(force = false) {
+  if (!snap) return;
+  if (!force && $('#role-models').contains(document.activeElement)) return;
+  if (!modelsDirty) modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
+  const box = $('#role-models');
+  box.replaceChildren();
+  for (const [role, label] of Object.entries(ROLE_LABELS)) {
+    const row = document.createElement('fieldset');
+    row.className = 'role-row';
+    const legend = document.createElement('legend');
+    legend.textContent = label;
+    const pick = document.createElement('select');
+    pick.setAttribute('aria-label', `${label} 使用的 AI`);
+    const choices = [['claude', 'Claude Code'], ['codex', 'Codex']];
+    if (role === 'reviewer' || role === 'code_reviewer') choices.push(['both', '雙人審查（Claude ＋ Codex）']);
+    for (const [v, text] of choices) pick.append(new Option(text, v, false, modelDraft.roles[role] === v));
+    pick.onchange = () => {
+      modelDraft.roles[role] = pick.value;
+      modelsDirty = true;
+      renderModels(true);
+    };
+    row.append(legend, pick);
+    const providers = modelDraft.roles[role] === 'both' ? ['claude', 'codex'] : [modelDraft.roles[role]];
+    for (const p of providers) {
+      const cur = modelDraft.models?.[role]?.[p] || { model: '', effort: '' };
+      const line = document.createElement('div');
+      line.className = 'model-line';
+      const who = document.createElement('span');
+      who.className = `lg-who ${p}`;
+      who.textContent = PROVIDER_LABEL[p];
+      const model = document.createElement('input');
+      model.type = 'text';
+      model.setAttribute('list', `models-${p}`);
+      model.placeholder = `預設（${snap.config[p]?.model || 'CLI 預設'}）`;
+      model.value = cur.model || '';
+      model.setAttribute('aria-label', `${label}：${PROVIDER_LABEL[p]} 模型`);
+      const effort = document.createElement('select');
+      effort.setAttribute('aria-label', `${label}：${PROVIDER_LABEL[p]} 推理強度`);
+      const fillEfforts = () => {
+        const options = effortsFor(p, model.value);
+        effort.replaceChildren(new Option('推理強度：預設', ''), ...options.map((e) => new Option(e, e)));
+        if (cur.effort && !options.includes(cur.effort)) effort.append(new Option(cur.effort, cur.effort));
+        effort.value = cur.effort || '';
+      };
+      fillEfforts();
+      const save = () => {
+        modelDraft.models[role] ??= {};
+        modelDraft.models[role][p] = { model: model.value.trim(), effort: effort.value };
+        cur.model = model.value.trim();
+        cur.effort = effort.value;
+        modelsDirty = true;
+      };
+      model.addEventListener('input', save);
+      model.addEventListener('change', () => { save(); fillEfforts(); });
+      effort.addEventListener('change', save);
+      line.append(who, model, effort);
+      row.append(line);
+    }
+    box.append(row);
+  }
+}
 function showTab(b) {
   if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
   if (b.dataset.tab === 'backlog') loadBacklog();
-  if (b.dataset.tab === 'history') loadHistory();
+  if (b.dataset.tab === 'records') loadHistory();
+  if (b.dataset.tab === 'settings') loadModels();
   for (const x of $$('.tabs button')) {
     const on = x === b;
     x.classList.toggle('active', on);
@@ -860,14 +1093,14 @@ function bind() {
   for (const b of $$('[data-mode]')) {
     b.onclick = () => act('/api/config/mode', { mode: b.dataset.mode }, `已切換為${b.textContent}模式`);
   }
-  const subButtons = $$('.subtabs button');
+  const subButtons = $$('[data-sub]');
   const showSub = (b) => {
     subtab = b.dataset.sub;
     renderDetail();
   };
   for (const b of subButtons) b.onclick = () => showSub(b);
   tabKeys(subButtons, showSub);
-  for (const el of [...$$('[data-runtime]'), $('#wsl-distro')]) {
+  for (const el of $$('[data-runtime]')) {
     el.addEventListener('input', () => {
       settingsDirty = true;
     });
@@ -875,7 +1108,7 @@ function bind() {
   $('#btn-save-runtime').onclick = async () => {
     const runtime = Object.fromEntries($$('[data-runtime]').map((s) => [s.dataset.runtime, s.value]));
     try {
-      await api('/api/config/runtime', { runtime, wsl_distro: $('#wsl-distro').value });
+      await api('/api/config/runtime', { runtime });
       settingsDirty = false;
       toast('已儲存執行環境');
     } catch (err) {
@@ -923,6 +1156,24 @@ function bind() {
     act('/api/task/rerun', { id: selected, revert }, `任務 ${selected} 重跑中`);
   };
   $('#log-scope').onchange = renderLog;
+  $('#log-expand').onclick = () => setLogTreeOpen($('#rec-body'), true);
+  $('#log-collapse').onclick = () => setLogTreeOpen($('#rec-body'), false);
+  const recButtons = $$('[data-rec]');
+  const showRec = (b) => {
+    recSub = b.dataset.rec;
+    renderRecords();
+  };
+  for (const b of recButtons) b.onclick = () => showRec(b);
+  tabKeys(recButtons, showRec);
+  $('#btn-save-models').onclick = async () => {
+    try {
+      await api('/api/config/models', modelDraft);
+      modelsDirty = false;
+      toast('已儲存角色與模型');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
   for (const b of $$('[data-view]')) {
     b.onclick = () => {
       prdView = b.dataset.view;

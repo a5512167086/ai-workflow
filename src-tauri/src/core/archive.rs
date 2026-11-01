@@ -99,6 +99,10 @@ pub fn archive_prd(root: &Path, cfg: &Value) -> Result<String> {
     for (i, r) in rounds.iter().enumerate() {
         let Some(file) = r["file"].as_str().filter(|f| !f.is_empty()) else { continue };
         let mut parts = vec![format!("{:02}", i + 1), kind_file(r["kind"].as_str().unwrap_or("")).to_string(), format!("r{}", super::util::js_string(&r["round"]))];
+        // 雙人審查時檔名帶上 AI，避免同一輪兩份審查互相覆蓋。
+        if ["-claude.md", "-codex.md"].iter().any(|s| file.ends_with(s)) {
+            parts.push(r["provider"].as_str().unwrap_or("").to_string());
+        }
         if let Some(v) = r["verdict"].as_str().filter(|v| !v.is_empty()) {
             parts.push(v.to_lowercase());
         }
