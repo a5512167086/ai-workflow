@@ -1,6 +1,6 @@
 # aipipe UI 設計系統
 
-本文件是 `aipipe ui` 本機網頁介面的設計依據。方向由 `ui-ux-pro-max` skill 查詢產生：
+本文件是 aipipe 桌面 app 介面（`src/`）的設計依據。方向由 `ui-ux-pro-max` skill 查詢產生：
 
 ```
 search.py "developer tool dashboard kanban CLI pipeline monitoring" --design-system -p aipipe --density 7 --variance 3 --motion 3

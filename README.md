@@ -1,12 +1,12 @@
 # aipipe
 
-把「多個 AI 討論 → 寫 PRD 並交叉審查 → 內建引擎拆任務 → 每個任務開新對話並帶 handover → 驗證與審查 → 更新 handover → 人工測試」這套流程自動化的命令列工具，附本機網頁 UI。
+把「多個 AI 討論 → 寫 PRD 並交叉審查 → 內建引擎拆任務 → 每個任務開新對話並帶 handover → 驗證與審查 → 更新 handover → 人工測試」這套流程自動化的 Windows 桌面工具，同一支程式也能當命令列使用。
 
 - **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex exec`），不需要也不使用 API key。
 - **通用**：任何有 git 的軟體專案都能用，build/test/lint 指令寫在專案的 `.aipipe.json`。
 - **兩種模式**：自動（通過檢查就 commit，少停）與手動（不 commit，每個任務都停下來等你測）。
 - **多專案**：總覽畫面同時看多個專案；全域佇列讓多個專案輪流跑，不會一起燒掉訂閱額度。
-- **桌面版**：Windows 安裝檔（Tauri），不需要另外裝 Node 就能跑 aipipe 本身，流程停下來等你時跳通知。見[桌面版](#桌面版windows)。
+- **桌面版**：Windows 安裝檔（Tauri + Rust），不需要 Node，流程停下來等你時跳通知。見[桌面版](#桌面版windows)。
 
 ## 需求
 
@@ -14,7 +14,6 @@ Claude Code／Codex 至少安裝並以訂閱登入一個；缺少另一個時使
 
 | 工具 | 用途 | 安裝／登入 |
 | --- | --- | --- |
-| Node.js 20+ | 執行 aipipe | — |
 | git | 版本控制、diff、自動 commit | — |
 | Claude Code CLI | 預設的 PRD 作者、實作者 | `npm i -g @anthropic-ai/claude-code`，然後 `claude auth login` 用 Pro/Max 帳號登入 |
 | Codex CLI | 預設的 PRD 審查者、程式碼審查者 | `npm i -g @openai/codex`，然後 `codex login` 用 ChatGPT 帳號登入 |
@@ -23,13 +22,9 @@ Claude Code／Codex 至少安裝並以訂閱登入一個；缺少另一個時使
 
 ## 安裝
 
-```bash
-git clone <這個 repo> ai-workflow
-cd ai-workflow
-npm install -g .
-```
-
-之後在任何專案裡都能用 `aipipe`。不想全域安裝也可以 `node <路徑>/legacy/bin/aipipe.js <指令>`。
+執行 `aipipe_<版本>_x64-setup.exe`（見[桌面版](#桌面版windows)）。安裝後開始選單的 aipipe 就是桌面 app；
+同一支 `aipipe-desktop.exe` 帶子指令執行時就是命令列版（例如 `aipipe-desktop.exe status`），可以把安裝目錄加進 PATH，
+或建立名為 `aipipe` 的別名。下面的範例都寫成 `aipipe`。
 
 ## 快速開始
 
@@ -37,8 +32,7 @@ npm install -g .
 cd 你的專案            # 不是 git repo 時 init 會詢問是否 git init（或加 --git-init）
 aipipe init            # 建立 .aipipe.json、docs/ai-context.md、docs/index.md 範本
 aipipe doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是否安裝並以訂閱登入
-aipipe ui              # 開 http://localhost:4317：所有專案的總覽（目前專案會自動加入）
-aipipe ui --cwd .      # 直接開這個專案的畫面
+aipipe projects add    # 加入桌面 app 的總覽，之後在 app 裡操作
 ```
 
 在專案畫面裡依序：
@@ -74,11 +68,9 @@ aipipe queue --max 2                        # 同時最多跑 2 個專案的流�
 
 ## 多專案總覽
 
-`aipipe ui` 不帶 `--cwd` 時首頁是總覽：每個專案一張卡片，顯示目前狀態（閒置、PRD 起草中、等待核准、排隊中、執行中、等待測試、功能待測試、需要人工處理…）、目前的功能、任務進度，點進去就是原本的單一專案畫面（網址 `/p/<id>/`）。需要你處理的專案會標出來，頂列顯示有幾個在等你。
+桌面 app 的首頁是總覽：每個專案一張卡片，顯示目前狀態（閒置、PRD 起草中、等待核准、排隊中、執行中、等待測試、功能待測試、需要人工處理…）、目前的功能、任務進度，點進去就是單一專案畫面。需要你處理的專案會標出來，頂列顯示有幾個在等你。
 
 專案清單存在 `~/.aipipe/projects.json`（可以用環境變數 `AIPIPE_HOME` 換位置），依最近開啟排序。從總覽或 `aipipe projects add` 加入；資料夾還沒有 `.aipipe.json` 時，總覽會問你要不要用預設值初始化。移除只是移出清單，不會刪任何檔案。
-
-舊的單一專案 API（`/api/state`、`/api/events`…）仍然對應啟動 `aipipe ui` 時所在的專案；每個專案也都有 `/api/p/<id>/...`。
 
 ## 需求待辦清單
 
@@ -255,10 +247,9 @@ docs/prd/<日期>-<功能>/      功能封存（建議 commit）
 ~/.aipipe/projects.json      總覽的專案清單
 ~/.aipipe/queue.json         全域執行佇列（執行中、排隊中的 pid）
 ~/.aipipe/config.json        全域設定（max_concurrent_runs）
-~/.aipipe/desktop-sidecar.log 桌面版 sidecar 的輸出
 ```
 
-`aipipe ui` 與 `aipipe run` 是不同程序，透過 `.aipipe/state.json` 溝通；UI 的按鈕會在背景啟動對應的 aipipe 指令（輸出寫到 `.aipipe/logs/process.log`）。關掉 UI 不會中斷正在跑的流程。
+桌面 app 與流程是不同程序，透過 `.aipipe/state.json` 溝通；UI 的按鈕會用同一支 exe 在背景啟動對應的 aipipe 子指令（輸出寫到 `.aipipe/logs/process.log`）。關掉 app 不會中斷正在跑的流程。
 
 ## 在 WSL 裡執行 CLI
 
@@ -295,29 +286,29 @@ UI 的「設定」分頁可以切換這些選項，並按「檢查 CLI（doctor�
 
 ## 桌面版（Windows）
 
-`src-tauri/` 是 Tauri 2 外殼，視窗內容就是 `src/` 的網頁 UI。Node 核心暫時放在 `legacy/`，正在改寫成 Rust。
+標準的 Tauri 2 專案：`src/` 是前端（原生 HTML／JS，不需要打包工具），`src-tauri/` 是 Rust 後端。
 
-- **不用裝 Node 就能跑 aipipe**：aipipe（`legacy/bin/` + `legacy/src/` + 前端 `src/`）用 esbuild 合併後，以 Node SEA 打包成 `aipipe-sidecar.exe`，UI 檔案內嵌在 exe 裡。app 啟動時挑一個沒被佔用的本機連接埠啟動它，結束 app 時停掉它。
+- **全部在 Rust**：PRD 流程、內建任務引擎、執行器、git、WSL、用量追蹤都在 `src-tauri/src/core/`。前端透過 Tauri command `api`（路徑和格式沿用舊版 HTTP API，例如 `/api/p/<id>/state`）呼叫，狀態與 log 的變化以 Tauri 事件推送。
+- **同一支 exe 也是 CLI**：帶子指令執行時不開視窗（從終端機執行會接到目前的主控台）。UI 按鈕啟動的流程也是用這個方式另開背景程序，關掉 app 不會中斷。
 - **原生功能**：總覽的「選擇資料夾」用系統對話框；系統匣圖示（左鍵開視窗、右鍵「結束 aipipe」）；關閉視窗會縮到系統匣，背景繼續監看；專案進入等待核准、等待測試、功能待測試、需要人工處理、錯誤時跳 Windows 通知。
-- **CLI 呼叫不變**：一樣只呼叫本機已登入的 claude（可設在 WSL）、codex，清掉 API key 的規則一樣。
-- 由 UI 啟動的 `aipipe run` 是獨立程序，結束 app 不會中斷正在跑的流程（和 CLI 版一樣）。sidecar 則會監看外殼的 pid，app 當掉或被強制關閉時也會自己結束。
+- **資料格式不變**：`.aipipe.json`、`.aipipe/`、`~/.aipipe/` 的格式與舊的 Node 版相同，既有專案直接可用。
 
-安裝：執行 `aipipe_0.1.1_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。更新前請從系統匣選「結束 aipipe」；點視窗關閉只會縮到系統匣。專案頁頂列會顯示版本號。
+安裝：執行 `aipipe_<版本>_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。更新前請從系統匣選「結束 aipipe」；點視窗關閉只會縮到系統匣。
 
-自己建置（需要 Node 20+、Rust stable、VS 2022 C++ Build Tools；WebView2 Windows 11 內建）：
+自己建置（需要 Rust stable、VS 2022 C++ Build Tools、Node 20+（只用來跑 Tauri CLI）；WebView2 Windows 11 內建）：
 
 ```bash
 npm install
-npm run build        # = npm run sidecar（打包 aipipe-sidecar.exe）+ tauri build
+npm run build        # tauri build
 ```
 
-安裝檔在 `src-tauri/target/release/bundle/nsis/`。`npm run icons` 從 `legacy/web/icon.svg` 重新產生圖示。
+安裝檔在 `src-tauri/target/release/bundle/nsis/`。`npm run dev` 開發模式啟動；`npm run icons` 從 `src-tauri/icons/icon.svg` 重新產生圖示。
 
 桌面版的限制：
 
-- claude、codex 至少安裝並登入一個。npm 裝的 CLI（例如 npm 版 codex）本身就需要 Node，所以實務上 Windows 端仍會有 Node；只用 WSL 裡的 CLI、或原生 exe 版的 claude／codex 時才真的不需要。aipipe 會從 PATH 找 `node` 來執行這些 `.js` CLI。
-- sidecar exe 約 94 MB（內含 Node 執行環境），安裝檔約 24 MB。exe 沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會提示。
-- 同時開兩個 app 會各自有一個 sidecar 和連接埠（彼此透過 `~/.aipipe` 共用專案清單與佇列），通知會重複。
+- claude、codex 至少安裝並登入一個。npm 裝的 CLI（例如 npm 版 codex）本身需要 Node，aipipe 會從 PATH 找 `node` 來執行這些 `.js` CLI；原生 exe 版或 WSL 裡的 CLI 則不需要。
+- exe 沒有程式碼簽章，第一次執行 Windows SmartScreen 可能會提示。
+- 同時開兩個 app 會各自監看（彼此透過 `~/.aipipe` 共用專案清單與佇列），通知會重複。
 
 ## 限制
 
@@ -331,7 +322,8 @@ npm run build        # = npm run sidecar（打包 aipipe-sidecar.exe）+ tauri b
 ## 開發
 
 ```bash
-npm test     # node:test 單元測試，不呼叫任何 AI（全域資料寫到暫存的 AIPIPE_HOME）
+npm test     # cargo test：不呼叫任何 AI；CLI 由 src-tauri/examples/fake_cli.rs 扮演，全域資料寫到暫存的 AIPIPE_HOME
+npm run lint # cargo clippy -D warnings
 ```
 
 介面設計規範在 [docs/design-system.md](docs/design-system.md)。
