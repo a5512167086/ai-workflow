@@ -3,25 +3,44 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, patchConfig, MODES, CLI_NAMES, RUNTIMES } from './config.js';
+import { CONFIG_FILE, loadConfig, patchConfig, MODES, CLI_NAMES, RUNTIMES } from './config.js';
 import { doctorReport } from './doctor.js';
 import { approvePrd, currentPrd } from './prd.js';
 import { readTasks } from './taskmaster.js';
 import { requestPause } from './runner.js';
 import { spawnDetachedCli } from './cli.js';
+import { initProject } from './init.js';
+import { seaAsset, IS_SEA } from './home.js';
+import { addItem, deleteItem, getItem, readBacklog, reorderItems, updateItem } from './backlog.js';
+import { listArchives, readArchive } from './archive.js';
+import { addProject, getProject, listProjects, projectId, projectSummary, removeProject, touchProject } from './projects.js';
+import { queueEntryFor, queueSnapshot, setMaxConcurrent } from './queue.js';
 import { aipipeDir, ensureDirs, isPidAlive, logPath, readState, readText } from './state.js';
 
-const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
-const STATIC = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/markdown.js': ['markdown.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'],
+const UI_DIR = IS_SEA ? '' : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
+const ASSETS = {
+  'index.html': 'text/html; charset=utf-8',
+  'overview.html': 'text/html; charset=utf-8',
+  'app.js': 'text/javascript; charset=utf-8',
+  'overview.js': 'text/javascript; charset=utf-8',
+  'common.js': 'text/javascript; charset=utf-8',
+  'markdown.js': 'text/javascript; charset=utf-8',
+  'style.css': 'text/css; charset=utf-8',
 };
+
+/** UI 靜態檔：開發時從 ui/ 讀（改了重新整理就生效），SEA 版從 exe 內嵌的資源讀。 */
+function uiFile(name) {
+  return seaAsset(name) ?? fs.readFileSync(path.join(UI_DIR, name));
+}
 
 function json(res, code, body) {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
+}
+
+function sendAsset(res, name) {
+  res.writeHead(200, { 'Content-Type': ASSETS[name], 'Cache-Control': 'no-store' });
+  res.end(uiFile(name));
 }
 
 function readBody(req) {
@@ -55,6 +74,8 @@ function tail(file, maxBytes = 200000) {
   }
 }
 
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
 function snapshot(root) {
   const cfg = loadConfig(root);
   const state = readState(root);
@@ -63,11 +84,13 @@ function snapshot(root) {
   const taskGenBusy = isPidAlive(state.task_gen?.pid);
   return {
     root,
+    project: { id: projectId(root), name: getProject(projectId(root))?.name || path.basename(root) },
     config: cfg,
     state,
     runnerAlive,
     prdBusy,
     taskGenBusy,
+    queue: runnerAlive ? queueEntryFor(root) : null,
     prd: currentPrd(root),
     tasks: readTasks(root),
   };
@@ -97,9 +120,9 @@ function taskDetail(root, id) {
 }
 
 function busyGuard(snap) {
-  if (snap.runnerAlive) throw Object.assign(new Error('流程執行中'), { status: 409 });
-  if (snap.prdBusy) throw Object.assign(new Error('PRD 流程執行中'), { status: 409 });
-  if (snap.taskGenBusy) throw Object.assign(new Error('任務產生中'), { status: 409 });
+  if (snap.runnerAlive) throw httpError(409, '流程執行中');
+  if (snap.prdBusy) throw httpError(409, 'PRD 流程執行中');
+  if (snap.taskGenBusy) throw httpError(409, '任務產生中');
 }
 
 async function handleAction(root, action, body) {
@@ -108,7 +131,7 @@ async function handleAction(root, action, body) {
     case 'prd/new': {
       busyGuard(snap);
       const idea = String(body.idea || '').trim();
-      if (!idea) throw Object.assign(new Error('請輸入想法'), { status: 400 });
+      if (!idea) throw httpError(400, '請輸入想法');
       return { pid: await spawnDetachedCli(root, ['prd', idea]) };
     }
     case 'prd/approve':
@@ -116,7 +139,7 @@ async function handleAction(root, action, body) {
     case 'prd/revise': {
       busyGuard(snap);
       const feedback = String(body.feedback || '').trim();
-      if (!feedback) throw Object.assign(new Error('請輸入修改意見'), { status: 400 });
+      if (!feedback) throw httpError(400, '請輸入修改意見');
       return { pid: await spawnDetachedCli(root, ['prd', '--revise', feedback]) };
     }
     case 'tasks/generate':
@@ -134,14 +157,14 @@ async function handleAction(root, action, body) {
     case 'task/rerun': {
       busyGuard(snap);
       const id = String(body.id || '');
-      if (!/^\d+(\.\d+)?$/.test(id)) throw Object.assign(new Error('任務 id 不正確'), { status: 400 });
+      if (!/^\d+(\.\d+)?$/.test(id)) throw httpError(400, '任務 id 不正確');
       return { pid: await spawnDetachedCli(root, ['rerun', id, ...(body.revert ? ['--revert'] : [])]) };
     }
     case 'config/runtime': {
       const runtime = {};
       for (const name of CLI_NAMES) {
         if (body.runtime?.[name] !== undefined) {
-          if (!RUNTIMES.includes(body.runtime[name])) throw Object.assign(new Error(`${name} 的 runtime 不正確`), { status: 400 });
+          if (!RUNTIMES.includes(body.runtime[name])) throw httpError(400, `${name} 的 runtime 不正確`);
           runtime[name] = body.runtime[name];
         }
       }
@@ -152,19 +175,68 @@ async function handleAction(root, action, body) {
     case 'doctor':
       return doctorReport(root);
     case 'config/mode': {
-      if (!MODES.includes(body.mode)) throw Object.assign(new Error('模式不正確'), { status: 400 });
+      if (!MODES.includes(body.mode)) throw httpError(400, '模式不正確');
       return { config: patchConfig(root, { mode: body.mode }) };
     }
+    case 'backlog/add':
+      return { item: addItem(root, body) };
+    case 'backlog/update':
+      return { item: updateItem(root, String(body.id || ''), { title: body.title, detail: body.detail, status: body.status }) };
+    case 'backlog/delete':
+      return { items: deleteItem(root, String(body.id || '')) };
+    case 'backlog/reorder':
+      return { items: reorderItems(root, body.ids) };
+    case 'backlog/draft': {
+      busyGuard(snap);
+      const item = getItem(root, String(body.id || ''));
+      return { pid: await spawnDetachedCli(root, ['prd', '--backlog', item.id]) };
+    }
     default:
-      throw Object.assign(new Error('未知操作'), { status: 404 });
+      throw httpError(404, '未知操作');
   }
+}
+
+async function handleGlobalAction(action, body) {
+  switch (action) {
+    case 'projects/add': {
+      const dir = path.resolve(String(body.path || '').trim() || '.');
+      if (!String(body.path || '').trim()) throw httpError(400, '請輸入專案資料夾路徑');
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw httpError(400, `資料夾不存在：${dir}`);
+      if (!fs.existsSync(path.join(dir, CONFIG_FILE))) {
+        if (!body.init) return { needs_init: true, path: dir };
+        initProject(dir, {});
+      }
+      return { project: addProject(dir, { name: body.name ? String(body.name).trim() : undefined }) };
+    }
+    case 'projects/remove':
+      return { removed: removeProject(String(body.id || '')) };
+    case 'projects/open':
+      touchProject(String(body.id || ''));
+      return { ok: true };
+    case 'queue/config':
+      return { queue: { ...queueSnapshot(), max: setMaxConcurrent(body.max).max_concurrent_runs } };
+    default:
+      throw httpError(404, '未知操作');
+  }
+}
+
+function projectsPayload() {
+  return {
+    projects: listProjects().map(projectSummary),
+    queue: queueSnapshot(),
+    desktop: !!process.env.AIPIPE_DESKTOP,
+  };
+}
+
+function sseHeaders(res) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+  res.write('retry: 2000\n\n');
+  return (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 /** SSE：每 0.7 秒檢查 state.json 與 logs/ 的變化，推送狀態與新增的 log。 */
 function sse(root, req, res) {
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-  res.write('retry: 2000\n\n');
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = sseHeaders(res);
   const logDir = aipipeDir(root, 'logs');
   const sizes = new Map();
   for (const f of fs.existsSync(logDir) ? fs.readdirSync(logDir) : []) sizes.set(f, fs.statSync(path.join(logDir, f)).size);
@@ -174,9 +246,10 @@ function sse(root, req, res) {
     try {
       const stateStat = fs.statSync(aipipeDir(root, 'state.json'), { throwIfNoEntry: false });
       const tasksStat = fs.statSync(path.join(root, '.taskmaster', 'tasks', 'tasks.json'), { throwIfNoEntry: false });
+      const tmStateStat = fs.statSync(path.join(root, '.taskmaster', 'state.json'), { throwIfNoEntry: false });
       const cfgStat = fs.statSync(path.join(root, '.aipipe.json'), { throwIfNoEntry: false });
       const sig = `${stateStat?.mtimeMs}|${cfgStat?.mtimeMs}`;
-      const tsig = `${tasksStat?.mtimeMs}`;
+      const tsig = `${tasksStat?.mtimeMs}|${tmStateStat?.mtimeMs}`;
       if (sig !== lastState || tsig !== lastTasks) {
         lastState = sig;
         lastTasks = tsig;
@@ -208,6 +281,54 @@ function sse(root, req, res) {
   });
 }
 
+/** 總覽的 SSE：每 1.5 秒重算所有專案的摘要，有變化才推送。 */
+function projectsSse(req, res) {
+  const send = sseHeaders(res);
+  let last = '';
+  const tick = () => {
+    try {
+      const payload = projectsPayload();
+      const text = JSON.stringify(payload);
+      if (text !== last) {
+        last = text;
+        send('projects', payload);
+      }
+    } catch (err) {
+      send('error', { message: err.message });
+    }
+  };
+  tick();
+  const timer = setInterval(tick, 1500);
+  const ping = setInterval(() => res.write(': ping\n\n'), 15000);
+  req.on('close', () => {
+    clearInterval(timer);
+    clearInterval(ping);
+  });
+}
+
+/** 單一專案的 API。rest 是 /api/ 或 /api/p/<id>/ 之後的路徑。 */
+async function projectRoute(root, req, res, rest) {
+  if (req.method === 'GET') {
+    if (rest === 'state') return json(res, 200, snapshot(root));
+    if (rest === 'events') return sse(root, req, res);
+    if (rest === 'prd') {
+      const state = readState(root);
+      return json(res, 200, { prd: currentPrd(root), status: state.prd, rounds: prdRounds(root, state) });
+    }
+    if (rest === 'backlog') return json(res, 200, { items: readBacklog(root), path: loadConfig(root).backlog_path });
+    if (rest === 'archive') return json(res, 200, { items: listArchives(root), dir: loadConfig(root).archive_dir });
+    let m;
+    if ((m = rest.match(/^archive\/(.+)$/))) return json(res, 200, readArchive(root, decodeURIComponent(m[1])));
+    if ((m = rest.match(/^task\/(\d+(?:\.\d+)?)$/))) return json(res, 200, taskDetail(root, m[1]));
+    if ((m = rest.match(/^log\/([\w.-]+)$/))) return json(res, 200, tail(logPath(root, m[1])));
+  }
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    return json(res, 200, await handleAction(root, rest, body));
+  }
+  return json(res, 404, { error: 'not found' });
+}
+
 function openBrowser(url) {
   const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   try {
@@ -217,37 +338,46 @@ function openBrowser(url) {
   }
 }
 
-export function createServer(root) {
-  ensureDirs(root);
+/**
+ * defaultRoot：舊版單一專案 API（/api/state 等）對應的專案，可以是 null。
+ * overview：首頁顯示所有專案的總覽；false 時首頁直接是 defaultRoot 的專案畫面（aipipe ui --cwd）。
+ */
+export function createServer(defaultRoot, { overview = false } = {}) {
+  if (defaultRoot) ensureDirs(defaultRoot);
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     // 只服務本機網址，避免 DNS rebinding 讓外部網頁讀到狀態。
     if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(req.headers.host || '')) return json(res, 403, { error: 'forbidden host' });
     try {
-      if (req.method === 'GET' && STATIC[url.pathname]) {
-        const [file, type] = STATIC[url.pathname];
-        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
-        res.end(fs.readFileSync(path.join(UI_DIR, file)));
-        return;
+      const p = url.pathname;
+      if (req.method === 'GET' && !p.startsWith('/api/')) {
+        if (p === '/') return sendAsset(res, overview || !defaultRoot ? 'overview.html' : 'index.html');
+        if (p === '/overview') return sendAsset(res, 'overview.html');
+        if (/^\/p\/[0-9a-f]{10}\/?$/.test(p)) return sendAsset(res, 'index.html');
+        const name = p.slice(1);
+        if (ASSETS[name] && !name.endsWith('.html')) return sendAsset(res, name);
+        return json(res, 404, { error: 'not found' });
       }
-      if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, snapshot(root));
-      if (req.method === 'GET' && url.pathname === '/api/events') return sse(root, req, res);
-      if (req.method === 'GET' && url.pathname === '/api/prd') {
-        const state = readState(root);
-        return json(res, 200, { prd: currentPrd(root), status: state.prd, rounds: prdRounds(root, state) });
+      // 只接受本頁 fetch（自訂標頭），擋掉其他網站的跨站表單 POST。
+      if (req.method === 'POST' && req.headers['x-aipipe'] !== '1') return json(res, 403, { error: 'forbidden' });
+
+      if (p === '/api/projects' && req.method === 'GET') return json(res, 200, projectsPayload());
+      if (p === '/api/projects/events' && req.method === 'GET') return projectsSse(req, res);
+      if (req.method === 'POST' && /^\/api\/(projects|queue)\//.test(p)) {
+        return json(res, 200, await handleGlobalAction(p.slice(5), await readBody(req)));
       }
+
       let m;
-      if (req.method === 'GET' && (m = url.pathname.match(/^\/api\/task\/(\d+(?:\.\d+)?)$/))) {
-        return json(res, 200, taskDetail(root, m[1]));
+      if ((m = p.match(/^\/api\/p\/([0-9a-f]{10})\/(.+)$/))) {
+        const project = getProject(m[1]);
+        if (!project) throw httpError(404, '總覽裡沒有這個專案');
+        if (!fs.existsSync(path.join(project.path, CONFIG_FILE))) throw httpError(404, `找不到 ${project.path}${path.sep}${CONFIG_FILE}`);
+        ensureDirs(project.path);
+        return await projectRoute(project.path, req, res, m[2]);
       }
-      if (req.method === 'GET' && (m = url.pathname.match(/^\/api\/log\/([\w.-]+)$/))) {
-        return json(res, 200, tail(logPath(root, m[1])));
-      }
-      if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
-        // 只接受本頁 fetch（自訂標頭），擋掉其他網站的跨站表單 POST。
-        if (req.headers['x-aipipe'] !== '1') return json(res, 403, { error: 'forbidden' });
-        const body = await readBody(req);
-        return json(res, 200, await handleAction(root, url.pathname.slice(5), body));
+      if (p.startsWith('/api/')) {
+        if (!defaultRoot) throw httpError(404, '沒有預設專案：請從總覽選一個專案（/api/p/<id>/...）');
+        return await projectRoute(defaultRoot, req, res, p.slice(5));
       }
       json(res, 404, { error: 'not found' });
     } catch (err) {
@@ -256,13 +386,15 @@ export function createServer(root) {
   });
 }
 
-export function startServer(root, { port = 4317, open = true } = {}) {
-  const server = createServer(root);
+export function startServer(root, { port = 4317, open = true, overview = false } = {}) {
+  const server = createServer(root, { overview });
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(port, '127.0.0.1', () => {
-      const url = `http://localhost:${port}`;
-      console.log(`aipipe UI：${url}（專案：${root}）  Ctrl+C 結束`);
+      const actual = server.address().port;
+      const page = !overview && root ? `/p/${projectId(root)}/` : '/';
+      const url = `http://localhost:${actual}${page}`;
+      console.log(`aipipe UI：${url}${root ? `（專案：${root}）` : '（所有專案總覽）'}  Ctrl+C 結束`);
       if (open) openBrowser(url);
       resolve(server);
     });

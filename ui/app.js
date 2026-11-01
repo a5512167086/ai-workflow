@@ -1,10 +1,9 @@
 'use strict';
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => [...document.querySelectorAll(sel)];
+// 共用的 $、api、toast、主題等在 common.js。
 
 const STATUS_TEXT = {
-  idle: '閒置', running: '執行中', paused: '已暫停', waiting: '等待人工測試',
+  idle: '閒置', queued: '排隊中', running: '執行中', paused: '已暫停', waiting: '等待人工測試',
   feature_test: '功能待測試', stuck: '需要人工處理', error: '錯誤', complete: '已完成',
 };
 const PRD_TEXT = {
@@ -32,37 +31,6 @@ let prdView = (() => {
 })();
 let rounds = [];
 
-const icon = (name, cls = 'ic') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-
-async function api(path, body) {
-  const res = await fetch(path, body === undefined ? {} : {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Aipipe': '1' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
-  return data;
-}
-
-function toast(msg, bad = false) {
-  const el = $('#toast');
-  el.innerHTML = `${icon(bad ? 'alert' : 'check')}<span></span>`;
-  el.querySelector('span').textContent = msg;
-  el.className = `toast${bad ? ' bad' : ''}`;
-  clearTimeout(toast.t);
-  toast.t = setTimeout(() => el.classList.add('hidden'), bad ? 7000 : 4000);
-}
-
-async function act(path, body, okMsg) {
-  try {
-    await api(path, body ?? {});
-    if (okMsg) toast(okMsg);
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-
 function column(task, ts) {
   const phase = ts?.phase;
   // aipipe 自己的階段優先；沒跑過的任務才看 Task Master 的狀態。
@@ -79,6 +47,7 @@ function renderTop() {
   const { state, config, root } = snap;
   $('#project').textContent = root;
   $('#project').title = root;
+  if (snap.project) document.title = `${snap.project.name} — aipipe`;
   const st = state.pipeline.status;
   const pill = $('#pipeline-status');
   pill.querySelector('.pill-text').textContent = STATUS_TEXT[st] || st;
@@ -277,7 +246,9 @@ function renderBoard() {
   // 每個畫面只有一個主要按鈕：等待人工時換成「繼續」。
   $('#btn-continue').classList.toggle('primary', needsHuman && !busy);
   $('#btn-start').classList.toggle('primary', !(needsHuman && !busy));
-  $('#runner-info').textContent = alive
+  $('#runner-info').textContent = alive && st === 'queued'
+    ? `排隊等其他專案跑完${state.control.pause_requested ? '・將取消排隊' : '・可以按暫停取消排隊'}`
+    : alive
     ? `runner pid ${state.runner.pid}${state.control.pause_requested ? '・將在目前任務結束後暫停' : ''}`
     : !tasks.length ? '還沒有任務：先在 PRD 頁核准並產生任務' : '';
   const badge = $('#tab-board-badge');
@@ -390,7 +361,12 @@ function onState(data) {
   renderTop();
   renderPrd();
   renderBoard();
-  if (prevPrd !== data.state.prd.rounds.length || prevStatus !== data.state.prd.status) loadRounds();
+  renderBacklog();
+  if (prevPrd !== data.state.prd.rounds.length || prevStatus !== data.state.prd.status) {
+    loadRounds();
+    loadBacklog();
+    if (!$('#tab-history').hidden) loadHistory();
+  }
   clearTimeout(detailTimer);
   detailTimer = setTimeout(loadDetail, 300);
 }
@@ -408,7 +384,7 @@ async function loadInitialLogs() {
 }
 
 function connect() {
-  const es = new EventSource('/api/events');
+  const es = new EventSource(apiUrl('/api/events'));
   es.addEventListener('state', (e) => onState(JSON.parse(e.data)));
   es.addEventListener('log', (e) => {
     const { scope, text } = JSON.parse(e.data);
@@ -424,41 +400,288 @@ function connect() {
   });
 }
 
-// ---------- 主題：系統 → 淺色 → 深色 ----------
-const THEMES = [['system', '跟隨系統', 'monitor'], ['light', '淺色', 'sun'], ['dark', '深色', 'moon']];
-function getTheme() {
+// ---------- 需求待辦清單 ----------
+const BACKLOG_STATUS = { open: '待辦', in_progress: '進行中', done: '已完成' };
+let backlog = [];
+let editingId = null;
+let dragId = null;
+
+async function loadBacklog() {
   try {
-    return localStorage.getItem('aipipe-theme') || 'system';
-  } catch {
-    return 'system';
+    const data = await api('/api/backlog');
+    backlog = data.items;
+    $('#bl-path').textContent = data.path;
+    renderBacklog();
+  } catch (err) {
+    toast(err.message, true);
   }
 }
-function applyTheme(theme) {
-  if (theme === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
-  const [, label, ic] = THEMES.find(([k]) => k === theme) || THEMES[0];
-  const btn = $('#btn-theme');
-  btn.innerHTML = icon(ic);
-  btn.title = `主題：${label}（點擊切換）`;
-  btn.setAttribute('aria-label', btn.title);
+
+function renderBacklog() {
+  const list = $('#backlog');
+  list.innerHTML = '';
+  const open = backlog.filter((i) => i.status !== 'done').length;
+  $('#tab-backlog-badge').textContent = open || '';
+  if (!backlog.length) {
+    list.innerHTML = '<li class="empty">還沒有需求，從左邊新增一個</li>';
+    return;
+  }
+  const busy = snap && (snap.prdBusy || snap.runnerAlive || snap.taskGenBusy);
+  backlog.forEach((item, i) => {
+    const li = document.createElement('li');
+    li.className = `bl-item ${item.status}`;
+    li.dataset.id = item.id;
+    if (editingId === item.id) {
+      li.innerHTML = `<div class="bl-edit">
+        <label class="field-label" for="ed-title">標題</label><input id="ed-title" type="text" maxlength="200">
+        <label class="field-label" for="ed-detail">說明（Markdown）</label><textarea id="ed-detail" rows="5"></textarea>
+        <div class="row end"><button type="button" data-act="cancel">取消</button><button type="button" class="primary" data-act="save">${icon('save')}儲存</button></div>
+      </div>`;
+      li.querySelector('#ed-title').value = item.title;
+      li.querySelector('#ed-detail').value = item.detail || '';
+      list.append(li);
+      li.querySelector('#ed-title').focus();
+      return;
+    }
+    li.draggable = true;
+    li.innerHTML = `<span class="grip" aria-hidden="true">${icon('grip')}</span>
+      <div class="bl-main">
+        <div class="bl-head"><span class="bl-num"></span><b class="bl-title"></b><span class="chip"></span></div>
+        <div class="bl-detail md md-sm"></div>
+      </div>
+      <div class="bl-actions">
+        <button type="button" class="icon-btn" data-act="up" aria-label="往上移">${icon('up')}</button>
+        <button type="button" class="icon-btn" data-act="down" aria-label="往下移">${icon('down')}</button>
+        <button type="button" class="icon-btn" data-act="edit" aria-label="編輯">${icon('edit')}</button>
+        <button type="button" class="icon-btn" data-act="delete" aria-label="刪除">${icon('trash')}</button>
+        <button type="button" data-act="draft">${icon('sparkle')}起草 PRD</button>
+      </div>`;
+    li.querySelector('.bl-num').textContent = i + 1;
+    li.querySelector('.bl-title').textContent = item.title;
+    const chip = li.querySelector('.chip');
+    chip.textContent = BACKLOG_STATUS[item.status] || item.status;
+    chip.className = `chip bl-${item.status}`;
+    const det = li.querySelector('.bl-detail');
+    if (item.detail) det.innerHTML = canRender() ? window.renderMarkdown(item.detail) : `<p>${escapeHtml(item.detail)}</p>`;
+    else det.remove();
+    li.querySelector('[data-act="up"]').disabled = i === 0;
+    li.querySelector('[data-act="down"]').disabled = i === backlog.length - 1;
+    for (const b of li.querySelectorAll('.bl-actions button')) b.setAttribute('aria-label', `${b.getAttribute('aria-label') || b.textContent.trim()}：${item.title}`);
+    li.querySelector('[data-act="draft"]').disabled = busy || item.status === 'done';
+    list.append(li);
+  });
 }
 
-// 方向鍵在 tablist 內移動焦點並切換（WAI-ARIA tabs pattern）。
-function tabKeys(buttons, activate) {
-  for (const b of buttons) {
-    b.addEventListener('keydown', (e) => {
-      const i = buttons.indexOf(b);
-      const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: buttons.length - 1 }[e.key];
-      if (next === undefined) return;
-      e.preventDefault();
-      const target = buttons[(next + buttons.length) % buttons.length];
-      target.focus();
-      activate(target);
-    });
+async function moveBacklog(id, delta) {
+  const ids = backlog.map((i) => i.id);
+  const from = ids.indexOf(id);
+  const to = Math.max(0, Math.min(ids.length - 1, from + delta));
+  if (from === to) return;
+  ids.splice(to, 0, ...ids.splice(from, 1));
+  await saveOrder(ids);
+  // 鍵盤操作後焦點跟著項目走
+  $(`#backlog [data-id="${id}"] [data-act="${delta < 0 ? 'up' : 'down'}"]`)?.focus();
+}
+
+async function saveOrder(ids) {
+  const data = await act('/api/backlog/reorder', { ids });
+  if (data) {
+    backlog = data.items;
+    renderBacklog();
+  }
+}
+
+function bindBacklog() {
+  $('#bl-add').onclick = async () => {
+    const data = await act('/api/backlog/add', { title: $('#bl-title').value, detail: $('#bl-detail').value }, '已新增需求');
+    if (data) {
+      $('#bl-title').value = '';
+      $('#bl-detail').value = '';
+      await loadBacklog();
+      $('#bl-title').focus();
+    }
+  };
+  $('#bl-title').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) $('#bl-add').click();
+  });
+  const list = $('#backlog');
+  list.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = btn.closest('.bl-item').dataset.id;
+    const item = backlog.find((i) => i.id === id);
+    switch (btn.dataset.act) {
+      case 'up':
+        return moveBacklog(id, -1);
+      case 'down':
+        return moveBacklog(id, 1);
+      case 'edit':
+        editingId = id;
+        return renderBacklog();
+      case 'cancel':
+        editingId = null;
+        return renderBacklog();
+      case 'save': {
+        const data = await act('/api/backlog/update', { id, title: $('#ed-title').value, detail: $('#ed-detail').value }, '已儲存');
+        if (data) {
+          editingId = null;
+          await loadBacklog();
+        }
+        return;
+      }
+      case 'delete':
+        if (!confirm(`刪除需求「${item.title}」？`)) return;
+        if (await act('/api/backlog/delete', { id }, '已刪除')) await loadBacklog();
+        return;
+      case 'draft': {
+        const msg = snap?.prd
+          ? `用「${item.title}」開始新功能並起草 PRD？\n目前的 PRD 會被取代（已核准的 PRD 已保存在封存裡）。`
+          : `用「${item.title}」起草 PRD？`;
+        if (!confirm(msg)) return;
+        if (await act('/api/backlog/draft', { id }, '已開始起草 PRD')) {
+          await loadBacklog();
+          showTab($('#tabbtn-prd'));
+        }
+      }
+    }
+  });
+  // 拖曳排序（滑鼠）；鍵盤與觸控用上／下按鈕。
+  list.addEventListener('dragstart', (e) => {
+    const li = e.target.closest('.bl-item');
+    if (!li) return;
+    dragId = li.dataset.id;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragId);
+  });
+  list.addEventListener('dragover', (e) => {
+    if (!dragId) return;
+    e.preventDefault();
+    const over = e.target.closest('.bl-item');
+    for (const x of list.querySelectorAll('.drop-before, .drop-after')) x.classList.remove('drop-before', 'drop-after');
+    if (!over || over.dataset.id === dragId) return;
+    const r = over.getBoundingClientRect();
+    over.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  list.addEventListener('dragend', () => {
+    dragId = null;
+    for (const x of list.querySelectorAll('.dragging, .drop-before, .drop-after')) x.classList.remove('dragging', 'drop-before', 'drop-after');
+  });
+  list.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    const over = e.target.closest('.bl-item');
+    const id = dragId;
+    if (!id || !over || over.dataset.id === id) return;
+    const before = over.classList.contains('drop-before');
+    const ids = backlog.map((i) => i.id).filter((x) => x !== id);
+    ids.splice(ids.indexOf(over.dataset.id) + (before ? 0 : 1), 0, id);
+    await saveOrder(ids);
+  });
+}
+
+// ---------- 歷史功能（封存） ----------
+let archives = [];
+let currentArchive = null;
+
+async function loadHistory() {
+  try {
+    const data = await api('/api/archive');
+    archives = data.items;
+    $('#hist-dir').textContent = data.dir;
+    renderHistoryList();
+    if (!currentArchive && archives.length) openArchive(archives[0].name);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function renderHistoryList() {
+  const ul = $('#hist-list');
+  ul.innerHTML = '';
+  if (!archives.length) {
+    ul.innerHTML = '<li class="empty">還沒有封存的功能：核准 PRD 後會自動封存</li>';
+    return;
+  }
+  for (const a of archives) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `hist-item${currentArchive === a.name ? ' active' : ''}`;
+    b.setAttribute('aria-current', currentArchive === a.name ? 'true' : 'false');
+    const title = (a.feature || a.idea || a.name).split('\n')[0];
+    const prog = a.progress?.total ? `${a.progress.done}/${a.progress.total} 任務` : '尚未產生任務';
+    b.innerHTML = '<span class="hist-title"></span><span class="hist-meta"></span>';
+    b.querySelector('.hist-title').textContent = title;
+    b.querySelector('.hist-meta').textContent = `${a.name.slice(0, 10)}・${prog}${a.completed_at ? '・已完成' : ''}`;
+    b.onclick = () => openArchive(a.name);
+    li.append(b);
+    ul.append(li);
+  }
+}
+
+async function openArchive(name) {
+  currentArchive = name;
+  renderHistoryList();
+  const box = $('#hist-detail');
+  try {
+    const a = await api(`/api/archive/${encodeURIComponent(name)}`);
+    const m = a.meta || {};
+    const title = (m.feature || m.idea || a.name).split('\n')[0];
+    const KIND = { draft: '初稿', review: '審查', revise: '修訂', 'user-feedback': '使用者意見' };
+    box.innerHTML = `<div class="card-head"><h2 id="hist-title"></h2><span class="hint mono" id="hist-path"></span></div>
+      <dl class="meta" id="hist-meta"></dl>
+      <h3 class="sub-h">PRD</h3><div class="md doc-frame" id="hist-prd"></div>
+      <h3 class="sub-h">每輪紀錄</h3><div class="rounds" id="hist-rounds"></div>
+      <h3 class="sub-h">任務清單</h3><div id="hist-tasks"></div>`;
+    box.querySelector('#hist-title').textContent = title;
+    box.querySelector('#hist-path').textContent = a.path;
+    const meta = [
+      ['核准時間', m.approved_at ? new Date(m.approved_at).toLocaleString('zh-TW') : '—'],
+      ['完成時間', m.completed_at ? new Date(m.completed_at).toLocaleString('zh-TW') : '—'],
+      ['Task Master tag', m.tm_tag || '—'],
+      ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—'],
+    ];
+    for (const [k, v] of meta) {
+      const d = document.createElement('div');
+      d.innerHTML = '<dt></dt><dd></dd>';
+      d.querySelector('dt').textContent = k;
+      d.querySelector('dd').textContent = v;
+      d.querySelector('dd').title = v;
+      box.querySelector('#hist-meta').append(d);
+    }
+    box.querySelector('#hist-prd').innerHTML = canRender() ? window.renderMarkdown(a.prd) : `<pre>${escapeHtml(a.prd)}</pre>`;
+    const rbox = box.querySelector('#hist-rounds');
+    if (!a.rounds.length) rbox.innerHTML = '<p class="empty">（沒有紀錄）</p>';
+    for (const r of a.rounds) {
+      const parts = r.name.replace(/\.md$/, '').split('-');
+      const kind = parts[1] === 'user' ? 'user-feedback' : parts[1];
+      const d = document.createElement('details');
+      d.className = `round ${/approve|pass/i.test(r.name) ? 'APPROVE' : /revise|fail/i.test(r.name) ? 'REVISE' : ''}`;
+      const s = document.createElement('summary');
+      s.textContent = `${KIND[kind] || kind}・${r.name.replace(/\.md$/, '')}`;
+      const body = document.createElement('div');
+      body.className = 'md md-sm';
+      body.innerHTML = canRender() ? window.renderMarkdown(r.text) : `<pre>${escapeHtml(r.text)}</pre>`;
+      d.append(s, body);
+      rbox.append(d);
+    }
+    const tbox = box.querySelector('#hist-tasks');
+    if (!a.tasks.length) tbox.innerHTML = '<p class="empty">（沒有任務清單）</p>';
+    else {
+      const rows = a.tasks
+        .map((t) => `<tr><td class="mono">#${escapeHtml(t.id)}</td><td>${escapeHtml(t.title)}</td><td>${escapeHtml(PRIORITY_TEXT[t.priority] || t.priority || '')}</td><td><span class="chip tm-${escapeHtml(t.status)}">${escapeHtml(t.status)}</span></td></tr>`)
+        .join('');
+      tbox.innerHTML = `<div class="md"><div class="md-table"><table><thead><tr><th>#</th><th>標題</th><th>優先</th><th>狀態</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    }
+  } catch (err) {
+    box.innerHTML = '';
+    toast(err.message, true);
   }
 }
 
 function showTab(b) {
+  if (b.dataset.tab === 'backlog') loadBacklog();
+  if (b.dataset.tab === 'history') loadHistory();
   for (const x of $$('.tabs button')) {
     const on = x === b;
     x.classList.toggle('active', on);
@@ -473,19 +696,7 @@ function showTab(b) {
 }
 
 function bind() {
-  let theme = getTheme();
-  applyTheme(theme);
-  $('#btn-theme').onclick = () => {
-    const keys = THEMES.map(([k]) => k);
-    const next = keys[(keys.indexOf(theme) + 1) % keys.length];
-    theme = next;
-    try {
-      localStorage.setItem('aipipe-theme', next);
-    } catch {
-      // 無法儲存時只在這次頁面生效
-    }
-    applyTheme(next);
-  };
+  bindTheme();
   const tabButtons = $$('.tabs button');
   for (const b of tabButtons) b.onclick = () => showTab(b);
   tabKeys(tabButtons, showTab);
@@ -581,6 +792,9 @@ function bind() {
 }
 
 bind();
+bindBacklog();
 api('/api/state').then(onState).catch((err) => toast(err.message, true));
 loadInitialLogs();
 connect();
+loadBacklog();
+if (PROJECT_ID) api('/api/projects/open', { id: PROJECT_ID }).catch(() => {});

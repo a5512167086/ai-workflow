@@ -27,11 +27,18 @@
     <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v4M12 17.5v.01"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM5 15H4V4h11v1"/></symbol>
+    <symbol id="i-grip" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14l4-4M8.5 16.5l-1 1a3.5 3.5 0 0 1-5-5l3-3a3.5 3.5 0 0 1 5 0M15.5 7.5l1-1a3.5 3.5 0 0 1 5 5l-3 3a3.5 3.5 0 0 1-5 0"/></symbol>
   </svg>
 
   <header class="topbar">
     <div class="brand">
+      <a class="icon-btn back-link" href="/overview" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
       <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
       <span class="name">aipipe</span>
       <span id="project" class="project mono" title=""></span>
@@ -55,13 +62,42 @@
   </header>
 
   <nav class="tabs" role="tablist" aria-label="主要畫面">
+    <button data-tab="backlog" type="button" role="tab" aria-selected="false" aria-controls="tab-backlog" id="tabbtn-backlog" tabindex="-1">需求待辦 <span class="tab-badge" id="tab-backlog-badge"></span></button>
     <button data-tab="prd" class="active" type="button" role="tab" aria-selected="true" aria-controls="tab-prd" id="tabbtn-prd">PRD <span class="tab-badge" id="tab-prd-badge"></span></button>
     <button data-tab="board" type="button" role="tab" aria-selected="false" aria-controls="tab-board" id="tabbtn-board" tabindex="-1">任務看板 <span class="tab-badge" id="tab-board-badge"></span></button>
+    <button data-tab="history" type="button" role="tab" aria-selected="false" aria-controls="tab-history" id="tabbtn-history" tabindex="-1">歷史功能</button>
     <button data-tab="log" type="button" role="tab" aria-selected="false" aria-controls="tab-log" id="tabbtn-log" tabindex="-1">流程 log</button>
     <button data-tab="settings" type="button" role="tab" aria-selected="false" aria-controls="tab-settings" id="tabbtn-settings" tabindex="-1">設定</button>
   </nav>
 
   <main id="main" tabindex="-1">
+    <section id="tab-backlog" class="tab" role="tabpanel" aria-labelledby="tabbtn-backlog" hidden>
+      <div class="backlog-layout">
+        <div class="card">
+          <div class="card-head"><h2>新增需求</h2></div>
+          <label for="bl-title" class="field-label">標題</label>
+          <input id="bl-title" type="text" maxlength="200" placeholder="例如：報表可以匯出 CSV">
+          <label for="bl-detail" class="field-label spaced">說明（選填，支援 Markdown）</label>
+          <textarea id="bl-detail" rows="5" placeholder="背景、驗收條件、限制…"></textarea>
+          <div class="row end"><button id="bl-add" class="primary" type="button"><svg class="ic"><use href="#i-plus"/></svg>新增</button></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>需求待辦</h2><span class="hint">拖曳或用上／下按鈕排序・存在 <span class="mono" id="bl-path"></span></span></div>
+          <ol id="backlog" class="backlog" aria-label="需求待辦清單，依優先順序"></ol>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-history" class="tab" role="tabpanel" aria-labelledby="tabbtn-history" hidden>
+      <div class="history-layout">
+        <div class="card">
+          <div class="card-head"><h2>歷史功能</h2><span class="hint mono" id="hist-dir"></span></div>
+          <ul id="hist-list" class="hist-list"></ul>
+        </div>
+        <div class="card" id="hist-detail" aria-live="polite"></div>
+      </div>
+    </section>
+
     <section id="tab-prd" class="tab active" role="tabpanel" aria-labelledby="tabbtn-prd">
       <ol class="stepper" id="prd-stepper" aria-label="PRD 流程進度">
         <li data-step="draft"><span class="num">1</span><span>起草</span></li>
@@ -195,6 +231,7 @@
     </section>
   </main>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="/common.js"></script>
   <script src="/markdown.js"></script>
   <script src="/app.js"></script>
 </body>
