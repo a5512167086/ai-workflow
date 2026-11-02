@@ -463,7 +463,10 @@ test('需求待辦的「釐清需求」開啟 Grill Me 會議並以該需求啟�
   w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
   const requests = [];
-  const session = { id: 's1', status: 'done', turn: 't1', requirementsReady: true, requirementsSummary: '已確認：匯出 CSV', messages: [{ role: 'user', text: '請先釐清 <b>x</b>' }, { role: 'assistant', text: '**問題一**' }] };
+  // AI 訊息裡的 Mermaid 決策樹要和專案對話一樣畫成圖；Mermaid 本身用假物件。
+  w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
+  w.mermaid = { initialize() {}, async render() { return { svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>tree</text></svg>' }; } };
+  const session = { id: 's1', status: 'done', turn: 't1', requirementsReady: true, requirementsSummary: '已確認：匯出 CSV', messages: [{ role: 'user', text: '請先釐清 <b>x</b>' }, { role: 'assistant', text: '**問題一**\n```mermaid\nflowchart TD\nA-->B\n```' }] };
   ui.setApi(async (path, body) => {
     requests.push({ path, body });
     if (path === '/api/requirements/item-1') return { item: { id: 'item-1', title: '匯出' }, session: null, stale: false, confirmed: false };
@@ -477,6 +480,9 @@ test('需求待辦的「釐清需求」開啟 Grill Me 會議並以該需求啟�
   assert.equal(requests.some(r => /backlog\/draft|\/prd/.test(r.path)), false);
   const dialog = doc.querySelector('dialog.interview-dialog');
   assert.equal(dialog.querySelector('.from-ai strong').textContent, '問題一');
+  assert.ok(dialog.querySelector('.from-ai .chat-diagram'), 'Mermaid 區塊應轉成圖表容器');
+  await new Promise(r => setTimeout(r, 0));
+  assert.match(dialog.querySelector('.from-ai .diagram-source').textContent, /A-->B/);
   assert.equal(dialog.querySelector('.from-user .md b'), null);
   assert.match(dialog.querySelector('.from-user .md').textContent, /<b>x<\/b>/);
   assert.equal(dialog.querySelector('.interview-summary').hidden, false);

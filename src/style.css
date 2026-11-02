@@ -876,10 +876,13 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .human-field:first-child, .human-field:nth-child(3), .human-field:nth-child(4) { grid-column: 1 / -1; }
 .human-error { max-height: 90px; overflow: auto; }
 .human-loop-note { flex: none; margin: 0 0 8px; }
-.interview-dialog { width: min(900px, calc(100vw - 32px)); }
+/* 需求會議：問題清單與決策樹（Mermaid）都需要寬度，接近滿版，高度也盡量用滿。 */
+.interview-dialog { width: min(1480px, calc(100vw - 32px)); height: min(960px, calc(100dvh - 32px)); }
 .interview-dialog .human-dialog-layout { overflow: auto; }
-.interview-conversation { flex: 1 1 200px; min-height: 100px; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
-.interview-conversation .chat-message { margin-bottom: 12px; padding: 8px 12px; }
+.interview-conversation { flex: 1 1 200px; min-height: 100px; overflow: auto; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.interview-conversation .chat-message { margin-bottom: 12px; padding: 8px 12px; max-width: none; }
+.interview-conversation .md { font-size: 14px; line-height: 1.6; }
+.interview-conversation .chat-diagram { margin: 8px 0; }
 .interview-conversation b { font-size: 12px; }.interview-conversation .plain-text { white-space: pre-wrap; }
 .interview-answer, .interview-summary { flex: none; }
 .interview-answer textarea { display: block; min-height: 54px; max-height: 120px; margin: 5px 0 8px; resize: vertical; }

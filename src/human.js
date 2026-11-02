@@ -96,7 +96,12 @@ async function openInterview(id) {
       for (const message of session?.messages || []) {
         const article = document.createElement('article'); article.className = `chat-message ${message.role === 'user' ? 'from-user' : 'from-ai'}`;
         const heading = document.createElement('b'); heading.textContent = message.role === 'user' ? '你' : '需求釐清 AI';
-        const body = document.createElement('div'); body.className = 'md'; if (message.role === 'user') { body.textContent = message.text; body.classList.add('plain-text'); } else if (typeof window.renderMarkdown === 'function') body.innerHTML = window.renderMarkdown(message.text); else body.textContent = message.text;
+        const body = document.createElement('div'); body.className = 'md';
+        // AI 訊息與專案對話一樣渲染：Markdown 加上離線 Mermaid 圖表；使用者訊息只當純文字。
+        if (message.role === 'user') { body.textContent = message.text; body.classList.add('plain-text'); }
+        else if (typeof renderChatMarkdown === 'function') renderChatMarkdown(body, message.text).then(() => { if (follow && body.isConnected) messages.scrollTop = messages.scrollHeight; });
+        else if (typeof window.renderMarkdown === 'function') body.innerHTML = window.renderMarkdown(message.text);
+        else body.textContent = message.text;
         article.append(heading,body); messages.append(article);
       }
       if (follow) messages.scrollTop = messages.scrollHeight;
