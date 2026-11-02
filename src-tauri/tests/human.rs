@@ -303,3 +303,59 @@ fn prd_程序中途被結束時_狀態恢復成可操作_保留目前版本並�
     assert!(prd::recover_interrupted(&root).unwrap());
     assert_eq!(read_state(&root)["prd"]["status"], "none");
 }
+
+#[test]
+fn 防呆_已產生目前_prd_的需求只能排序_功能完成後不能再改參考或重跑() {
+    let (root, _cfg) = fixture();
+    let p = add_project(&root, None).unwrap();
+    let pid = p["id"].as_str().unwrap().to_string();
+    let get = |path: &str| handle("GET", &format!("/api/p/{pid}/{path}"), &Value::Null);
+    let post = |path: &str, body: Value| handle("POST", &format!("/api/p/{pid}/{path}"), &body);
+    let current = backlog::add_item(&root, Some(&json!("目前功能")), None).unwrap();
+    let other = backlog::add_item(&root, Some(&json!("下一個需求")), None).unwrap();
+    let (cid, oid) = (current["id"].as_str().unwrap().to_string(), other["id"].as_str().unwrap().to_string());
+    backlog::update_item(&root, &cid, &json!({ "status": "in_progress" })).unwrap();
+    fs::create_dir_all(data_dir(&root).join("prd")).unwrap();
+    fs::write(data_dir(&root).join("prd/current.md"), "# PRD").unwrap();
+    update_state(&root, |s| { s["prd"]["status"] = json!("approved"); s["prd"]["backlog_id"] = json!(cid); s["prd"]["reference_scope"] = json!("scope"); }).unwrap();
+
+    // 需求待辦：目前功能那一項帶 lock，不能編輯、刪除、改參考、重新釐清；另一項不受影響；排序都可以。
+    let items = get("backlog").unwrap()["items"].as_array().unwrap().clone();
+    let lock = items.iter().find(|i| i["id"] == cid.as_str()).unwrap()["lock"].as_str().unwrap().to_string();
+    assert!(lock.contains("目前的 PRD"), "{lock}");
+    assert!(items.iter().find(|i| i["id"] == oid.as_str()).unwrap()["lock"].is_null());
+    for (path, body) in [
+        ("backlog/update", json!({ "id": cid, "title": "改名" })),
+        ("backlog/delete", json!({ "id": cid })),
+        ("backlog/interview", json!({ "id": cid })),
+        ("references/assign", json!({ "target": "backlog", "id": cid, "references": [] })),
+    ] {
+        let err = post(path, body).unwrap_err();
+        assert_eq!(err.status, 409, "{path}");
+        assert!(err.message.contains("目前的 PRD"), "{path}: {}", err.message);
+    }
+    assert_eq!(backlog::get_item(&root, &cid).unwrap()["title"], "目前功能");
+    post("backlog/update", json!({ "id": oid, "title": "下一個需求（改）" })).unwrap();
+    post("backlog/reorder", json!({ "ids": [oid, cid] })).unwrap();
+
+    // 狀態快照帶 guards：PRD 已核准但任務還沒產生。
+    let state = get("state").unwrap();
+    assert!(state["guards"]["run.start"].as_str().unwrap().contains("任務"));
+    assert!(state["guards"]["prd.references"].is_null());
+
+    // 功能完成後：參考、重跑、開始都被擋下，原因說明已完成。
+    update_state(&root, |s| s["pipeline"]["status"] = json!("complete")).unwrap();
+    tasks::write_tasks(&root, &[json!({ "id": 1, "title": "done" })], Some("master"), json!({})).unwrap();
+    for (path, body) in [
+        ("references/assign", json!({ "target": "feature", "featureScope": "scope", "references": [] })),
+        ("references/assign", json!({ "target": "group", "tag": "master", "references": [] })),
+        ("task/rerun", json!({ "id": "1" })),
+        ("run/start", json!({})),
+    ] {
+        let err = post(path, body).unwrap_err();
+        assert_eq!(err.status, 409, "{path}");
+        assert!(err.message.contains("已完成"), "{path}: {}", err.message);
+    }
+    assert!(get("state").unwrap()["guards"]["task.edit"].as_str().unwrap().contains("已完成"));
+    remove_project(&pid).unwrap();
+}

@@ -59,11 +59,20 @@ function editHumanTask() {
 function renderHumanControls() {
   if (!snap) return;
   const busy = snap.runnerAlive || snap.prdBusy || snap.taskGenBusy || snap.skillBusy;
-  $('#btn-prd-edit').disabled = !!busy || !snap.prd;
-  $('#btn-prd-review').disabled = !!busy || !snap.prd;
-  $('#d-edit').disabled = !!busy || !detail;
   const approved = !!snap.taskRevision && snap.taskRevision === snap.state.task_approval?.revision;
-  $('#btn-task-approve').disabled = !!busy || !snap.tasks?.length || snap.state.prd.status !== 'approved' || approved;
+  if (snap.guards) {
+    // 防呆原因由後端依流程狀態算好，停用時把原因放在提示文字。
+    applyGuard($('#btn-prd-edit'), guardOf('prd.edit'));
+    applyGuard($('#btn-prd-review'), guardOf('prd.review'));
+    applyGuard($('#d-edit'), detail ? guardOf('task.edit') : '還沒有選擇任務');
+    applyGuard($('#btn-task-approve'), approved ? '' : guardOf('tasks.approve'));
+    if (approved) $('#btn-task-approve').disabled = true;
+  } else {
+    $('#btn-prd-edit').disabled = !!busy || !snap.prd;
+    $('#btn-prd-review').disabled = !!busy || !snap.prd;
+    $('#d-edit').disabled = !!busy || !detail;
+    $('#btn-task-approve').disabled = !!busy || !snap.tasks?.length || snap.state.prd.status !== 'approved' || approved;
+  }
   $('#btn-task-approve').textContent = approved ? '任務已核准' : '檢視後核准任務';
   $('#task-human-note').textContent = !snap.tasks?.length ? '需求釐清 → 你確認摘要 → PRD 交叉審查與人工核准 → 拆任務 → 你檢視並核准任務 → 執行與驗收' : approved ? '任務已由你核准。手動模式每項完成後等你測試；所有模式最後都需功能驗收。' : '核准前請確認：每個任務做完都能單獨展示與手動測試嗎？粒度會太粗或太細嗎？依賴是否只列真正擋住它的任務？有沒有該合併或再拆的？可以直接人工編輯；核准後照清單順序執行。';
   const prd = snap.state.prd;
@@ -117,7 +126,9 @@ async function openInterview(id) {
     const confirmButton = dialog.querySelector('[data-confirm]'), draftButton = dialog.querySelector('[data-draft]');
     confirmButton.textContent = edited ? '重新確認摘要' : confirmed ? '已確認' : '確認需求摘要';
     confirmButton.disabled = pending || confirmed || !summary.value.trim(); confirmButton.classList.toggle('primary', !confirmed);
-    draftButton.hidden = !data?.confirmed; draftButton.disabled = pending || !confirmed;
+    draftButton.hidden = !data?.confirmed;
+    // 會議可以在流程執行中進行；開始寫 PRD 要等流程結束（防呆原因來自後端）。
+    applyGuard(draftButton, pending ? '處理中…' : !confirmed ? '請先確認需求摘要' : guardOf('backlog.draft'));
   };
   const close = () => dialog.close(); dialog.querySelector('[data-close]').onclick = close;
   dialog.onclose = () => { clearTimeout(timer); interviewDrafts.set(id,input.value); interviewDialog = null; dialog.remove(); };
@@ -176,7 +187,12 @@ async function openInterview(id) {
   };
   dialog.querySelector('[data-draft]').onclick = async () => {
     if (pending || !data?.confirmed) return;
-    if (snap?.prd && !confirm('以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。')) return;
+    // 目前功能還沒做完時講清楚後果：未完成的任務會留在原本的任務群組，不會繼續執行。
+    const unfinished = (snap?.tasks || []).filter(task => task.status !== 'done').length;
+    const switching = snap?.state?.pipeline?.status === 'complete' || !unfinished
+      ? '以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。'
+      : `目前功能還有 ${unfinished} 個任務未完成。改用這份需求起草新 PRD 後，流程會切換到新功能，舊任務留在原本的任務群組，不會繼續執行。確定要切換嗎？`;
+    if (snap?.prd && !confirm(switching)) return;
     pending = true; renderSummaryState();
     try { await api('/api/backlog/draft', { id }); interviewDrafts.delete(id); dialog.close(); toast('正在依確認的需求起草 PRD'); }
     catch (error) { summaryNote.textContent = error.message; pending = false; renderSummaryState(); }

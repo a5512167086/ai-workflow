@@ -370,3 +370,15 @@ function attachModelPicker(input, provider) {
 // 捲動或改變視窗大小時關閉，避免清單留在錯的位置。
 addEventListener('scroll', event => { if (modelPickerPopup && !modelPickerPopup.el.contains(event.target)) closeModelPicker(); }, true);
 addEventListener('resize', closeModelPicker);
+
+/** 防呆原因（後端依流程狀態算好，放在 snap.guards）；空字串代表可以做。 */
+function guardOf(name) {
+  return (typeof snap !== 'undefined' && snap?.guards?.[name]) || '';
+}
+/** 依防呆原因停用元素：有原因就停用並把原因放在提示文字；沒有就恢復（只清掉自己設的提示）。 */
+function applyGuard(el, reason) {
+  if (!el) return;
+  el.disabled = !!reason;
+  if (reason) { el.title = reason; el.dataset.guarded = '1'; }
+  else if (el.dataset.guarded) { el.title = ''; delete el.dataset.guarded; }
+}

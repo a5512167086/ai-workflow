@@ -1080,3 +1080,8 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .permission-actions { margin-top: var(--s-3); gap: var(--s-2); flex-wrap: wrap; align-items: center; }
 .permission-actions .spacer { flex: 1; }
 .permission-notice { position: fixed; right: 16px; bottom: 16px; z-index: 30; display: flex; align-items: center; gap: var(--s-3); padding: 10px 14px; background: var(--surface); border: 1px solid var(--warn); border-radius: var(--r-md); box-shadow: var(--shadow); font-size: 13px; }
+
+/* 防呆：鎖住的需求與參考資料，說明為什麼不能改。 */
+.bl-item.locked .bl-title { color: var(--text-muted); }
+.bl-lock, .reference-lock { margin: 6px 0 0; font-size: 12px; color: var(--text-muted); }
+.bl-lock::before, .reference-lock::before { content: "🔒 "; }

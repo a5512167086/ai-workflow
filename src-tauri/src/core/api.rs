@@ -57,7 +57,7 @@ pub fn snapshot(root: &Path) -> Result<Value> {
     let _ = crate::core::prd::recover_interrupted(root);
     let state = read_state(root);
     let runner_alive = is_pid_alive_value(&state["runner"]["pid"]);
-    Ok(json!({
+    let mut snap = json!({
         "root": root.to_string_lossy(),
         "dataDir": data_dir(root).to_string_lossy(),
         "project": { "id": project_id(root), "name": project_name(root) },
@@ -76,7 +76,10 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         // AI 要求、等使用者允許或拒絕的工具權限（最舊的在前）。
         "permissions": crate::core::permissions::pending(root),
         "state": state,
-    }))
+    });
+    // 防呆：每個操作現在能不能做、不能做的原因，前端據此停用按鈕。
+    snap["guards"] = crate::core::guards::project(&snap);
+    Ok(snap)
 }
 
 fn prd_rounds(root: &Path, state: &Value) -> Vec<Value> {
@@ -250,22 +253,26 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "references/assign" => {
             let refs = json!(crate::core::references::ids(root, &body["references"])?);
             match body["target"].as_str().unwrap_or("") {
-                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } crate::core::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; crate::core::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
-                "group" => { busy_guard(&snap)?; crate::core::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
-                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
-                "backlog" => { crate::core::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
+                "feature" => { crate::core::guards::check(&snap, "prd.references")?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } crate::core::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; crate::core::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
+                "group" => { crate::core::guards::check(&snap, "tasks.references")?; crate::core::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
+                "task" => {
+                    if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); }
+                    let task = crate::core::tasks::find_task(root, &text_field(body, "id"))?.ok_or_else(|| http(404, "找不到這個任務"))?;
+                    if let Some(why) = crate::core::guards::task_references(&snap, &task) { return Err(http(409, why)); }
+                    crate::core::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
+                "backlog" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
                 _ => return Err(http(400, "參考資料目標不正確")),
             }
             Ok(json!({ "ok": true }))
         }
-        "backlog/interview" => crate::core::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
-        "backlog/confirm" => crate::core::requirements::confirm(root, body),
-        "prd/save" => { busy_guard(&snap)?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
-        "prd/review" => { busy_guard(&snap)?; spawn(root, &["prd", "--review"]) },
-        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
+        "backlog/interview" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])) },
+        "backlog/confirm" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::requirements::confirm(root, body) },
+        "prd/save" => { crate::core::guards::check(&snap, "prd.edit")?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
+        "prd/review" => { crate::core::guards::check(&snap, "prd.review")?; spawn(root, &["prd", "--review"]) },
+        "task/save" => { if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::guards::check(&snap, "task.edit")?; let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
         // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
         "permissions/answer" => crate::core::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
-        "tasks/approve" => { busy_guard(&snap)?; crate::core::human::approve_tasks(root, &text_field(body, "revision")) },
+        "tasks/approve" => { crate::core::guards::check(&snap, "tasks.approve")?; crate::core::human::approve_tasks(root, &text_field(body, "revision")) },
         "chat/send" => crate::core::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
         "chat/cancel" => crate::core::chat::cancel_turn(root, &text_field(body, "chatId")),
         "chat/rename" => crate::core::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
@@ -279,12 +286,12 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             spawn(root, &["prd", &idea])
         }
         "prd/approve" => {
-            busy_guard(&snap)?;
+            crate::core::guards::check(&snap, "prd.approve")?;
             if body.get("version").is_some() && (body["version"] != snap["state"]["prd"]["version"] || body["scope"] != snap["state"]["prd"]["reference_scope"]) { return Err(http(409, "PRD 已更新，請重新閱讀後核准")); }
             approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
         }
         "prd/revise" => {
-            busy_guard(&snap)?;
+            crate::core::guards::check(&snap, "prd.revise")?;
             let feedback = text_field(body, "feedback").trim().to_string();
             if feedback.is_empty() {
                 return Err(http(400, "請輸入修改意見"));
@@ -292,11 +299,11 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             spawn(root, &["prd", "--revise", &feedback])
         }
         "tasks/generate" => {
-            busy_guard(&snap)?;
+            crate::core::guards::check(&snap, "tasks.generate")?;
             spawn(root, &["tasks"])
         }
         "run/start" => {
-            busy_guard(&snap)?;
+            crate::core::guards::check(&snap, "run.start")?;
             spawn_run(root, &["run"], body)
         }
         "run/pause" => {
@@ -308,15 +315,17 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             spawn_run(root, &["continue"], body)
         }
         "task/rerun" => {
-            busy_guard(&snap)?;
+            // 先檢查輸入格式（400），再檢查流程狀態（409）。
             let id = text_field(body, "id");
             if !is_task_id(&id) {
                 return Err(http(400, "任務 id 不正確"));
             }
+            crate::core::guards::check(&snap, "task.rerun")?;
             if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
         }
         "config/runtime" | "config/models" | "config/mode" | "config/limits" => config_action(action, body, Some(root)),
         "config/project" => {
+            crate::core::guards::check(&snap, "project.settings")?;
             // 只有 build/test/lint、feature、context_files 屬於專案。
             let mut patch = json!({});
             if let Some(commands) = body["commands"].as_object() {
@@ -384,13 +393,15 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
                     patch[k] = v.clone();
                 }
             }
+            crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?;
             Ok(json!({ "item": update_item(root, &text_field(body, "id"), &patch)? }))
         }
-        "backlog/delete" => Ok(json!({ "items": delete_item(root, &text_field(body, "id"))? })),
+        "backlog/delete" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; Ok(json!({ "items": delete_item(root, &text_field(body, "id"))? })) },
         "backlog/reorder" => Ok(json!({ "items": reorder_items(root, &body["ids"])? })),
         "backlog/draft" => {
             busy_guard(&snap)?;
             let item = get_item(root, &text_field(body, "id"))?;
+            crate::core::guards::check_backlog(&snap["state"], &item)?;
             crate::core::requirements::prd_input(root, &item)?;
             spawn(root, &["prd", "--backlog", item["id"].as_str().unwrap_or("")])
         }
@@ -432,7 +443,12 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
             }
             "references" => return Ok(json!({ "items": crate::core::references::list(root) })),
-            "backlog" => return Ok(json!({ "items": read_backlog(root)?, "path": crate::core::backlog::backlog_file(root).to_string_lossy() })),
+            "backlog" => {
+                // 每一項帶上 lock：已產生目前 PRD 或功能已完成的需求不能再改（前端停用按鈕並顯示原因）。
+                let state = read_state(root);
+                let items: Vec<Value> = read_backlog(root)?.into_iter().map(|mut item| { item["lock"] = json!(crate::core::guards::backlog_item(&state, &item)); item }).collect();
+                return Ok(json!({ "items": items, "path": crate::core::backlog::backlog_file(root).to_string_lossy() }));
+            }
             "archive" => return Ok(json!({ "items": list_archives(root)?, "dir": crate::core::archive::archive_root(root).to_string_lossy() })),
             _ => {}
         }

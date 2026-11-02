@@ -2,6 +2,7 @@
 pub mod archive;
 pub mod backlog;
 pub mod chat;
+pub mod guards;
 pub mod human;
 pub mod prd;
 pub mod references;

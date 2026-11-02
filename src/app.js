@@ -249,9 +249,17 @@ function renderPrd() {
   if (typeof renderHumanControls === 'function') renderHumanControls();
   const busy = snap.prdBusy || snap.runnerAlive || snap.taskGenBusy;
 
-  $('#btn-prd-approve').disabled = busy || state.prd.status !== 'awaiting_approval';
-  $('#btn-prd-revise').disabled = busy || !prd;
-  $('#btn-tasks').disabled = busy || state.prd.status !== 'approved';
+  // 防呆：後端依流程狀態算好原因（snap.guards）；沒有 guards 的舊資料退回原本的判斷。
+  if (snap.guards) {
+    applyGuard($('#btn-prd-approve'), guardOf('prd.approve'));
+    applyGuard($('#btn-prd-revise'), guardOf('prd.revise'));
+    applyGuard($('#feedback'), guardOf('prd.revise'));
+    applyGuard($('#btn-tasks'), guardOf('tasks.generate'));
+  } else {
+    $('#btn-prd-approve').disabled = busy || state.prd.status !== 'awaiting_approval';
+    $('#btn-prd-revise').disabled = busy || !prd;
+    $('#btn-tasks').disabled = busy || state.prd.status !== 'approved';
+  }
   $('#btn-tasks').hidden = state.task_gen?.status !== 'error';
   const tg = state.task_gen;
   const generating = snap.taskGenBusy || tg?.status === 'running';
@@ -415,7 +423,9 @@ function renderBoard() {
   const busy = alive || snap.prdBusy || snap.taskGenBusy;
   const st = state.pipeline.status;
   const needsHuman = NEEDS_HUMAN.includes(st);
-  $('#btn-start').disabled = busy || !tasks.length || state.prd.status !== 'approved' || snap.taskRevision !== state.task_approval?.revision;
+  if (snap.guards) applyGuard($('#btn-start'), guardOf('run.start'));
+  else $('#btn-start').disabled = busy || !tasks.length || state.prd.status !== 'approved' || snap.taskRevision !== state.task_approval?.revision;
+  applyGuard($('#btn-project-settings'), guardOf('project.settings'));
   $('#btn-pause').disabled = !alive || state.control.pause_requested;
   $('#btn-continue').disabled = busy || !needsHuman;
   // 每個畫面只有一個主要按鈕：等待人工時換成「繼續」。
@@ -504,7 +514,8 @@ function renderDetail() {
     if (cls) dd.className = cls;
     dl.append(box);
   }
-  $('#d-rerun').disabled = snap.runnerAlive;
+  if (snap.guards) { applyGuard($('#d-rerun'), guardOf('task.rerun')); applyGuard($('#d-revert'), guardOf('task.rerun')); }
+  else $('#d-rerun').disabled = snap.runnerAlive;
   $('#d-revert').parentElement.title = ts.commit ? `會 git revert ${ts.commit.slice(0, 8)}` : '手動模式沒有 commit：會把這個任務改過的檔案還原到任務開始前（之後任務對同檔案的修改也會一起還原）';
   renderTaskGates(t, ts);
   for (const b of $$('[data-sub]')) {
@@ -727,7 +738,6 @@ function renderBacklog() {
     list.innerHTML = '<li class="empty">還沒有需求，從左邊新增一個</li>';
     return;
   }
-  const busy = snap && (snap.prdBusy || snap.runnerAlive || snap.taskGenBusy);
   backlog.forEach((item, i) => {
     const li = document.createElement('li');
     li.className = `bl-item ${item.status}`;
@@ -770,7 +780,14 @@ function renderBacklog() {
     li.querySelector('[data-act="up"]').disabled = i === 0;
     li.querySelector('[data-act="down"]').disabled = i === backlog.length - 1;
     for (const b of li.querySelectorAll('.bl-actions button')) b.setAttribute('aria-label', `${b.getAttribute('aria-label') || b.textContent.trim()}：${item.title}`);
-    li.querySelector('[data-act="draft"]').disabled = busy || item.status === 'done';
+    // 防呆：已產生目前 PRD 或功能已完成的需求（後端給的 lock 原因）不能再編輯、刪除、改參考或重新釐清；排序不受影響。
+    const lock = item.lock || (item.status === 'done' ? '這項需求的功能已完成，不能再修改' : '');
+    for (const act of ['references', 'edit', 'delete', 'draft']) applyGuard(li.querySelector(`[data-act="${act}"]`), lock);
+    if (lock) {
+      li.classList.add('locked');
+      const why = document.createElement('p'); why.className = 'hint bl-lock'; why.textContent = lock;
+      li.querySelector('.bl-main').append(why);
+    }
     list.append(li);
   });
 }
@@ -815,6 +832,8 @@ function bindBacklog() {
     if (!btn) return;
     const id = btn.closest('.bl-item').dataset.id;
     const item = backlog.find((i) => i.id === id);
+    // 防呆：鎖住的需求只能排序（按鈕已停用，這裡再擋一次避免畫面還沒更新時被點到）。
+    if (item?.lock && ['references', 'edit', 'save', 'delete', 'draft'].includes(btn.dataset.act)) { toast(item.lock, true); return; }
     switch (btn.dataset.act) {
       case 'up':
         return moveBacklog(id, -1);

@@ -23,4 +23,4 @@ pub use error::{AppError, Result};
 pub use project::{config, home, init, projects, queue, state, watch};
 pub use skills::builtin as builtin_skills;
 pub use system::{doctor, git, proc, runtime};
-pub use workflow::{archive, backlog, chat, human, prd, references, requirements, runner, tasks};
+pub use workflow::{archive, backlog, chat, guards, human, prd, references, requirements, runner, tasks};

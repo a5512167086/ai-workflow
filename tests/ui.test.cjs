@@ -30,6 +30,7 @@ function page() {
     renderHumanControls, editHumanPrd, editHumanTask, approveHumanPrd, openInterview,
     parseUnifiedDiff, splitRows, diffView,
     renderPermissions,
+    renderBacklog, setBacklog(value) { backlog = value; },
     setDetail(value) { detail = value; },
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
@@ -919,5 +920,59 @@ test('AI 要求權限時跳出對話框：顯示指令與規則，回答送到�
   state.permissions = []; ui.setSnap(state); ui.renderPermissions();
   assert.equal(doc.querySelector('dialog.permission-dialog'), null);
   assert.equal(doc.querySelector('#permission-notice'), null);
+  dom.window.close();
+});
+
+test('防呆：已產生目前 PRD 的需求只能排序，按鈕停用並顯示原因；點擊也會被擋下', async () => {
+  const { dom, ui, doc } = page();
+  ui.setSnap(snapshot()); ui.bind();
+  const lock = '這項需求已產生目前的 PRD，不能再修改或重新釐清；要調整請到 PRD 頁人工編輯或要求再改';
+  ui.setBacklog([
+    { id: 'a', title: '目前功能', status: 'in_progress', references: [], lock },
+    { id: 'b', title: '下一個', status: 'open', references: [], lock: null },
+  ]);
+  ui.renderBacklog();
+  const [locked, open] = doc.querySelectorAll('#backlog .bl-item');
+  for (const act of ['references', 'edit', 'delete', 'draft']) {
+    const button = locked.querySelector(`[data-act="${act}"]`);
+    assert.equal(button.disabled, true, act);
+    assert.equal(button.title, lock, act);
+    assert.equal(open.querySelector(`[data-act="${act}"]`).disabled, false, act);
+  }
+  assert.equal(locked.querySelector('[data-act="down"]').disabled, false, '排序不受影響');
+  assert.match(locked.querySelector('.bl-lock').textContent, /目前的 PRD/);
+  const requests = [];
+  ui.setApi(async (path) => { requests.push(path); return {}; });
+  locked.querySelector('[data-act="delete"]').disabled = false; // 模擬畫面還沒更新時被點到
+  locked.querySelector('[data-act="delete"]').click();
+  await new Promise(r => setTimeout(r, 0));
+  assert.equal(requests.length, 0);
+  dom.window.close();
+});
+
+test('防呆：按鈕依後端 guards 停用並顯示原因，參考資料被鎖住時不能加入或移除', () => {
+  const { dom, ui, doc } = page();
+  const state = snapshot(); state.root = 'C:/p'; state.prd = '# PRD';
+  state.state.prd = { status: 'approved', rounds: [], references: ['r1'] };
+  state.state.pipeline.status = 'complete';
+  state.tasks = [{ id: 1, title: '登入', status: 'done' }];
+  const done = '這個功能已完成並封存；要再修改請從需求待辦開始新的需求';
+  state.guards = { 'prd.edit': done, 'prd.revise': done, 'prd.review': done, 'prd.approve': 'PRD 目前不是等待核准', 'prd.references': done, 'tasks.generate': done, 'tasks.approve': done, 'tasks.references': done, 'task.edit': done, 'task.rerun': done, 'run.start': done, 'project.settings': null, 'backlog.draft': null };
+  ui.catalog([{ id: 'r1', name: '規格.md', kind: 'file' }]);
+  ui.setSnap(state); ui.bind(); ui.renderPrd(); ui.renderBoard(); ui.renderHumanControls(); ui.renderReferenceWidgets();
+  for (const id of ['#btn-prd-edit', '#btn-prd-review', '#btn-prd-revise', '#btn-start']) {
+    assert.equal(doc.querySelector(id).disabled, true, id);
+    assert.equal(doc.querySelector(id).title, done, id);
+  }
+  assert.equal(doc.querySelector('#btn-project-settings').disabled, false);
+  const feature = doc.querySelector('#prd-references');
+  assert.equal(feature.querySelector('.reference-add').disabled, true);
+  assert.equal(feature.querySelector('.reference-chip button'), null, '鎖住時不顯示移除按鈕');
+  assert.match(feature.querySelector('.reference-lock').textContent, /已完成/);
+  // 原因消失（例如重新開始新需求）後恢復可用，提示文字也清掉。
+  state.guards = Object.fromEntries(Object.keys(state.guards).map(key => [key, null]));
+  ui.setSnap(state); ui.renderPrd(); ui.renderHumanControls();
+  assert.equal(doc.querySelector('#btn-prd-edit').disabled, false);
+  assert.equal(doc.querySelector('#btn-prd-edit').title, '');
   dom.window.close();
 });

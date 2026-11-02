@@ -23,11 +23,14 @@ function referenceChips(ids, remove) {
 function referenceOptions(type) {
   if (type === 'backlog-draft') return { title: '需求參考', key: 'backlog', ids: referenceDraft('backlog') };
   if (type === 'chat') { const key = `chat:${chatId || 'new'}`; return { title: '訊息參考', key, ids: referenceDraft(key) }; }
-  if (type === 'feature') return { title: '功能參考（PRD、拆任務共用）', target: 'feature', featureScope: snap?.state?.prd?.reference_scope || null, ids: snap?.state?.prd?.references || [] };
-  if (type === 'group') return { title: '功能共用參考', target: 'group', tag: snap?.taskTag, ids: snap?.taskReferences || [] };
-  if (type === 'task') return { title: '此任務額外參考（另沿用功能與父任務）', target: 'task', id: detail?.id, tag: snap?.taskTag, ids: detail?.task?.references || [] };
+  // lock：後端防呆規則給的原因（執行中、功能已完成、任務已完成）；有原因時只能看、不能改。
+  const guard = name => snap?.guards?.[name] || '';
+  if (type === 'feature') return { title: '功能參考（PRD、拆任務共用）', target: 'feature', featureScope: snap?.state?.prd?.reference_scope || null, ids: snap?.state?.prd?.references || [], lock: guard('prd.references') };
+  if (type === 'group') return { title: '功能共用參考', target: 'group', tag: snap?.taskTag, ids: snap?.taskReferences || [], lock: guard('tasks.references') };
+  if (type === 'task') return { title: '此任務額外參考（另沿用功能與父任務）', target: 'task', id: detail?.id, tag: snap?.taskTag, ids: detail?.task?.references || [], lock: guard('tasks.references') || (detail?.task?.status === 'done' ? '這個任務已完成，參考資料不會再被使用' : '') };
 }
 async function saveReferenceSelection(options, ids) {
+  if (options.lock) throw new Error(options.lock);
   ids = [...new Set(ids)]; if (ids.length > 24) throw new Error('最多加入 24 份參考資料');
   if (options.key) referenceDrafts.set(options.key, [...ids]);
   else {
@@ -45,9 +48,11 @@ function renderReferenceWidget(host, options) {
   const toolbar = document.createElement('div'); toolbar.className = 'reference-toolbar';
   const label = document.createElement('span'); label.className = 'hint'; label.textContent = options.title;
   const button = document.createElement('button'); button.type = 'button'; button.className = 'reference-add'; button.textContent = '＋ 加入參考';
-  if (options.target === 'group' && !snap?.tasks?.length) { button.disabled = true; button.title = '拆任務前的參考資料請加在 PRD 或需求待辦'; }
+  if (options.lock) { button.disabled = true; button.title = options.lock; }
   button.onclick = () => openReferenceDialog(options); toolbar.append(label, button);
-  host.append(toolbar, referenceChips(options.ids, id => saveReferenceSelection(options, options.ids.filter(value => value !== id)).catch(error => toast(error.message, true))));
+  host.classList.toggle('locked', !!options.lock);
+  host.append(toolbar, referenceChips(options.ids, options.lock ? null : id => saveReferenceSelection(options, options.ids.filter(value => value !== id)).catch(error => toast(error.message, true))));
+  if (options.lock) { const why = document.createElement('p'); why.className = 'hint reference-lock'; why.textContent = options.lock; host.append(why); }
   host._referenceOptions = () => options;
 }
 function renderReferenceWidgets() {
@@ -191,6 +196,7 @@ function bindReferences() {
     const type = element?.closest('#tab-backlog') ? 'backlog-draft' : element?.closest('#tab-prd') ? 'feature' : element?.closest('#detail') ? 'task' : element?.closest('#tab-board') ? 'group' : element?.closest('#tab-chat') ? 'chat' : null;
     if (!type) { toast('請將參考資料拖到需求、PRD、任務或聊天區域'); return; }
     const options = referenceOptions(type); const ids = [...options.ids];
+    if (options.lock) { toast(options.lock, true); return; }
     try { for (const path of paths.slice(0,16)) ids.push((await importReference({ path })).id); await saveReferenceSelection(options, [...new Set(ids)]); toast('已加入參考資料'); }
     catch (error) { toast(error.message, true); }
   }).catch(error => console.warn('參考資料拖放無法啟用', error));
