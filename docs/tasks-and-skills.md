@@ -30,7 +30,7 @@ description: 說明技能用途及使用時機。
 技能指令。
 ```
 
-可帶 references、scripts、assets 等相對資源。匯入會保留完整目錄；不自動執行腳本。單一技能上限 500 個檔案、10 MB，SKILL.md 上限 100 KB；符號連結不支援。
+可帶 references、scripts、assets 等相對資源。匯入的來源資料夾結構與 Claude Code 的 `.claude/skills/<name>/` 相同：資料夾最上層要有 `SKILL.md`（檔名不分大小寫，`skill.md` 也接受，存進技能庫時統一叫 `SKILL.md`），其餘檔案與子目錄原樣複製；缺 SKILL.md 或路徑不是資料夾會拒絕。不自動執行腳本。單一技能上限 500 個檔案、10 MB，SKILL.md 上限 100 KB；符號連結不支援。
 
 ```bash
 ai-workflow skills list
@@ -39,7 +39,13 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 ai-workflow skills run grill-me --input "使用者是財務人員" --session <上次回覆-id>
 ```
 
-在桌面 UI 的「Skills」頁可匯入／編輯技能、選擇執行器、接續會議，以及將會議帶入 PRD 需求欄位。每次送出建立全新 CLI session，透過明確的會議紀錄交接；不 resume 原 session。
+桌面 UI 的「Skills」頁是「左側清單 + 右側內容」：
+
+- 左側列出所有技能（名稱、一行說明、來源「內建／匯入／內建・已修改」與相容狀態「相容／需調整／錯誤」），上方有搜尋框與「匯入技能」（原生資料夾選擇器，也接受把資料夾拖放到清單）。匯入後清單立即更新並選到新技能。
+- 右側「內容」子頁顯示 SKILL.md 的 Markdown 預覽（與專案對話相同的渲染，含 Mermaid）、frontmatter 欄位（執行器專屬欄位會標示）與資源檔清單；「編輯」切到文字框，「儲存」寫回技能庫。匯入的技能可「刪除」（整個資料夾從技能庫移除）；內建技能沒有刪除，編輯過的內建技能顯示「還原內建」，刪掉副本後回到內建版本。對應 API：`POST skills/save`、`skills/import`、`skills/delete`。
+- 右側「會議」子頁是完整高度的對話區：訊息同樣以 Markdown 渲染，下方是輸入框與 AI（claude／codex）選單，送出時顯示「AI 正在回覆（已 N 秒）」並可展開該次 CLI 的執行紀錄；上方下拉可切換歷史會議、接續已完成的會議或開新會議，「帶入需求待辦」把會議紀錄放進新需求。每次送出建立全新 CLI session，透過明確的會議紀錄交接；不 resume 原 session。會議紀錄（`skill-runs/<id>.json`）的每則訊息帶 `at` 時間與 `provider`，執行中的會議在建立時就記下 `provider` 與 `created_at`。
+- 清單最上面的「工作流技能綁定」在右側顯示一張階段表（PRD 起草／修訂、PRD 審查、拆解任務、實作、程式碼審查、修正、交接），每列用 chips 顯示已綁定的技能，「＋」從相容技能的清單加入、chip 上的「×」移除；「儲存」只在有變更時啟用，資料走全域設定的 `skills/config`。
+- 側欄與內容區各自捲動，App 外框不捲動；視窗窄於 900px 時側欄改為上方可收合的清單。
 
 全域設定的 skills 可將技能綁定到 prd、prd_review、tasks、implement、code_review、fix、handover 階段，預設皆為空。任務自己的 skills 在實作、修正與程式碼審查時一起載入。
 

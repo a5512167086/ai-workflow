@@ -86,6 +86,11 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 async fn pick_reference_files(app: AppHandle) -> Vec<String> {
     app.dialog().file().set_title("加入參考檔案").blocking_pick_files().unwrap_or_default().into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect()
 }
+/// 「匯入技能」：選擇像 .claude/skills/<name>/ 這樣包含 SKILL.md 的資料夾。
+#[tauri::command]
+async fn pick_skill_folder(app: AppHandle) -> Option<String> {
+    app.dialog().file().set_title("匯入技能資料夾（需包含 SKILL.md）").blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string())
+}
 #[tauri::command]
 async fn pick_reference_folder(app: AppHandle) -> Option<String> {
     app.dialog().file().set_title("加入參考資料夾（建立快照）").blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string())
@@ -148,7 +153,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Watching(Mutex::new(HashSet::new())))
-        .invoke_handler(tauri::generate_handler![api, watch_project, pick_folder, pick_reference_files, pick_reference_folder])
+        .invoke_handler(tauri::generate_handler![api, watch_project, pick_folder, pick_skill_folder, pick_reference_files, pick_reference_folder])
         .setup(|app| {
             let open = MenuItem::with_id(app, "open", format!("開啟 {APP_NAME}"), true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", format!("結束 {APP_NAME}"), true, None::<&str>)?;

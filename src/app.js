@@ -242,7 +242,7 @@ function renderPrd() {
   chip.className = `chip ${state.prd.status}`;
   const busyEl = $('#prd-busy');
   const busyText = snap.prdBusy ? 'AI 處理中，可在「紀錄 → Log → PRD」查看輸出' : state.prd.error ? `上次錯誤：${state.prd.error}` : '';
-  busyEl.textContent = busyText;
+  liveSince(busyEl, busyText, snap.prdBusy ? state.prd.started_at : null);
   busyEl.classList.toggle('hidden', !busyText);
   busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
   renderPrdBody();
@@ -254,8 +254,9 @@ function renderPrd() {
   $('#btn-tasks').disabled = busy || state.prd.status !== 'approved';
   $('#btn-tasks').hidden = state.task_gen?.status !== 'error';
   const tg = state.task_gen;
-  $('#task-gen').textContent = (snap.taskGenBusy || tg?.status === 'running') ? 'AI 產生任務中…'
-    : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '';
+  const generating = snap.taskGenBusy || tg?.status === 'running';
+  liveSince($('#task-gen'), generating ? 'AI 產生任務中…'
+    : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '', generating ? tg?.started_at : null);
   const badge = $('#tab-prd-badge');
   badge.textContent = state.prd.status === 'awaiting_approval' ? '待核准' : '';
   badge.classList.toggle('attn', state.prd.status === 'awaiting_approval');
@@ -420,11 +421,11 @@ function renderBoard() {
   // 每個畫面只有一個主要按鈕：等待人工時換成「繼續」。
   $('#btn-continue').classList.toggle('primary', needsHuman && !busy);
   $('#btn-start').classList.toggle('primary', !(needsHuman && !busy));
-  $('#runner-info').textContent = alive && st === 'queued'
+  liveSince($('#runner-info'), alive && st === 'queued'
     ? `排隊等其他專案跑完${state.control.pause_requested ? '・將取消排隊' : '・可以按暫停取消排隊'}`
     : alive
-    ? `runner pid ${state.runner.pid}${state.control.pause_requested ? '・將在目前任務結束後暫停' : ''}`
-    : !tasks.length ? '還沒有任務：先在 PRD 頁核准並產生任務' : '';
+    ? `執行中・runner pid ${state.runner.pid}${state.control.pause_requested ? '・將在目前任務結束後暫停' : ''}`
+    : !tasks.length ? '還沒有任務：先在 PRD 頁核准並產生任務' : '', alive && st !== 'queued' ? state.runner.started_at : null);
   const badge = $('#tab-board-badge');
   badge.textContent = tasks.length ? `${counts.done || 0}/${tasks.length}` : '';
   badge.classList.toggle('attn', needsHuman);
@@ -640,7 +641,7 @@ function onState(data) {
   $('#quota-notice').hidden = !blocked || quotaDismissed === JSON.stringify(blocked) || data.runnerAlive || !['stuck', 'error'].includes(data.state.pipeline.status);
   $('#quota-message').textContent = blocked ? `${blocked.message}。可確認後改用另一個 AI 繼續；實作與審查會分開建立 session。` : '';
   if (skillChanged) loadSkillRuns().catch(err => toast(err.message, true));
-  $('#skill-run').disabled = !!(data.skillBusy || data.runnerAlive || data.prdBusy || data.taskGenBusy);
+  else renderSkillControls();
   renderProjectSettings();
   renderTop();
   renderUsage();
@@ -679,6 +680,7 @@ function connect() {
       if (isNew) renderLogSelect();
       else if ($('#log-scope').value === scope) renderLog();
       if (scope.startsWith('chat-') && typeof renderChatLive === 'function') renderChatLive();
+      if (scope.startsWith('skill-')) renderSkillLive();
       if (detail && scope === `task-${detail.id}` && subtab === 'log') renderDetail();
     },
     error: ({ message }) => {
@@ -1094,93 +1096,332 @@ function showTab(b) {
   }
 }
 
-let skillLibrary = [], skillRuns = [], skillEditingName = null;
+// ---------- Skills：左側技能清單 + 右側內容／會議；工作流綁定是全域設定的一張表 ----------
+let skillLibrary = [], skillRuns = [], skillStages = [];
+let skillSelected = null; // 技能名稱、'bindings'（綁定表）或 null（還沒選）
+let skillView = 'content', skillEditing = false, skillEditingName = null, skillPreviewKey = '';
+let skillRunId = '', skillRunFresh = false, skillSending = false, skillMessagesKey = '', skillQuery = ''; // skillRunFresh：使用者明確選了「新會議」，不要自動跳回最近一場
+let skillBindings = {}, skillBindingsSaved = {};
 const SKILL_STAGE_LABELS = { prd: 'PRD 起草／修訂', prd_review: 'PRD 審查', tasks: '拆解任務', implement: '實作', code_review: '程式碼審查', fix: '修正', handover: '交接' };
-function renderSkillEditor() {
-  const selected = skillLibrary.find(skill => skill.name === $('#skill-name').value);
-  skillEditingName = selected?.name || null;
-  $('#skill-editor').value = selected?.text || '';
-  $('#skill-compatibility').textContent = selected?.compatible ? '共用指令可供 Codex／Claude Code 使用；附帶工具仍需執行環境支援。'
-    : selected?.error || `需調整專屬欄位：${selected?.extensions?.join(', ') || ''}`;
-  renderSkillHistory();
+const SKILL_RUN_STATUS = { running: '回覆中', done: '已回覆', error: '失敗' };
+const SKILL_TEMPLATE = '---\nname: my-skill\ndescription: 說明用途及使用時機\n---\n在此撰寫技能指令。\n';
+const skillStageList = () => skillStages.length ? skillStages : Object.keys(SKILL_STAGE_LABELS);
+const skillOf = name => skillLibrary.find(skill => skill.name === name);
+const skillRunsOf = name => skillRuns.filter(run => run.name === name);
+const skillRunActive = run => run && run.status === 'running';
+function normalizeSkillBindings(config) {
+  return Object.fromEntries(skillStageList().map(stage => [stage, [...new Set((config?.[stage] || []).filter(name => typeof name === 'string'))]]));
+}
+const skillBindingsDirty = () => JSON.stringify(skillBindings) !== JSON.stringify(skillBindingsSaved);
+/** 技能來源與相容狀態的文字，側欄與標題共用。 */
+function skillOriginText(skill) {
+  const origin = skill.hasBuiltin ? (skill.dir ? '內建・已修改' : '內建') : '匯入';
+  const compat = skill.error ? '錯誤' : skill.compatible ? '相容' : '需調整';
+  return { origin, compat };
+}
+/** SKILL.md 最上面 YAML frontmatter 的頂層欄位（只為顯示，解析在後端）。 */
+function skillFrontmatter(text) {
+  const match = String(text || '').replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return [];
+  const fields = [];
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (field) fields.push([field[1], /^[|>][-+]?$/.test(field[2]) ? '' : field[2]]);
+    else if (fields.length && /^\s+\S/.test(line)) fields[fields.length - 1][1] = `${fields[fields.length - 1][1]} ${line.trim()}`.trim();
+  }
+  return fields;
 }
 async function loadSkills() {
   const data = await api('/api/skills');
-  skillLibrary = data.skills;
-  const previous = $('#skill-name').value;
-  $('#skill-name').replaceChildren(...skillLibrary.map(skill => new Option(skill.name, skill.name)));
-  if (skillLibrary.some(skill => skill.name === previous)) $('#skill-name').value = previous;
-  renderSkillEditor();
-  $('#skill-bindings').replaceChildren();
-  for (const stage of data.stages) {
-    const group = document.createElement('fieldset');
-    const legend = document.createElement('legend'); legend.textContent = SKILL_STAGE_LABELS[stage]; group.append(legend);
-    for (const skill of skillLibrary.filter(skill => skill.compatible)) {
-      const label = document.createElement('label');
-      const input = document.createElement('input'); input.type = 'checkbox'; input.dataset.skillStage = stage; input.value = skill.name;
-      input.checked = (data.config?.[stage] || []).includes(skill.name);
-      label.append(input, document.createTextNode(` ${skill.name} `)); group.append(label);
-    }
-    $('#skill-bindings').append(group);
-  }
+  skillLibrary = data.skills || [];
+  skillStages = Array.isArray(data.stages) ? data.stages : skillStageList();
+  const dirty = skillBindingsDirty();
+  skillBindingsSaved = normalizeSkillBindings(data.config);
+  if (!dirty) skillBindings = structuredClone(skillBindingsSaved);
+  if (skillSelected && skillSelected !== 'bindings' && !skillOf(skillSelected) && !skillEditing) skillSelected = null;
+  if (!skillSelected && !skillEditing && skillLibrary.length) skillSelected = skillLibrary[0].name;
+  renderSkills();
   await loadSkillRuns();
-}
-function renderSkillHistory() {
-  const select = $('#skill-run-history'), previous = select.value;
-  select.replaceChildren(new Option('新會議', ''));
-  for (const run of skillRuns.filter(run => run.name === $('#skill-name').value)) {
-    select.append(new Option(`${run.updated_at.slice(0, 19)} · ${run.status} · ${run.messages[0]?.text.slice(0, 25)}`, run.id));
-  }
-  if (skillRuns.some(run => run.id === previous && run.name === $('#skill-name').value)) select.value = previous;
-}
-function renderSkillOutput() {
-  const run = skillRuns.find(run => run.id === $('#skill-run-history').value);
-  $('#skill-output').textContent = run ? `${run.messages.map(message => `${message.role === 'user' ? '你' : run.provider || 'AI'}：${message.text}`).join('\n\n')}\n\n${run.error || run.status}` : '';
 }
 async function loadSkillRuns() {
   const { runs } = await api('/api/skills/runs');
-  const previousCount = skillRuns.length;
-  skillRuns = runs;
-  renderSkillHistory();
-  if (runs.length > previousCount && runs[0]?.name === $('#skill-name').value) $('#skill-run-history').value = runs[0].id;
-  renderSkillOutput();
+  const known = new Set(skillRuns.map(run => run.id));
+  skillRuns = Array.isArray(runs) ? runs : [];
+  // 剛送出的回覆：目前是新會議或接續的那場，就自動切到新建立的會議。
+  const fresh = skillRuns.find(run => !known.has(run.id) && run.name === skillSelected);
+  if (fresh && (!skillRunId || fresh.previousId === skillRunId)) { skillRunId = fresh.id; skillRunFresh = false; }
+  // 沒有明確選「新會議」時，預設顯示這個技能最近的一場會議。
+  if (!skillRunId && !skillRunFresh && skillSelected) skillRunId = skillRunsOf(skillSelected)[0]?.id || '';
+  renderSkills();
+}
+function selectSkill(name) {
+  if (skillSelected === name && !skillEditing) return;
+  skillSelected = name; skillEditing = false; skillEditingName = null;
+  skillRunFresh = false; skillRunId = name === 'bindings' ? '' : skillRunsOf(name)[0]?.id || '';
+  $('.skills-sidebar').classList.remove('open');
+  renderSkills();
+}
+function showSkillView(view) {
+  skillView = view;
+  for (const button of $$('[data-skill-view]')) {
+    const on = button.dataset.skillView === view;
+    button.classList.toggle('active', on); button.setAttribute('aria-selected', String(on)); button.tabIndex = on ? 0 : -1;
+  }
+  renderSkillPane();
+}
+function renderSkills() { renderSkillList(); renderSkillPane(); renderSkillBindings(); }
+function renderSkillList() {
+  const query = skillQuery.trim().toLocaleLowerCase();
+  const list = $('#skill-list'); list.replaceChildren();
+  const visible = skillLibrary.filter(skill => !query || `${skill.name} ${skill.description || ''}`.toLocaleLowerCase().includes(query));
+  if (!visible.length) list.innerHTML = `<li class="empty">${skillLibrary.length ? '沒有符合的技能' : '還沒有技能'}</li>`;
+  for (const skill of visible) {
+    const item = document.createElement('li'), button = document.createElement('button'); button.type = 'button';
+    const { origin, compat } = skillOriginText(skill);
+    button.className = 'skill-item'; button.dataset.skill = skill.name; button.setAttribute('aria-current', String(skill.name === skillSelected));
+    button.innerHTML = '<strong></strong><span class="skill-item-desc"></span><span class="skill-item-tags"><span class="chip"></span><span class="chip"></span></span>';
+    button.querySelector('strong').textContent = skill.name;
+    button.querySelector('.skill-item-desc').textContent = skill.error || skill.description || '';
+    const [originChip, compatChip] = button.querySelectorAll('.chip');
+    originChip.textContent = origin; compatChip.textContent = compat; compatChip.classList.add(skill.error ? 'bad' : skill.compatible ? 'ok' : 'warn');
+    button.onclick = () => selectSkill(skill.name); item.append(button); list.append(item);
+  }
+  $('#skill-nav-bindings').setAttribute('aria-current', String(skillSelected === 'bindings'));
+  const toggle = $('#skills-toggle');
+  toggle.querySelector('span').textContent = skillSelected === 'bindings' ? '工作流技能綁定' : skillSelected || (skillEditing ? '新技能' : '技能清單');
+}
+function renderSkillPane() {
+  const skill = skillSelected && skillSelected !== 'bindings' ? skillOf(skillSelected) : null;
+  const draft = skillEditing && !skill; // 新增技能
+  $('#skill-bindings-pane').hidden = skillSelected !== 'bindings';
+  $('#skill-pane').hidden = !(skill || draft);
+  $('#skill-empty').hidden = !!(skill || draft || skillSelected === 'bindings');
+  if (!(skill || draft)) return;
+  const { origin, compat } = skill ? skillOriginText(skill) : { origin: '新技能', compat: '' };
+  $('#skill-origin').textContent = skill ? `${origin} · ${compat}` : origin;
+  $('#skill-title').textContent = skill ? skill.name : '新技能';
+  $('#skill-description').textContent = skill ? skill.error || skill.description || '' : '儲存後會以 frontmatter 的 name 建立技能資料夾。';
+  $('#skill-edit').hidden = !skill || skillEditing; $('#skill-edit').disabled = !!skill?.error && !skill?.text;
+  const removable = !!skill && (!skill.hasBuiltin || !!skill.dir);
+  $('#skill-delete').hidden = !removable || skillEditing;
+  $('#skill-delete').innerHTML = `${icon(skill?.hasBuiltin ? 'redo' : 'trash')}${skill?.hasBuiltin ? '還原內建' : '刪除'}`;
+  $('#skill-delete').title = skill?.hasBuiltin ? '刪掉修改過的副本，回到內建版本' : '從技能庫移除整個技能資料夾';
+  $('.skill-subtabs').hidden = draft;
+  if (draft) skillView = 'content';
+  $('#skill-content').hidden = skillView !== 'content';
+  $('#skill-meeting').hidden = skillView !== 'meeting';
+  const runs = skill ? skillRunsOf(skill.name) : [];
+  $('#skill-meeting-badge').textContent = runs.some(skillRunActive) ? '回覆中' : runs.length ? String(runs.length) : '';
+  $('#skill-meeting-badge').classList.toggle('attn', runs.some(skillRunActive));
+  if (skillView === 'content') renderSkillContent(skill);
+  else renderSkillMeeting(skill);
+}
+function renderSkillContent(skill) {
+  $('#skill-view').hidden = skillEditing; $('#skill-editing').hidden = !skillEditing;
+  if (skillEditing) {
+    $('#skill-compatibility').textContent = skill ? (skill.compatible ? '共用指令可供 Codex／Claude Code 使用；附帶工具仍需執行環境支援。' : skill.error || `需調整專屬欄位：${skill.extensions?.join(', ') || ''}`) : '需要 name、description 與指令本文；name 只能用小寫字母、數字與連字號。';
+    return;
+  }
+  const meta = $('#skill-meta'); meta.replaceChildren();
+  const fields = skillFrontmatter(skill.text);
+  for (const [key, value] of fields.length ? fields : [['name', skill.name], ['description', skill.description]]) {
+    const box = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd');
+    dt.textContent = key; dd.textContent = value || '（多行）'; dd.title = value || '';
+    if (skill.extensions?.includes(key)) { box.classList.add('warn'); dt.textContent = `${key}（執行器專屬）`; }
+    box.append(dt, dd); meta.append(box);
+  }
+  const status = document.createElement('div'), dt = document.createElement('dt'), dd = document.createElement('dd');
+  dt.textContent = '相容性'; dd.textContent = skill.error ? skill.error : skill.compatible ? 'Codex／Claude Code 共用' : `需先轉寫：${skill.extensions?.join(', ')}`;
+  dd.className = skill.error ? 'bad' : skill.compatible ? 'ok' : 'warn'; status.append(dt, dd); meta.append(status);
+  const files = $('#skill-files'); files.replaceChildren();
+  const label = document.createElement('span'); label.className = 'hint'; label.textContent = skill.dir ? `資源檔 · ${skill.dir}` : '內建技能只有 SKILL.md，編進執行檔';
+  files.append(label);
+  for (const file of skill.files || []) {
+    const chip = document.createElement('span'); chip.className = 'skill-file mono'; chip.textContent = file.path; chip.title = `${file.bytes} bytes`; files.append(chip);
+  }
+  const key = `${skill.name}|${skill.body || ''}|${skill.error || ''}`;
+  if (skillPreviewKey === key) return;
+  skillPreviewKey = key;
+  const preview = $('#skill-preview');
+  if (skill.error) { preview.innerHTML = '<p class="empty"></p>'; preview.querySelector('p').textContent = `這個技能無法讀取：${skill.error}`; return; }
+  if (typeof renderChatMarkdown === 'function') renderChatMarkdown(preview, skill.body || '');
+  else preview.textContent = skill.body || '';
+}
+function renderSkillMeeting(skill) {
+  const select = $('#skill-run-history');
+  const runs = skillRunsOf(skill.name);
+  if (!runs.some(run => run.id === skillRunId)) skillRunId = '';
+  select.replaceChildren(new Option('新會議', ''), ...runs.map(run => {
+    const first = run.messages?.[0]?.text?.split('\n')[0] || '';
+    return new Option(`${run.updated_at ? new Date(run.updated_at).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · ${SKILL_RUN_STATUS[run.status] || run.status} · ${first.slice(0, 40)}`, run.id);
+  }));
+  select.value = skillRunId;
+  renderSkillMessages(skill); renderSkillControls();
+}
+function renderSkillMessages(skill) {
+  const host = $('#skill-messages');
+  const run = skillRuns.find(run => run.id === skillRunId);
+  const key = `${skill.name}|${run?.id || ''}|${run?.messages?.length || 0}|${run?.status || ''}|${run?.error || ''}`;
+  if (key === skillMessagesKey) { renderSkillLive(); return; }
+  skillMessagesKey = key;
+  const atBottom = host.scrollTop + host.clientHeight >= host.scrollHeight - 50;
+  host.replaceChildren();
+  if (!run) {
+    host.innerHTML = '<div class="chat-welcome"><span class="eyebrow">技能會議</span><h3></h3><p></p></div>';
+    host.querySelector('h3').textContent = `與 ${skill.name} 開一場會議`;
+    host.querySelector('p').textContent = `${skill.description || ''} 會議是唯讀的釐清對話，AI 不會修改專案；確認的需求可帶入需求待辦。`;
+    return;
+  }
+  for (const message of run.messages || []) {
+    const article = document.createElement('article'); article.className = `chat-message ${message.role === 'user' ? 'from-user' : 'from-ai'}`;
+    const heading = document.createElement('div'); heading.className = 'chat-message-head';
+    const name = document.createElement('b'); name.textContent = message.role === 'user' ? '你' : PROVIDER_LABEL[message.provider || run.provider] || skill.name;
+    const time = document.createElement('span'); time.textContent = message.at ? new Date(message.at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '';
+    const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = '複製'; copy.className = 'chat-copy';
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(message.text); toast('已複製訊息'); } catch { toast('無法存取剪貼簿，請選取文字複製', true); } };
+    heading.append(name, time, copy);
+    const body = document.createElement('div'); body.className = 'chat-message-body md';
+    if (message.role === 'user') { body.textContent = message.text; body.classList.add('plain-text'); }
+    else if (typeof renderChatMarkdown === 'function') renderChatMarkdown(body, message.text).then(() => { if (atBottom && body.isConnected) host.scrollTop = host.scrollHeight; });
+    else body.textContent = message.text;
+    article.append(heading, body); host.append(article);
+  }
+  if (run.status === 'error') {
+    const notice = document.createElement('p'); notice.className = 'notice bad'; notice.textContent = `這次回覆失敗：${run.error || '未知錯誤'}。請開新會議，或選擇已完成的會議接續。`; host.append(notice);
+  }
+  if (skillRunActive(run)) {
+    const activity = document.createElement('details'); activity.className = 'chat-activity'; activity.open = true;
+    activity.innerHTML = '<summary></summary><div id="skill-live" class="lg-host"></div>';
+    liveSince(activity.querySelector('summary'), '正在回覆 · 查看執行紀錄', run.created_at || run.updated_at);
+    host.append(activity); renderSkillLive();
+  }
+  host.scrollTop = host.scrollHeight;
+}
+function renderSkillLive() {
+  const host = $('#skill-live'); const run = skillRuns.find(run => run.id === skillRunId);
+  if (!host || !run) return;
+  renderLogTree(host, logs[`skill-${run.id}`] || '正在準備 CLI 與技能快照…');
+}
+function renderSkillControls() {
+  const run = skillRuns.find(run => run.id === skillRunId);
+  const busy = !!(snap?.skillBusy || snap?.runnerAlive || snap?.prdBusy || snap?.taskGenBusy);
+  const blocked = skillSending || busy || (run && run.status !== 'done');
+  $('#skill-run').disabled = blocked;
+  $('#skill-run-new').disabled = !skillRunId;
+  $('#skill-to-prd').disabled = !run || run.status !== 'done';
+  const active = skillRunActive(run);
+  const text = active ? 'AI 正在回覆，下方可展開執行紀錄' : run?.status === 'error' ? '這次回覆失敗，請開新會議' : skillSending ? '正在送出…' : snap?.skillBusy ? '另一場技能會議正在回覆，完成後才能送出' : busy ? '流程執行中，結束後才能開會議' : run ? '可以接續這場會議，每次回覆以紀錄交接到新的 session' : '新會議：描述需求或問題，AI 會依技能指令回覆';
+  liveSince($('#skill-status'), text, active ? run.created_at || run.updated_at : null);
+}
+async function sendSkill() {
+  const skill = skillSelected && skillSelected !== 'bindings' ? skillOf(skillSelected) : null;
+  if (!skill || skillSending) return;
+  const input = $('#skill-input').value.trim(); if (!input) return;
+  const run = skillRuns.find(run => run.id === skillRunId);
+  if (run && run.status !== 'done') { toast('請選擇已完成的回覆或新會議', true); return; }
+  skillSending = true; renderSkillControls();
+  try {
+    await api('/api/skills/run', { name: skill.name, input, provider: $('#skill-provider').value, previousId: skillRunId });
+    $('#skill-input').value = ''; toast('已開始技能會議');
+    setTimeout(() => loadSkillRuns().catch(() => {}), 1200);
+  } catch (error) { toast(error.message, true); }
+  finally { skillSending = false; renderSkillControls(); }
+}
+/** 匯入技能資料夾（按鈕或拖放）；缺 SKILL.md 時後端會拒絕，這裡只顯示原因並保持原本選取。 */
+async function importSkillFolders(paths) {
+  let imported = null; const errors = [];
+  for (const path of paths.slice(0, 8)) {
+    try { imported = (await api('/api/skills/import', { path })).skill; }
+    catch (error) { errors.push(`${path}：${error.message}`); }
+  }
+  if (imported) { skillEditing = false; skillSelected = imported.name; skillRunId = ''; await loadSkills(); toast(`已匯入技能 ${imported.name}`); }
+  if (errors.length) toast(errors.join('\n'), true);
+  return imported;
+}
+function renderSkillBindings() {
+  const body = $('#skill-bindings'); body.replaceChildren();
+  const compatible = skillLibrary.filter(skill => skill.compatible).map(skill => skill.name);
+  for (const stage of skillStageList()) {
+    const row = document.createElement('tr'); row.dataset.stage = stage;
+    const head = document.createElement('th'); head.scope = 'row'; head.textContent = SKILL_STAGE_LABELS[stage] || stage;
+    const cell = document.createElement('td'); const wrap = document.createElement('div'); wrap.className = 'skill-binding-cell';
+    for (const name of skillBindings[stage] || []) {
+      const chip = document.createElement('span'); chip.className = 'skill-binding-chip';
+      if (!compatible.includes(name)) { chip.classList.add('warn'); chip.title = '這個技能不在技能庫或含執行器專屬欄位，執行時會失敗'; }
+      const label = document.createElement('span'); label.textContent = name;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `從${SKILL_STAGE_LABELS[stage]}移除 ${name}`);
+      remove.onclick = () => { skillBindings[stage] = skillBindings[stage].filter(n => n !== name); renderSkillBindings(); };
+      chip.append(label, remove); wrap.append(chip);
+    }
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'skill-binding-add'; add.textContent = '＋'; add.setAttribute('aria-label', `為${SKILL_STAGE_LABELS[stage]}加入技能`); add.setAttribute('aria-haspopup', 'menu');
+    add.onclick = event => { event.stopPropagation(); openSkillPicker(wrap, stage, compatible.filter(name => !(skillBindings[stage] || []).includes(name))); };
+    wrap.append(add); cell.append(wrap); row.append(head, cell); body.append(row);
+  }
+  const dirty = skillBindingsDirty();
+  $('#skill-bindings-save').disabled = !dirty;
+  $('#skill-bindings-status').textContent = dirty ? '有未儲存的變更。' : '';
+}
+function closeSkillPicker() { $('.skill-pick')?.remove(); document.removeEventListener('click', closeSkillPicker); }
+function openSkillPicker(host, stage, names) {
+  closeSkillPicker();
+  const menu = document.createElement('div'); menu.className = 'skill-pick'; menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', `加入技能到${SKILL_STAGE_LABELS[stage]}`);
+  if (!names.length) menu.innerHTML = '<p class="hint">沒有可加入的相容技能</p>';
+  for (const name of names) {
+    const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'menuitem'); button.textContent = name;
+    button.title = skillOf(name)?.description || '';
+    button.onclick = () => { skillBindings[stage] = [...(skillBindings[stage] || []), name]; closeSkillPicker(); renderSkillBindings(); };
+    menu.append(button);
+  }
+  menu.onkeydown = event => { if (event.key === 'Escape') { closeSkillPicker(); host.querySelector('.skill-binding-add')?.focus(); } };
+  menu.onclick = event => event.stopPropagation();
+  host.append(menu); menu.querySelector('button')?.focus();
+  setTimeout(() => document.addEventListener('click', closeSkillPicker), 0);
 }
 function bindSkills() {
   const handle = fn => async () => { try { await fn(); } catch (error) { toast(error.message, true); } };
   $('#skills-refresh').onclick = handle(loadSkills);
-  $('#skill-name').onchange = () => { renderSkillEditor(); renderSkillOutput(); };
-  $('#skill-run-history').onchange = renderSkillOutput;
+  $('#skill-search').oninput = () => { skillQuery = $('#skill-search').value; renderSkillList(); };
+  $('#skill-nav-bindings').onclick = () => selectSkill('bindings');
+  $('#skills-toggle').onclick = () => { const open = $('.skills-sidebar').classList.toggle('open'); $('#skills-toggle').setAttribute('aria-expanded', String(open)); };
+  const viewButtons = $$('[data-skill-view]');
+  for (const button of viewButtons) button.onclick = () => showSkillView(button.dataset.skillView);
+  tabKeys(viewButtons, button => showSkillView(button.dataset.skillView));
+  $('#skill-import').onclick = handle(async () => {
+    let path = null;
+    if (window.__TAURI__?.webview) path = await desktop.invoke('pick_skill_folder');
+    else path = prompt('技能資料夾完整路徑（包含 SKILL.md）');
+    if (path) await importSkillFolders([path]);
+  });
+  $('#skill-new').onclick = () => { skillSelected = null; skillEditing = true; skillEditingName = null; skillView = 'content'; $('#skill-editor').value = SKILL_TEMPLATE; $('.skills-sidebar').classList.remove('open'); renderSkills(); $('#skill-editor').focus(); };
+  $('#skill-edit').onclick = () => { const skill = skillOf(skillSelected); if (!skill) return; skillEditing = true; skillEditingName = skill.name; $('#skill-editor').value = skill.text || ''; renderSkillPane(); $('#skill-editor').focus(); };
+  $('#skill-cancel-edit').onclick = () => { skillEditing = false; if (!skillSelected) skillSelected = skillLibrary[0]?.name || null; renderSkills(); };
+  $('#skill-save').onclick = handle(async () => {
+    const { skill } = await api('/api/skills/save', { text: $('#skill-editor').value, name: skillEditingName });
+    skillEditing = false; skillSelected = skill.name; skillPreviewKey = ''; await loadSkills(); toast('已儲存技能');
+  });
+  $('#skill-delete').onclick = handle(async () => {
+    const skill = skillOf(skillSelected); if (!skill) return;
+    if (!confirm(skill.hasBuiltin ? `還原內建的 ${skill.name}？你修改的副本會刪除。` : `刪除技能 ${skill.name}？整個技能資料夾會從技能庫移除。`)) return;
+    const result = await api('/api/skills/delete', { name: skill.name });
+    if (!result.restored) skillSelected = null;
+    skillPreviewKey = ''; await loadSkills(); toast(result.restored ? `已還原內建的 ${skill.name}` : `已刪除技能 ${skill.name}`);
+  });
+  $('#skill-run-history').onchange = () => { skillRunId = $('#skill-run-history').value; skillRunFresh = !skillRunId; renderSkillPane(); };
+  $('#skill-run-new').onclick = () => { skillRunId = ''; skillRunFresh = true; renderSkillPane(); $('#skill-input').focus(); };
+  $('#skill-form').onsubmit = event => { event.preventDefault(); sendSkill(); };
+  $('#skill-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendSkill(); } };
   $('#skill-to-prd').onclick = handle(async () => {
-    const run = skillRuns.find(run => run.id === $('#skill-run-history').value);
+    const run = skillRuns.find(run => run.id === skillRunId);
     if (!run || run.status !== 'done') throw new Error('請選擇已完成的技能會議');
     if ($('#bl-detail').value.trim() && !confirm('以此會議取代目前尚未新增的需求說明？')) return;
     $('#bl-title').value = run.messages[0]?.text.split('\n')[0].slice(0, 200) || '技能會議需求';
     $('#bl-detail').value = `以下是需求釐清／設計會議紀錄。以使用者回答為準，AI 建議仍需區分假設與待決策事項。\n\n${run.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`;
     showTab($('#tabbtn-backlog')); toast('已帶入需求待辦，確認後按新增');
   });
-  $('#skill-new').onclick = () => { skillEditingName = null; $('#skill-editor').value = '---\nname: my-skill\ndescription: 說明用途及使用時機\n---\n在此撰寫技能指令。\n'; };
-  $('#skill-save').onclick = handle(async () => {
-    const { skill } = await api('/api/skills/save', { text: $('#skill-editor').value, name: skillEditingName });
-    await loadSkills(); $('#skill-name').value = skill.name; renderSkillEditor(); toast('已儲存 Skill');
-  });
-  $('#skill-import').onclick = handle(async () => {
-    const { skill } = await api('/api/skills/import', { path: $('#skill-source').value });
-    await loadSkills(); $('#skill-name').value = skill.name; renderSkillEditor(); toast('已匯入 Skill');
-  });
   $('#skill-bindings-save').onclick = handle(async () => {
-    const skills = Object.fromEntries(Object.keys(SKILL_STAGE_LABELS).map(stage => [stage, []]));
-    for (const input of $$('[data-skill-stage]:checked')) skills[input.dataset.skillStage].push(input.value);
-    await api('/api/skills/config', { skills }); toast('已儲存階段技能');
-  });
-  $('#skill-run').onclick = handle(async () => {
-    const previousId = $('#skill-run-history').value;
-    const previous = skillRuns.find(run => run.id === previousId);
-    if (previous && previous.status !== 'done') throw new Error('請選擇已完成的回覆或新會議');
-    $('#skill-run').disabled = true;
-    try {
-      await api('/api/skills/run', { name: $('#skill-name').value, input: $('#skill-input').value, provider: $('#skill-provider').value, previousId });
-      $('#skill-input').value = ''; toast('已開始技能會議');
-    } catch (error) { $('#skill-run').disabled = false; throw error; }
+    const skills = structuredClone(skillBindings);
+    await api('/api/skills/config', { skills });
+    skillBindingsSaved = structuredClone(skills); renderSkillBindings(); toast('已儲存階段技能');
   });
 }
 

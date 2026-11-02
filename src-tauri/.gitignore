@@ -3,3 +3,5 @@
 # sidecar 是建置產物（約 90 MB），由 npm run sidecar 產生
 /binaries/
 /target-test/
+# 巢狀的 cargo 輸出（CARGO_TARGET_DIR 以相對路徑從 src-tauri 內執行時產生）
+/src-tauri/

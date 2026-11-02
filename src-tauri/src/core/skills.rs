@@ -32,12 +32,38 @@ impl Skill {
         let mut v = json!({
             "name": self.name, "description": self.description, "body": self.body, "text": self.text,
             "extensions": self.extensions, "builtin": self.builtin,
+            // 名稱是內建技能時，技能庫裡的副本可以「還原內建」；不是內建的才會真的刪除。
+            "hasBuiltin": builtin(&self.name).is_some(),
+            "files": self.dir.as_ref().map(|dir| list_files(dir)).unwrap_or_else(|| vec![json!({ "path": "SKILL.md", "bytes": self.text.len() })]),
         });
         if let Some(dir) = &self.dir {
             v["dir"] = json!(dir.to_string_lossy());
         }
         v
     }
+}
+
+/// 技能資料夾裡的資源檔清單（相對路徑一律用 /），給 UI 顯示；只讀目錄，不讀內容。
+fn list_files(dir: &Path) -> Vec<Value> {
+    fn walk(current: &Path, rel: &Path, out: &mut Vec<Value>) {
+        let Ok(entries) = fs::read_dir(current) else { return };
+        let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            if out.len() >= 500 {
+                return;
+            }
+            let file = rel.join(entry.file_name());
+            match entry.file_type() {
+                Ok(ty) if ty.is_dir() => walk(&entry.path(), &file, out),
+                Ok(ty) if ty.is_file() => out.push(json!({ "path": file.to_string_lossy().replace('\\', "/"), "bytes": entry.metadata().map(|m| m.len()).unwrap_or(0) })),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, Path::new(""), &mut out);
+    out
 }
 
 pub fn parse_skill(text: &str) -> Result<Skill> {
@@ -196,8 +222,13 @@ pub fn import_skill(root: &Path, source: &str) -> Result<Skill> {
         crate::bail!("請指定包含 SKILL.md 的資料夾");
     }
     let dir = super::util::resolve(source.trim());
-    let files = bundle(&dir)?;
-    let Some(manifest) = files.iter().find(|f| f.rel == "SKILL.md") else { crate::bail!("請選擇包含 SKILL.md 的資料夾") };
+    if !dir.is_dir() {
+        crate::bail!("找不到資料夾：{}", dir.display());
+    }
+    let mut files = bundle(&dir)?;
+    // 像 Claude Code 的 .claude/skills/<name>/ 一樣以 SKILL.md 為主檔；檔名不分大小寫（skill.md 也接受），匯入後統一存成 SKILL.md。
+    let Some(manifest) = files.iter_mut().find(|f| f.rel.eq_ignore_ascii_case("SKILL.md")) else { crate::bail!("請選擇包含 SKILL.md 的資料夾") };
+    manifest.rel = "SKILL.md".into();
     let skill = parse_skill(&String::from_utf8_lossy(&manifest.data))?;
     let destination = library(root).join(&skill.name);
     if destination.exists() {
@@ -211,6 +242,17 @@ pub fn import_skill(root: &Path, source: &str) -> Result<Skill> {
         fs::write(target, &file.data)?;
     }
     load_skill(root, &skill.name)
+}
+
+/// 刪除技能庫裡的技能資料夾。內建技能沒有資料夾時不能刪；有副本（編輯過）時刪掉副本就是「還原內建」。
+pub fn delete_skill(root: &Path, name: &str) -> Result<Value> {
+    let skill = load_skill(root, name)?;
+    let Some(dir) = skill.dir else { crate::bail!("內建技能不能刪除") };
+    if is_symlink(&dir) {
+        crate::bail!("Skill 不支援符號連結");
+    }
+    fs::remove_dir_all(&dir)?;
+    Ok(json!({ "name": name, "restored": builtin(name).is_some() }))
 }
 
 #[derive(Debug)]
@@ -316,10 +358,12 @@ pub fn new_skill_run(root: &Path, name: &str, input: &str, previous_id: Option<&
         None => None,
     };
     let mut messages = previous.as_ref().and_then(|p| p["messages"].as_array().cloned()).unwrap_or_default();
-    messages.push(json!({ "role": "user", "text": input }));
+    let now = now_iso();
+    // at 給 UI 顯示時間與「AI 正在回覆（已 N 秒）」；舊紀錄沒有這個欄位也照常顯示。
+    messages.push(json!({ "role": "user", "text": input, "at": now }));
     let run = json!({
         "id": uuid::Uuid::new_v4().to_string(), "name": name, "previousId": previous_id.filter(|p| !p.is_empty()),
-        "status": "running", "updated_at": now_iso(), "messages": messages,
+        "status": "running", "created_at": now, "updated_at": now, "messages": messages,
     });
     if run["messages"].to_string().chars().count() > 120_000 {
         crate::bail!("釐清紀錄過長，請整理需求後建立新會議");

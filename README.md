@@ -140,7 +140,7 @@ archive/2026-11-01-匯出-csv/
 
 桌面版的「用量」頁可查看各次執行與本專案的 token 處理量、CLI 回報的訂閱額度剩餘百分比及重設時間。詳見[Token 與額度顯示](docs/usage.md)。
 
-「Skills」頁提供共用技能庫、階段綁定和互動會議。預設提供 Grill Me 與 UI/UX Design；可匯入包含 `SKILL.md` 的資料夾，技能庫放在該專案的資料目錄 `skills/`，階段綁定是全域設定。Codex／Claude Code 都透過 App 載入同一份可攜式指令。每次執行保存技能快照與 session，下一輪問答以紀錄交接到新 session。
+「Skills」頁像 Claude Code／Codex 的技能管理：左側是技能清單（內建的 Grill Me、UI/UX Design 與匯入的技能，各顯示來源與相容狀態，可搜尋），右側顯示選取技能的 SKILL.md 預覽、frontmatter 欄位與資源檔，可切到文字框編輯；匯入的技能可以刪除，修改過的內建技能可以還原。「匯入技能」選擇一個像 `.claude/skills/<name>/` 的資料夾（也可以直接拖放到清單），資料夾要有 `SKILL.md`（不分大小寫），其餘檔案與子目錄當資源一起複製進該專案資料目錄的 `skills/`。右側的「會議」子頁是完整高度的對話區：選定 AI 後送出，回覆中顯示「AI 正在回覆（已 N 秒）」與執行紀錄，歷史會議可用下拉切換、接續或開新會議；清單最上面的「工作流技能綁定」是一張階段表，每列用 chips 顯示綁定的技能，＋ 加入、× 移除，有變更時才可儲存（全域設定）。Codex／Claude Code 都透過 App 載入同一份可攜式指令；每次執行保存技能快照與 session，下一輪問答以紀錄交接到新 session。
 
 ```bash
 ai-workflow skills list

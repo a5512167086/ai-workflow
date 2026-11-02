@@ -283,7 +283,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         crate::bail!("PRD 尚未核准");
     }
     let scope = "tasks";
-    update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": std::process::id(), "error": "" }))?;
+    update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": std::process::id(), "error": "", "started_at": now_iso() }))?;
     let result = (|| -> Result<usize> {
         let prd = read_text(prd_file(root));
         if prd.trim().is_empty() {
@@ -334,6 +334,9 @@ pub fn run_skill(root: &Path, name: &str, input: &str, provider: Option<&str>, p
     load_skill(root, name)?;
     let mut run = new_skill_run(root, name, input, previous_id)?;
     let run_id = run["id"].as_str().unwrap_or("").to_string();
+    // 執行中就先記下用哪個 AI，UI 的會議清單才顯示得出來；完成後再以實際回覆的 provider 覆寫。
+    run["provider"] = json!(provider.unwrap_or(cfg_str(&cfg["roles"], "author")));
+    save_skill_run(root, &mut run)?;
     update_state(root, |s| s["skill_job"] = json!({ "pid": std::process::id(), "id": run_id }))?;
     let history: Vec<String> = run["messages"].as_array().into_iter().flatten().map(|m| format!("{}: {}", m["role"].as_str().unwrap_or(""), m["text"].as_str().unwrap_or(""))).collect();
     let prompt = format!("這是互動式技能會議。根據以下交接紀錄回覆最新的使用者訊息；不要替使用者回答。\n{}", history.join("\n\n"));
@@ -345,7 +348,7 @@ pub fn run_skill(root: &Path, name: &str, input: &str, provider: Option<&str>, p
     }).and_then(|r| if r.ok { Ok(r) } else { Err(super::AppError::new(r.error_text())) });
     let out = match result {
         Ok(r) => {
-            run["messages"].as_array_mut().unwrap().push(json!({ "role": "assistant", "text": r.text }));
+            run["messages"].as_array_mut().unwrap().push(json!({ "role": "assistant", "text": r.text, "at": now_iso(), "provider": r.provider }));
             run["status"] = json!("done");
             run["provider"] = json!(r.provider);
             run["sessionId"] = json!(r.session_id);

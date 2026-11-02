@@ -53,6 +53,8 @@ fn project_name(root: &Path) -> String {
 /// 專案頁的完整狀態。
 pub fn snapshot(root: &Path) -> Result<Value> {
     let cfg = load_config(root)?;
+    // PRD 程序中途被結束時，狀態不會自己回來；在這裡發現並恢復，避免畫面一直停在「修訂中」。
+    let _ = super::prd::recover_interrupted(root);
     let state = read_state(root);
     let runner_alive = is_pid_alive_value(&state["runner"]["pid"]);
     Ok(json!({
@@ -140,7 +142,7 @@ fn is_task_id(id: &str) -> bool {
 
 fn approve_and_generate(root: &Path, cfg: &Value, launch: &dyn Fn(&Path) -> Result<Value>) -> Result<Value> {
     let file = approve_prd(root, cfg)?;
-    super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": null, "error": "" }))?;
+    super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": null, "error": "", "started_at": super::util::now_iso() }))?;
     match launch(root) {
         Ok(job) => {
             super::state::update_state(root, |s| {
@@ -340,6 +342,10 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             busy_guard(&snap)?;
             let name = body["name"].as_str();
             Ok(json!({ "skill": save_skill(root, &text_field(body, "text"), name)?.to_json() }))
+        }
+        "skills/delete" => {
+            busy_guard(&snap)?;
+            super::skills::delete_skill(root, &text_field(body, "name"))
         }
         "skills/config" => {
             busy_guard(&snap)?;

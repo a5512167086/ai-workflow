@@ -140,7 +140,9 @@ async function openInterview(id) {
       }
       if (follow) messages.scrollTop = messages.scrollHeight;
     }
-    status.textContent = data?.stale ? '需求或附件已修改，請重新釐清。舊對話仍保留。' : session?.error ? session.error : active || pending ? 'AI 正在查閱資料與整理問題…' : data?.confirmed ? '你已確認需求，可開始寫 PRD。' : session?.requirementsReady ? '關鍵問題已釐清，請檢閱、修正並確認下方摘要。' : '請回答本輪問題；AI 會依回答繼續追問。';
+    // AI 工作中顯示從這一輪送出開始的持續時間（最後一則使用者訊息的時間）。
+    const since = active ? session?.messages?.findLast?.(message => message.role === 'user')?.at : null;
+    liveSince(status, data?.stale ? '需求或附件已修改，請重新釐清。舊對話仍保留。' : session?.error ? session.error : active || pending ? 'AI 正在查閱資料與整理問題…' : data?.confirmed ? '你已確認需求，可開始寫 PRD。' : session?.requirementsReady ? '關鍵問題已釐清，請檢閱、修正並確認右側摘要。' : '請回答本輪問題；AI 會依回答繼續追問。', since);
     dialog.querySelector('[data-send]').disabled = pending || active || !!data?.stale;
     dialog.querySelector('[data-restart]').disabled = pending || active;
     dialog.querySelector('[data-stop]').hidden = !active; dialog.querySelector('[data-retry]').hidden = !session || !['error','cancelled'].includes(session.status);
@@ -153,18 +155,18 @@ async function openInterview(id) {
   };
   async function load() {
     try { data = await api(`/api/requirements/${encodeURIComponent(id)}`); render(); }
-    catch (error) { status.textContent = error.message; }
+    catch (error) { liveSince(status, error.message, null); }
   }
   async function send(restart = false, retry = false, initial = false) {
     if (pending || (!restart && !retry && !initial && !input.value.trim())) return;
     if (restart && !confirm('重新開始需求釐清？舊會議會保留，這項需求改用新的會議。')) return;
     pending = true; render(); const answer = input.value;
     try { data = await api('/api/backlog/interview', { id, input: initial || restart ? '' : answer, provider: provider.value, restart, retry }); if (!initial && !restart) input.value = ''; interviewDrafts.set(id,input.value); }
-    catch (error) { status.textContent = error.message; pending = false; return; }
+    catch (error) { liveSince(status, error.message, null); pending = false; return; }
     pending = false; render();
   }
   dialog.querySelector('[data-send]').onclick = () => send(); dialog.querySelector('[data-restart]').onclick = () => send(true); dialog.querySelector('[data-retry]').onclick = () => send(false,true);
-  dialog.querySelector('[data-stop]').onclick = async () => { try { await api('/api/chat/cancel', { chatId: data.session.id }); await load(); } catch (error) { status.textContent = error.message; } };
+  dialog.querySelector('[data-stop]').onclick = async () => { try { await api('/api/chat/cancel', { chatId: data.session.id }); await load(); } catch (error) { liveSince(status, error.message, null); } };
   dialog.querySelector('[data-confirm]').onclick = async () => {
     if (pending || !data?.session?.requirementsReady || !summary.value.trim()) return;
     pending = true; renderSummaryState();

@@ -28,7 +28,10 @@ function page() {
     setChat(value) { chatId = value?.id || null; chatSession = value; chatMessagesKey = ''; renderChatMessages(); renderChatControls(); },
     chat() { return chatSession; },
     renderHumanControls, editHumanPrd, editHumanTask, approveHumanPrd, openInterview,
-    setDetail(value) { detail = value; }
+    setDetail(value) { detail = value; },
+    bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
+    skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
+    setLog(scope, text) { logs[scope] = text; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
@@ -534,5 +537,195 @@ test('人工編輯 PRD 以目前版本儲存，核准時帶版本避免核准到
   assert.equal(doc.querySelector('dialog.human-dialog'), null);
   await ui.approveHumanPrd();
   assert.deepEqual(plain(requests.find(r => r.path === '/api/prd/approve').body), { version: 3, scope: 'scope-a' });
+  dom.window.close();
+});
+
+test('AI 工作中的狀態文字會顯示持續時間，結束後不再顯示', () => {
+  const { dom, ui, doc } = page(); ui.setSnap(snapshot()); ui.bind();
+  const started = new Date(Date.now() - 65000).toISOString();
+  ui.setChat({ id: 'c1', title: '測試', status: 'running', turn: 't1', messages: [{ id: 'u1', role: 'user', text: '分析專案', at: started }] });
+  assert.match(doc.querySelector('#chat-status').textContent, /已 1 分 \d 秒/);
+  assert.match(doc.querySelector('.chat-activity summary').textContent, /正在回覆.*已 1 分/);
+  ui.setChat({ id: 'c1', title: '測試', status: 'done', turn: 't1', messages: [{ id: 'u1', role: 'user', text: '分析專案', at: started }, { id: 'a1', role: 'assistant', text: '完成' }] });
+  assert.doesNotMatch(doc.querySelector('#chat-status').textContent, /已 /);
+  assert.equal(doc.querySelector('#chat-status').dataset.since, undefined);
+  const state = snapshot(); state.root = 'C:/p'; state.prdBusy = true; state.state.prd = { status: 'drafting', rounds: [], started_at: started };
+  ui.setSnap(state); ui.renderPrd();
+  assert.match(doc.querySelector('#prd-busy').textContent, /AI 處理中.*已 1 分/);
+  dom.window.close();
+});
+
+// ---------- Skills 頁 ----------
+const skillFixture = () => ({
+  stages: ['prd', 'prd_review', 'tasks', 'implement', 'code_review', 'fix', 'handover'],
+  config: { implement: ['uiux-design'] },
+  skills: [
+    { name: 'grill-me', description: 'Challenge a product idea.', body: 'Ask **one** question.', text: '---\nname: grill-me\ndescription: Challenge a product idea.\n---\nAsk **one** question.\n', extensions: [], builtin: true, hasBuiltin: true, compatible: true, files: [{ path: 'SKILL.md', bytes: 80 }] },
+    { name: 'uiux-design', description: 'Design interfaces.', body: 'Start from the user.', text: '---\nname: uiux-design\ndescription: Design interfaces.\n---\nStart from the user.\n', extensions: [], builtin: true, hasBuiltin: true, compatible: true, files: [{ path: 'SKILL.md', bytes: 70 }] },
+    { name: 'report-export', description: 'Export reports as CSV.', body: '# 匯出\n\n讀 references/spec.md。', text: '---\nname: report-export\ndescription: Export reports as CSV.\nlicense: MIT\nhooks: {}\n---\n# 匯出\n\n讀 references/spec.md。', extensions: ['hooks'], builtin: false, hasBuiltin: false, compatible: false, dir: 'C:/data/skills/report-export', files: [{ path: 'SKILL.md', bytes: 120 }, { path: 'references/spec.md', bytes: 10 }, { path: 'scripts/export.py', bytes: 30 }] },
+  ],
+});
+function skillsPage(fixture = skillFixture()) {
+  const { dom, ui, doc, w } = page();
+  doc.querySelector('#tab-skills').hidden = false;
+  const requests = [];
+  let runs = [];
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body: body === undefined ? undefined : plain(body) });
+    if (path === '/api/skills') return fixture;
+    if (path === '/api/skills/runs') return { runs };
+    return {};
+  });
+  ui.setSnap(snapshot()); ui.bind(); ui.bindSkills();
+  return { dom, ui, doc, w, requests, setRuns(value) { runs = value; } };
+}
+
+test('Skills 側欄列出技能與來源／相容狀態，點選後右側顯示 Markdown 預覽、frontmatter 與資源檔，搜尋會篩選清單', async () => {
+  const { dom, ui, doc, w } = skillsPage();
+  await ui.loadSkills();
+  const items = [...doc.querySelectorAll('#skill-list .skill-item')];
+  assert.deepEqual(items.map(item => item.querySelector('strong').textContent), ['grill-me', 'uiux-design', 'report-export']);
+  assert.deepEqual([...items[0].querySelectorAll('.chip')].map(chip => chip.textContent), ['內建', '相容']);
+  assert.deepEqual([...items[2].querySelectorAll('.chip')].map(chip => chip.textContent), ['匯入', '需調整']);
+  assert.equal(items[2].querySelector('.skill-item-desc').textContent, 'Export reports as CSV.');
+  // 預設選第一個：內建技能不能刪除，Markdown 預覽來自 body。
+  assert.equal(items[0].getAttribute('aria-current'), 'true');
+  assert.equal(doc.querySelector('#skill-title').textContent, 'grill-me');
+  assert.equal(doc.querySelector('#skill-preview strong').textContent, 'one');
+  assert.equal(doc.querySelector('#skill-delete').hidden, true);
+  items[2].click();
+  assert.equal(ui.skillState().selected, 'report-export');
+  assert.equal(doc.querySelector('#skill-list .skill-item[data-skill="report-export"]').getAttribute('aria-current'), 'true');
+  assert.equal(doc.querySelector('#skill-origin').textContent, '匯入 · 需調整');
+  assert.equal(doc.querySelector('#skill-preview .md-h1').textContent, '匯出');
+  const meta = Object.fromEntries([...doc.querySelectorAll('#skill-meta div')].map(div => [div.querySelector('dt').textContent, div.querySelector('dd').textContent]));
+  assert.equal(meta.license, 'MIT');
+  assert.equal(meta['hooks（執行器專屬）'], '{}');
+  assert.match(meta['相容性'], /hooks/);
+  assert.deepEqual([...doc.querySelectorAll('#skill-files .skill-file')].map(el => el.textContent), ['SKILL.md', 'references/spec.md', 'scripts/export.py']);
+  assert.equal(doc.querySelector('#skill-delete').hidden, false);
+  assert.match(doc.querySelector('#skill-delete').textContent, /刪除/);
+  // 編輯切到文字框並帶入 SKILL.md 全文；取消回到預覽。
+  doc.querySelector('#skill-edit').click();
+  assert.equal(doc.querySelector('#skill-editing').hidden, false);
+  assert.match(doc.querySelector('#skill-editor').value, /^---\nname: report-export/);
+  doc.querySelector('#skill-cancel-edit').click();
+  assert.equal(doc.querySelector('#skill-editing').hidden, true);
+  // 搜尋只影響側欄清單，不改變選取。
+  doc.querySelector('#skill-search').value = 'design'; doc.querySelector('#skill-search').dispatchEvent(new w.Event('input'));
+  assert.deepEqual([...doc.querySelectorAll('#skill-list .skill-item strong')].map(el => el.textContent), ['uiux-design']);
+  assert.equal(ui.skillState().selected, 'report-export');
+  assert.deepEqual(plain(ui.skillFrontmatter('---\nname: a\ndescription: |\n  two\n  lines\n---\nbody')), [['name', 'a'], ['description', 'two lines']]);
+  dom.window.close();
+});
+
+test('拖放資料夾到 Skills 頁會匯入技能；缺 SKILL.md 時顯示後端的拒絕原因並保持原本選取', async () => {
+  const { dom, ui, doc, w, requests } = skillsPage();
+  await ui.loadSkills();
+  let dropped;
+  w.__TAURI__.webview = { getCurrentWebview: () => ({ onDragDropEvent: callback => { dropped = callback; return Promise.resolve(() => {}); } }) };
+  doc.elementFromPoint = () => doc.querySelector('#skill-list');
+  const fixture = skillFixture();
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body: body === undefined ? undefined : plain(body) });
+    if (path === '/api/skills/import') {
+      if (/no-skill/.test(body.path)) throw new Error('請選擇包含 SKILL.md 的資料夾');
+      const skill = { name: 'new-skill', description: 'Imported.', body: 'Do it.', text: '---\nname: new-skill\ndescription: Imported.\n---\nDo it.', extensions: [], builtin: false, hasBuiltin: false, compatible: true, dir: 'C:/data/skills/new-skill', files: [{ path: 'SKILL.md', bytes: 50 }] };
+      fixture.skills.push(skill); return { skill };
+    }
+    if (path === '/api/skills') return fixture;
+    if (path === '/api/skills/runs') return { runs: [] };
+    return {};
+  });
+  ui.bindReferences();
+  await dropped({ payload: { type: 'drop', paths: ['C:/external/no-skill'], position: { x: 10, y: 10 } } });
+  assert.deepEqual(plain(requests.at(-1)), { path: '/api/skills/import', body: { path: 'C:/external/no-skill' } });
+  assert.match(doc.querySelector('#toast').textContent, /SKILL\.md/);
+  assert.ok(doc.querySelector('#toast').classList.contains('bad'));
+  assert.equal(ui.skillState().selected, 'grill-me');
+  assert.equal(requests.some(r => r.path === '/api/references/import'), false, '拖到 Skills 頁不會當成參考資料');
+  await dropped({ payload: { type: 'drop', paths: ['C:/external/.claude/skills/new-skill'], position: { x: 10, y: 10 } } });
+  assert.equal(ui.skillState().selected, 'new-skill');
+  assert.equal(doc.querySelector('#skill-list .skill-item[aria-current="true"] strong').textContent, 'new-skill');
+  assert.equal(doc.querySelector('#skill-title').textContent, 'new-skill');
+  dom.window.close();
+});
+
+test('工作流技能綁定是一張階段表：＋ 從清單加入、× 移除，只有變更時才能儲存，儲存送出全部七個階段', async () => {
+  const { dom, ui, doc, requests } = skillsPage();
+  await ui.loadSkills();
+  doc.querySelector('#skill-nav-bindings').click();
+  assert.equal(doc.querySelector('#skill-bindings-pane').hidden, false);
+  assert.equal(doc.querySelector('#skill-pane').hidden, true);
+  const rows = [...doc.querySelectorAll('#skill-bindings tr')];
+  assert.deepEqual(rows.map(row => row.dataset.stage), ['prd', 'prd_review', 'tasks', 'implement', 'code_review', 'fix', 'handover']);
+  assert.equal(rows[0].querySelector('th').textContent, 'PRD 起草／修訂');
+  const chipsOf = stage => [...doc.querySelectorAll(`#skill-bindings tr[data-stage="${stage}"] .skill-binding-chip > span`)].map(el => el.textContent);
+  assert.deepEqual(chipsOf('implement'), ['uiux-design']);
+  assert.equal(doc.querySelector('#skill-bindings-save').disabled, true);
+  // ＋ 只列出相容且尚未綁定的技能（report-export 含 hooks 不相容）。
+  doc.querySelector('#skill-bindings tr[data-stage="implement"] .skill-binding-add').click();
+  assert.deepEqual([...doc.querySelectorAll('.skill-pick button')].map(el => el.textContent), ['grill-me']);
+  doc.querySelector('.skill-pick button').click();
+  assert.deepEqual(chipsOf('implement'), ['uiux-design', 'grill-me']);
+  assert.equal(doc.querySelector('.skill-pick'), null);
+  assert.equal(doc.querySelector('#skill-bindings-save').disabled, false);
+  doc.querySelector('#skill-bindings tr[data-stage="implement"] .skill-binding-chip button[aria-label*="grill-me"]').click();
+  assert.deepEqual(chipsOf('implement'), ['uiux-design']);
+  assert.equal(doc.querySelector('#skill-bindings-save').disabled, true, '改回原樣就沒有變更');
+  doc.querySelector('#skill-bindings tr[data-stage="prd_review"] .skill-binding-add').click();
+  doc.querySelector('.skill-pick button').click();
+  assert.deepEqual(chipsOf('prd_review'), ['grill-me']);
+  await doc.querySelector('#skill-bindings-save').onclick();
+  const saved = requests.find(r => r.path === '/api/skills/config');
+  assert.deepEqual(saved.body, { skills: { prd: [], prd_review: ['grill-me'], tasks: [], implement: ['uiux-design'], code_review: [], fix: [], handover: [] } });
+  assert.equal(doc.querySelector('#skill-bindings-save').disabled, true);
+  assert.match(doc.querySelector('#toast').textContent, /已儲存/);
+  dom.window.close();
+});
+
+test('技能會議：送出只呼叫 skills/run 並帶 AI 與接續 id，回覆中顯示持續時間，完成後以 Markdown 顯示訊息', async () => {
+  const { dom, ui, doc, w, requests, setRuns } = skillsPage();
+  await ui.loadSkills();
+  doc.querySelector('[data-skill-view="meeting"]').click();
+  assert.equal(doc.querySelector('#skill-meeting').hidden, false);
+  assert.equal(doc.querySelector('#skill-content').hidden, true);
+  assert.match(doc.querySelector('#skill-messages').textContent, /與 grill-me 開一場會議/);
+  doc.querySelector('#skill-provider').value = 'codex';
+  doc.querySelector('#skill-input').value = '我要做報表工具';
+  doc.querySelector('#skill-input').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await new Promise(r => setTimeout(r, 0));
+  const run = requests.find(r => r.path === '/api/skills/run');
+  assert.deepEqual(run.body, { name: 'grill-me', input: '我要做報表工具', provider: 'codex', previousId: '' });
+  assert.equal(requests.some(r => /chat\/send|backlog\/draft|\/prd/.test(r.path)), false);
+  assert.equal(doc.querySelector('#skill-input').value, '');
+  const started = new Date(Date.now() - 65000).toISOString();
+  setRuns([{ id: 'r1', name: 'grill-me', status: 'running', provider: 'codex', created_at: started, updated_at: started, messages: [{ role: 'user', text: '我要做報表工具', at: started }] }]);
+  ui.setLog('skill-r1', '[12:00:00] ── Skill grill-me：codex（唯讀）開始 ──\n🔧 Read README.md');
+  await ui.loadSkillRuns();
+  assert.equal(ui.skillState().runId, 'r1');
+  assert.equal(doc.querySelector('#skill-run-history').value, 'r1');
+  assert.equal(doc.querySelector('#skill-messages .from-user').textContent.includes('我要做報表工具'), true);
+  assert.match(doc.querySelector('#skill-status').textContent, /AI 正在回覆.*已 1 分/);
+  assert.equal(doc.querySelector('#skill-run').disabled, true);
+  assert.equal(doc.querySelector('#skill-live .lg-tool-name').textContent, 'Read');
+  assert.equal(doc.querySelector('#skill-meeting-badge').textContent, '回覆中');
+  setRuns([{ id: 'r1', name: 'grill-me', status: 'done', provider: 'codex', created_at: started, updated_at: started, messages: [{ role: 'user', text: '我要做報表工具', at: started }, { role: 'assistant', provider: 'codex', text: '**目標使用者**是誰？\n```mermaid\nflowchart TD\nA-->B\n```', at: started }] }]);
+  await ui.loadSkillRuns();
+  assert.equal(doc.querySelector('#skill-messages .from-ai strong').textContent, '目標使用者');
+  assert.equal(doc.querySelector('#skill-messages .from-ai .chat-message-head b').textContent, 'Codex');
+  assert.ok(doc.querySelector('#skill-messages .from-ai .chat-diagram'), 'Mermaid 區塊和專案對話一樣轉成圖表容器');
+  assert.doesNotMatch(doc.querySelector('#skill-status').textContent, /已 /);
+  assert.equal(doc.querySelector('#skill-run').disabled, false);
+  assert.equal(doc.querySelector('#skill-to-prd').disabled, false);
+  assert.equal(doc.querySelector('#skill-meeting-badge').textContent, '1');
+  // 接續這場會議：previousId 帶上目前會議。
+  doc.querySelector('#skill-input').value = '使用者是財務人員';
+  await ui.sendSkill();
+  assert.equal(requests.filter(r => r.path === '/api/skills/run').at(-1).body.previousId, 'r1');
+  // 新會議按鈕回到空白會議。
+  doc.querySelector('#skill-run-new').click();
+  assert.equal(ui.skillState().runId, '');
+  assert.equal(doc.querySelector('#skill-run-history').value, '');
   dom.window.close();
 });

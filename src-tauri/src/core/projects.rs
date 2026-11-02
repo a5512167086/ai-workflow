@@ -152,6 +152,7 @@ pub fn project_summary(project: &Value) -> Value {
             return out;
         }
     };
+    let _ = super::prd::recover_interrupted(&root);
     let state = read_state(&root);
     // tasks.json 壞掉時總覽仍要能顯示
     let tasks = read_tasks(&root).unwrap_or_default();

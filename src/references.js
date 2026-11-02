@@ -186,6 +186,8 @@ function bindReferences() {
     const paths = event.payload.paths || []; if (!paths.length) return;
     if (referenceDialog) { referenceDialog._importPaths(paths); return; }
     const point = event.payload.position; const element = point ? document.elementFromPoint(point.x / devicePixelRatio, point.y / devicePixelRatio) : null;
+    // 拖到 Skills 頁：當成技能資料夾匯入（像 .claude/skills/<name>/），不是參考資料。
+    if (element?.closest('#tab-skills') && typeof importSkillFolders === 'function') { await importSkillFolders(paths); return; }
     const type = element?.closest('#tab-backlog') ? 'backlog-draft' : element?.closest('#tab-prd') ? 'feature' : element?.closest('#detail') ? 'task' : element?.closest('#tab-board') ? 'group' : element?.closest('#tab-chat') ? 'chat' : null;
     if (!type) { toast('請將參考資料拖到需求、PRD、任務或聊天區域'); return; }
     const options = referenceOptions(type); const ids = [...options.ids];

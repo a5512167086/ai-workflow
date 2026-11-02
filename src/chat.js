@@ -59,10 +59,11 @@ function renderChatControls() {
   $('#chat-delete').disabled = !chatId || !!active;
   $('#chat-rename').disabled = !chatId;
   $('#chat-title').textContent = chatSession?.title || '開始聊聊這個專案';
-  if (chatSession?.error) $('#chat-status').textContent = `${CHAT_STATUS[chatSession.status] || ''}：${chatSession.error}`;
-  else if (active) $('#chat-status').textContent = 'AI 正在讀取與分析專案，展開執行紀錄可查看工具活動。';
-  else if (anyActive && !active) $('#chat-status').textContent = '另一個對話正在回覆；完成或停止後即可傳送。';
-  else $('#chat-status').textContent = chatSession ? '可直接追問，也可切換 AI 接續同一份對話紀錄。' : '不需要先產生 PRD，就可以討論專案。';
+  const since = active ? chatSession.messages?.findLast?.(message => message.role === 'user')?.at : null;
+  if (chatSession?.error) liveSince($('#chat-status'), `${CHAT_STATUS[chatSession.status] || ''}：${chatSession.error}`, null);
+  else if (active) liveSince($('#chat-status'), 'AI 正在讀取與分析專案，展開執行紀錄可查看工具活動。', since);
+  else if (anyActive && !active) liveSince($('#chat-status'), '另一個對話正在回覆；完成或停止後即可傳送。', null);
+  else liveSince($('#chat-status'), chatSession ? '可直接追問，也可切換 AI 接續同一份對話紀錄。' : '不需要先產生 PRD，就可以討論專案。', null);
 }
 function renderChatMessages() {
   const host = $('#chat-messages');
@@ -93,7 +94,9 @@ function renderChatMessages() {
   }
   if (chatSession?.turn) {
     const activity = document.createElement('details'); activity.className = 'chat-activity';
-    activity.innerHTML = `<summary>${chatActive(chatSession) ? '正在回覆 · 查看執行紀錄' : '這次回覆的執行紀錄'}</summary><div id="chat-live" class="lg-host"></div>`;
+    activity.innerHTML = '<summary></summary><div id="chat-live" class="lg-host"></div>';
+    const running = chatActive(chatSession);
+    liveSince(activity.querySelector('summary'), running ? '正在回覆 · 查看執行紀錄' : '這次回覆的執行紀錄', running ? chatSession.messages?.findLast?.(message => message.role === 'user')?.at : null);
     host.append(activity); renderChatLive();
   }
   host.scrollTop = atBottom ? host.scrollHeight : keep;

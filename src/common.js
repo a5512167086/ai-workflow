@@ -260,3 +260,20 @@ function setLogTreeOpen(box, open) {
     d.dataset.user = '1';
   }
 }
+
+/** AI 工作中的持續時間文字，例如「1 分 23 秒」；時間無效回傳空字串。 */
+function elapsedText(since) {
+  const ms = since ? Date.now() - new Date(since).getTime() : NaN;
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${Math.floor(s / 3600)} 小時 ${Math.floor((s % 3600) / 60)} 分`;
+}
+
+/** 顯示狀態文字；since 有值時附上持續時間並每秒更新，沒有就只顯示文字並停止計時。 */
+let liveSinceTimer = null;
+function liveSince(el, label, since) {
+  const elapsed = since ? elapsedText(since) : '';
+  if (!elapsed) { delete el.dataset.since; delete el.dataset.label; el.textContent = label; return; }
+  el.dataset.since = since; el.dataset.label = label; el.textContent = `${label}（已 ${elapsed}）`;
+  liveSinceTimer ??= setInterval(() => { for (const node of $$('[data-since]')) node.textContent = `${node.dataset.label}（已 ${elapsedText(node.dataset.since)}）`; }, 1000);
+}

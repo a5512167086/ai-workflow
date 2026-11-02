@@ -158,6 +158,10 @@ fn grill_me_接續回答以新_session_執行_交接包含前輪問題及使用�
     assert!(prompt.contains("我要做報表工具") && prompt.contains("目標使用者") && prompt.contains("使用者是財務人員"));
     assert!(c.iter().all(|call| !call["args"].as_array().unwrap().contains(&json!("resume"))));
     assert_eq!(list_skill_runs(&root).len(), 2);
+    // 會議介面需要每則訊息的時間與使用的 AI。
+    assert!(second["created_at"].is_string() && second["messages"][0]["at"].is_string() && second["messages"][1]["at"].is_string());
+    assert_eq!(second["provider"], "codex");
+    assert_eq!(second["messages"][1]["provider"], "codex");
 }
 
 // ---------- 單 AI 模式與用量 ----------

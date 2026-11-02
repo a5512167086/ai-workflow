@@ -269,34 +269,69 @@
       </details>
     </section>
     <section id="tab-skills" class="tab" role="tabpanel" aria-labelledby="tabbtn-skills" hidden>
-      <div class="settings-layout">
-        <div class="card">
-          <div class="card-head"><h2>共用技能庫</h2><button id="skills-refresh" type="button">重新整理</button></div>
-          <p class="hint">同一份 Skill 可交給 Codex 或 Claude Code。執行器專屬的 hooks、工具權限等設定需先轉為共用指令。</p>
-          <label for="skill-name">選擇技能</label><select id="skill-name"></select>
-          <label for="skill-source" class="field-label spaced">匯入資料夾（包含 SKILL.md）</label>
-          <input id="skill-source" type="text" placeholder="完整路徑，WSL 可用 \\wsl.localhost\Ubuntu\…">
-          <div class="row"><button id="skill-import" type="button">匯入</button><button id="skill-new" type="button">新增技能</button></div>
-          <label for="skill-editor" class="field-label spaced">SKILL.md</label>
-          <textarea id="skill-editor" rows="12" spellcheck="false"></textarea>
-          <div class="row"><button id="skill-save" type="button">儲存技能</button></div>
-          <p id="skill-compatibility" class="hint" role="status"></p>
-        </div>
-        <div class="card">
-          <div class="card-head"><h2>工作流技能</h2></div>
-          <p class="hint">只在選定階段載入；每次執行保存技能快照與版本。</p>
-          <div id="skill-bindings"></div>
-          <div class="row"><button id="skill-bindings-save" type="button">儲存階段設定</button></div>
-          <div class="card-head"><h2>技能會議</h2></div>
-          <label for="skill-provider">執行器</label>
-          <select id="skill-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>
-          <label for="skill-run-history" class="field-label spaced">接續上次回覆</label>
-          <select id="skill-run-history"><option value="">新會議</option></select>
-          <label for="skill-input" class="field-label spaced">需求或回答</label><textarea id="skill-input" rows="4"></textarea>
-          <div class="row"><button id="skill-run" class="primary" type="button">送出</button></div>
-          <div class="row"><button id="skill-to-prd" type="button">將此會議帶入需求待辦</button></div>
-          <p class="hint">每次回覆使用全新 AI session，透過會議紀錄交接。可將確認的需求整理後帶入 PRD。</p>
-          <pre id="skill-output" class="doc" role="status"></pre>
+      <div class="skills-layout">
+        <aside class="card skills-sidebar" aria-label="技能庫">
+          <div class="skills-sidebar-tools">
+            <input id="skill-search" type="search" placeholder="搜尋技能" aria-label="搜尋技能">
+            <button id="skill-import" type="button" title="選擇包含 SKILL.md 的資料夾，整個資料夾（含資源檔）會複製進技能庫"><svg class="ic"><use href="#i-plus"/></svg>匯入技能</button>
+          </div>
+          <button id="skills-toggle" class="skills-toggle" type="button" aria-expanded="false" aria-controls="skill-nav"><span>技能清單</span><svg class="ic"><use href="#i-down"/></svg></button>
+          <nav id="skill-nav" class="skill-nav" aria-label="技能與設定">
+            <button id="skill-nav-bindings" class="skill-item skill-item-bindings" type="button" aria-current="false"><strong>工作流技能綁定</strong><span class="skill-item-desc">七個階段各載入哪些技能</span></button>
+            <div class="skill-nav-label">技能</div>
+            <ul id="skill-list" class="skill-list" aria-label="共用技能"></ul>
+          </nav>
+          <div class="skills-sidebar-foot">
+            <button id="skill-new" type="button">新增技能</button>
+            <button id="skills-refresh" class="icon-btn" type="button" aria-label="重新整理技能庫" title="重新整理技能庫"><svg class="ic"><use href="#i-redo"/></svg></button>
+            <span class="hint skills-drop-hint">也可以把技能資料夾拖放到這裡</span>
+          </div>
+        </aside>
+        <div class="card skills-main">
+          <div id="skill-pane" class="skill-pane" hidden>
+            <div class="skills-main-head">
+              <div class="skills-main-title"><span id="skill-origin" class="eyebrow"></span><h2 id="skill-title"></h2><p id="skill-description" class="hint"></p></div>
+              <div class="btn-group"><button id="skill-edit" type="button"><svg class="ic"><use href="#i-edit"/></svg>編輯</button><button id="skill-delete" type="button"><svg class="ic"><use href="#i-trash"/></svg>刪除</button></div>
+            </div>
+            <div class="subtabs skill-subtabs" role="tablist" aria-label="技能內容">
+              <button data-skill-view="content" class="active" type="button" role="tab" aria-selected="true" aria-controls="skill-content">內容</button>
+              <button data-skill-view="meeting" type="button" role="tab" aria-selected="false" aria-controls="skill-meeting" tabindex="-1">會議 <span id="skill-meeting-badge" class="tab-badge"></span></button>
+            </div>
+            <div id="skill-content" class="skill-content" role="tabpanel">
+              <div id="skill-view" class="skill-view" tabindex="0">
+                <dl id="skill-meta" class="skill-meta"></dl>
+                <div id="skill-files" class="skill-files" aria-label="資源檔"></div>
+                <div id="skill-preview" class="md doc-frame skill-preview" aria-label="SKILL.md 預覽"></div>
+              </div>
+              <div id="skill-editing" class="skill-editing" hidden>
+                <label class="sr-only" for="skill-editor">SKILL.md</label>
+                <textarea id="skill-editor" spellcheck="false" aria-describedby="skill-compatibility"></textarea>
+                <div class="row end"><span id="skill-compatibility" class="hint" role="status"></span><button id="skill-cancel-edit" type="button">取消</button><button id="skill-save" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存技能</button></div>
+              </div>
+            </div>
+            <div id="skill-meeting" class="skill-meeting" role="tabpanel" hidden>
+              <div class="skill-meeting-tools">
+                <label class="hint" for="skill-run-history">會議<select id="skill-run-history"><option value="">新會議</option></select></label>
+                <button id="skill-run-new" type="button">新會議</button>
+                <button id="skill-to-prd" type="button">帶入需求待辦</button>
+              </div>
+              <div id="skill-messages" class="chat-messages skill-messages" role="log" aria-live="polite" tabindex="0"></div>
+              <p id="skill-status" class="hint" role="status"></p>
+              <form id="skill-form" class="chat-composer skill-composer">
+                <label class="sr-only" for="skill-input">需求或回答</label>
+                <textarea id="skill-input" rows="3" maxlength="20000" placeholder="描述需求或回答 AI 的問題…"></textarea>
+                <div class="chat-send-row"><label class="hint">AI <select id="skill-provider" aria-label="會議使用的 AI"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><span class="hint">Enter 傳送 · Shift+Enter 換行 · 每次回覆是新的 CLI session，以會議紀錄交接</span><button id="skill-run" type="submit" class="primary">送出</button></div>
+              </form>
+            </div>
+          </div>
+          <div id="skill-bindings-pane" class="skill-bindings-pane" hidden>
+            <div class="skills-main-head">
+              <div class="skills-main-title"><span class="eyebrow">全域設定 · 所有專案共用</span><h2>工作流技能綁定</h2><p class="hint">每個階段只載入綁定的技能，每次執行保存技能快照與版本；任務自己的 skills 會在實作、修正與審查時一起載入。</p></div>
+              <div class="btn-group"><button id="skill-bindings-save" class="primary" type="button" disabled><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
+            </div>
+            <div class="skill-bindings-scroll"><table class="skill-bindings-table"><tbody id="skill-bindings"></tbody></table><p id="skill-bindings-status" class="hint" role="status"></p></div>
+          </div>
+          <div id="skill-empty" class="skills-empty"><p class="eyebrow">共用技能庫</p><h3>選擇左側的技能，或匯入一個資料夾</h3><p class="hint">技能資料夾像 Claude Code 的 <span class="mono">.claude/skills/&lt;name&gt;/</span>：含 SKILL.md（YAML frontmatter 加 Markdown 指令），其餘檔案當資源一起複製。同一份技能可交給 Codex 或 Claude Code。</p></div>
         </div>
       </div>
     </section>

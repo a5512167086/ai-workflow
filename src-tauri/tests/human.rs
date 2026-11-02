@@ -272,3 +272,34 @@ fn 人工編輯_prd_存成新版本並撤回任務核准_可只重新審查_核�
     update_state(&root, |s| s["runner"]["pid"] = json!(std::process::id())).unwrap();
     assert_eq!(prd::save_manual(&root, "# PRD\n第四版", &json!(3), &scope).unwrap_err().status, 409);
 }
+
+#[test]
+fn prd_程序中途被結束時_狀態恢復成可操作_保留目前版本並說明原因() {
+    let (root, _cfg) = fixture();
+    // 一個已經結束的程序 id：啟動後等它結束。
+    let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" }).args(if cfg!(windows) { vec!["/c", "exit"] } else { vec![] }).spawn().unwrap();
+    let dead = child.id(); child.wait().unwrap();
+    fs::create_dir_all(data_dir(&root).join("prd")).unwrap();
+    fs::write(data_dir(&root).join("prd/current.md"), "# PRD\n第一版").unwrap();
+
+    // 程序還活著（用測試自己的 pid）時不動。
+    update_state(&root, |s| { s["prd"]["status"] = json!("revising"); s["prd"]["pid"] = json!(std::process::id()); }).unwrap();
+    assert!(!prd::recover_interrupted(&root).unwrap());
+    assert_eq!(read_state(&root)["prd"]["status"], "revising");
+
+    // 程序已結束：有 PRD 就回到等待核准，錯誤訊息說明原因，pid 清空；再呼叫一次不會重複處理。
+    update_state(&root, |s| s["prd"]["pid"] = json!(dead)).unwrap();
+    assert!(prd::recover_interrupted(&root).unwrap());
+    let state = read_state(&root);
+    assert_eq!(state["prd"]["status"], "awaiting_approval");
+    assert!(state["prd"]["pid"].is_null());
+    assert!(state["prd"]["error"].as_str().unwrap().contains("修訂時程序已結束"));
+    assert_eq!(prd::current_prd(&root), "# PRD\n第一版");
+    assert!(!prd::recover_interrupted(&root).unwrap());
+
+    // 起草中就被結束、還沒有 PRD：回到 none。
+    fs::remove_file(data_dir(&root).join("prd/current.md")).unwrap();
+    update_state(&root, |s| { s["prd"]["status"] = json!("drafting"); s["prd"]["pid"] = json!(dead); }).unwrap();
+    assert!(prd::recover_interrupted(&root).unwrap());
+    assert_eq!(read_state(&root)["prd"]["status"], "none");
+}

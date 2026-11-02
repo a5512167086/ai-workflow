@@ -199,6 +199,41 @@ fn 預設技能可被標準_yaml_解析_匯入完整資源並保存不可變版�
 }
 
 #[test]
+fn 匯入資料夾_skill_md_不分大小寫並保留子目錄_缺少時拒絕_刪除只影響技能庫() {
+    let root = project();
+    // 沒有 SKILL.md 的資料夾要拒絕，技能庫不會多出東西。
+    let empty = project();
+    fs::write(empty.join("README.md"), "not a skill").unwrap();
+    assert!(import_skill(&root, &empty.to_string_lossy()).unwrap_err().message.contains("SKILL.md"));
+    assert!(import_skill(&root, &empty.join("missing").to_string_lossy()).unwrap_err().message.contains("找不到資料夾"));
+    assert_eq!(list_skills(&root).len(), 2);
+    // 小寫 skill.md 也接受，存進技能庫時統一叫 SKILL.md；子目錄與資源檔完整帶入並列在 files。
+    let source = project();
+    fs::write(source.join("skill.md"), manifest("lower-case")).unwrap();
+    fs::create_dir_all(source.join("scripts/nested")).unwrap();
+    fs::write(source.join("scripts/nested/run.sh"), "echo hi").unwrap();
+    let skill = import_skill(&root, &source.to_string_lossy()).unwrap();
+    assert_eq!(skill.name, "lower-case");
+    assert!(data_dir(&root).join("skills/lower-case/SKILL.md").exists());
+    assert_eq!(fs::read_to_string(data_dir(&root).join("skills/lower-case/scripts/nested/run.sh")).unwrap(), "echo hi");
+    let listed = list_skills(&root);
+    let entry = listed.iter().find(|s| s["name"] == "lower-case").unwrap();
+    let files: Vec<&str> = entry["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
+    assert_eq!(files, vec!["SKILL.md", "scripts/nested/run.sh"]);
+    assert_eq!(entry["hasBuiltin"], false);
+    assert_eq!(listed.iter().find(|s| s["name"] == "grill-me").unwrap()["hasBuiltin"], true);
+    // 刪除匯入的技能會整個資料夾移除；內建技能沒有副本時不能刪，編輯過的副本刪掉就是還原內建。
+    assert_eq!(ai_workflow::core::skills::delete_skill(&root, "lower-case").unwrap()["restored"], false);
+    assert!(!data_dir(&root).join("skills/lower-case").exists());
+    assert!(ai_workflow::core::skills::delete_skill(&root, "grill-me").unwrap_err().message.contains("內建"));
+    save_skill(&root, "---\nname: grill-me\ndescription: edited\n---\nChanged.", Some("grill-me")).unwrap();
+    assert_eq!(load_skill(&root, "grill-me").unwrap().description, "edited");
+    assert_eq!(ai_workflow::core::skills::delete_skill(&root, "grill-me").unwrap()["restored"], true);
+    assert!(load_skill(&root, "grill-me").unwrap().builtin);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+}
+
+#[test]
 fn 不會默默執行專屬_frontmatter_壞_yaml_與缺少說明會拒絕() {
     let root = project();
     save_skill(&root, "---\nname: special\ndescription: test\nhooks: {}\n---\nRun things.", None).unwrap();

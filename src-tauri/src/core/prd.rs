@@ -98,7 +98,39 @@ fn guard(root: &Path) -> Result<()> {
             crate::bail!("PRD 流程已在執行中");
         }
     }
-    update_state(root, |st| st["prd"]["pid"] = json!(std::process::id()))
+    // started_at 給 UI 顯示「AI 處理中（已 N 秒）」。
+    update_state(root, |st| { st["prd"]["pid"] = json!(std::process::id()); st["prd"]["started_at"] = json!(now_iso()); })
+}
+
+/// PRD 程序被強制結束（關閉 dev 視窗、重新建置、工作管理員結束）時沒機會收尾，狀態會一直停在
+/// drafting／reviewing／revising。讀狀態時發現程序已不在，就恢復成可操作的狀態並說明原因。
+/// 回傳 true 表示有修正。
+pub fn recover_interrupted(root: &Path) -> Result<bool> {
+    let s = read_state(root);
+    let status = s["prd"]["status"].as_str().unwrap_or("").to_string();
+    if !["drafting", "reviewing", "revising"].contains(&status.as_str()) { return Ok(false); }
+    match pid_of(&s["prd"]["pid"]) {
+        Some(pid) if is_pid_alive(pid) => return Ok(false),
+        Some(_) => {}
+        None => return Ok(false), // 還沒寫入 pid：程序剛啟動，交給它自己處理
+    }
+    let has_prd = !current_prd(root).is_empty();
+    let step = match status.as_str() { "drafting" => "起草", "reviewing" => "審查", _ => "修訂" };
+    let message = if has_prd {
+        format!("PRD {step}時程序已結束（可能是 App 重新啟動或程序被關閉），已保留目前版本。可按「只重新審查目前版本」或附意見「要求再改」繼續。")
+    } else {
+        format!("PRD {step}時程序已結束（可能是 App 重新啟動或程序被關閉），請重新從需求待辦開始起草。")
+    };
+    let changed = update_state(root, |st| {
+        // 在鎖內重新確認，避免和剛啟動的新程序搶狀態。
+        if st["prd"]["status"] != status || pid_of(&st["prd"]["pid"]).is_some_and(is_pid_alive) { return false; }
+        st["prd"]["status"] = json!(if has_prd { "awaiting_approval" } else { "none" });
+        st["prd"]["error"] = json!(message);
+        st["prd"]["pid"] = Value::Null;
+        true
+    })?;
+    if changed { append_log(root, SCOPE, &format!("⚠ {message}")); }
+    Ok(changed)
 }
 
 fn with_error_state(root: &Path, f: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -143,7 +175,10 @@ pub fn draft_prd(root: &Path, cfg: &Value, idea: &str, backlog_id: Option<&str>)
                 fs::remove_file(path)?;
             }
         }
-        append_log(root, SCOPE, &format!("新想法：{idea}"));
+        // 需求待辦帶入的想法含完整的需求摘要，log 只記第一行，避免整份摘要在 log 開頭重複一次。
+        let first = idea.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        let rest = idea.chars().count().saturating_sub(first.chars().count());
+        append_log(root, SCOPE, &if rest > 20 { format!("新想法：{first}（另含需求摘要 {rest} 字，見 PRD 頁）") } else { format!("新想法：{first}") });
         let (text, provider) = author(root, cfg, prd_draft_prompt(root, cfg, idea), "PRD 初稿")?;
         let v = save_version(root, &text)?;
         add_round(root, json!({ "kind": "draft", "round": 0, "provider": provider, "version": v, "file": format!("v{v}.md") }))?;
