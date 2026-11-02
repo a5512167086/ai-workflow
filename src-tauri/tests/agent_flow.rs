@@ -520,3 +520,27 @@ fn 圖片附件使用_claude_結構化輸入與_codex_image_旗標() {
     let index = args.iter().position(|a| a == "--image").unwrap();
     assert!(Path::new(args[index + 1].as_str().unwrap()).exists());
 }
+
+#[test]
+fn 實作者的指令被權限擋下且沒有變更時_立刻停下_不送審查_claude_用_auto_模式() {
+    let mut scenario = pipeline_scenario();
+    // 假 Claude 實作者：工具呼叫被拒絕、沒有寫任何檔案。
+    scenario["claude"] = json!({ "events": [json!({ "type": "result", "result": "需要的指令被擋下", "is_error": false, "permission_denials": [{ "tool_name": "Bash" }, { "tool_name": "PowerShell" }] }).to_string()] });
+    let (root, mut cfg) = git_project_with(&["claude", "codex"], scenario);
+    cfg["roles"]["implementer"] = json!("claude");
+    save_config(&root, &cfg).unwrap();
+    approved_prd(&root, "# PRD");
+    generate_tasks(&root).unwrap();
+    approve_tasks(&root);
+    let before = calls(&root).len();
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "stuck");
+    let reason = read_state(&root)["pipeline"]["reason"].as_str().unwrap().to_string();
+    assert!(reason.contains("權限") && reason.contains("Bash"), "{reason}");
+    let after = calls(&root);
+    // 只呼叫了實作者一次，沒有送程式碼審查，也沒有修正輪。
+    assert_eq!(after.len() - before, 1, "{:?}", &after[before..]);
+    assert_eq!(after[before]["provider"], "claude");
+    let args = after[before]["args"].as_array().unwrap();
+    assert!(args.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "auto"), "{args:?}");
+    assert_eq!(read_state(&root)["tasks"]["1"]["fix_round"], 0);
+}

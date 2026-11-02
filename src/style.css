@@ -1010,3 +1010,56 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .model-picker-head code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker small { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
 .model-picker-empty { padding: 8px 10px; font-size: 12px; color: var(--text-muted); }
+
+/* ---------- 任務 diff（GitHub 風格：左邊檔案清單，右邊每個檔案一張可收合的卡片，並排或單欄，左右各有行號） ---------- */
+#d-body:has(.diff-view) { padding: 0; }
+.diff-view { display: flex; flex-direction: column; min-height: 100%; font-size: 12.5px; }
+.diff-toolbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.diff-summary { flex: 1; color: var(--text-muted); }
+.diff-adds { color: var(--primary); font-weight: 600; font-family: var(--font-mono); }
+.diff-dels { color: var(--danger); font-weight: 600; font-family: var(--font-mono); }
+.diff-layout { flex: 1; display: grid; grid-template-columns: minmax(170px, 230px) minmax(0, 1fr); gap: 12px; padding: 12px; align-items: start; }
+.diff-nav { position: sticky; top: 52px; max-height: calc(100% - 8px); overflow: auto; }
+.diff-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.diff-nav button { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "dot name stat" ". dir dir"; column-gap: 6px; align-items: center; text-align: left; border: 0; background: transparent; padding: 5px 8px; border-radius: var(--r-sm); min-height: 0; }
+.diff-nav button:hover { background: var(--surface-2); }
+.diff-nav .diff-dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.diff-nav .diff-dot.diff-added { background: var(--primary); }
+.diff-nav .diff-dot.diff-deleted { background: var(--danger); }
+.diff-nav-name { grid-area: name; font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-nav-dir { grid-area: dir; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-nav-dir:empty { display: none; }
+.diff-nav .diff-stat { grid-area: stat; font-size: 11px; }
+.diff-stat { display: inline-flex; gap: 6px; }
+.diff-files { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.diff-file { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); scroll-margin-top: 56px; overflow: hidden; }
+.diff-file-head { position: sticky; top: 45px; z-index: 2; display: flex; align-items: center; gap: 10px; padding: 7px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: pointer; list-style: none; }
+.diff-file:not([open]) > .diff-file-head { border-bottom: 0; }
+.diff-file-head::-webkit-details-marker { display: none; }
+.diff-file-head::before { content: ""; flex: none; width: 6px; height: 6px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--ease); }
+.diff-file[open] > .diff-file-head::before { transform: rotate(45deg); }
+.diff-file-name { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-status { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); }
+.diff-status.diff-added { background: var(--primary-soft); color: var(--primary); }
+.diff-status.diff-deleted { background: var(--danger-soft); color: var(--danger); }
+.diff-empty { margin: 0; padding: 12px; color: var(--text-muted); }
+.diff-scroll { overflow-x: auto; }
+.diff-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--font-mono); font-size: 12px; line-height: 20px; }
+.diff-table .col-ln { width: 48px; }
+.diff-table td { padding: 0 8px; vertical-align: top; }
+.diff-table td.ln { color: var(--text-muted); text-align: right; user-select: none; white-space: nowrap; border-right: 1px solid var(--border); }
+.diff-table td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-split td.code:nth-child(2) { border-right: 1px solid var(--border); }
+.diff-table td.add { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.diff-table td.ln.add { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--text); }
+.diff-table td.del { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.diff-table td.ln.del { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--text); }
+.diff-table td.empty { background: var(--surface-2); }
+.diff-unified td.code.mark-add::before { content: "+"; margin-right: 6px; color: var(--primary); }
+.diff-unified td.code.mark-del::before { content: "−"; margin-right: 6px; color: var(--danger); }
+.diff-hunk td { padding: 4px 10px; color: var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.diff-note { padding: 2px 10px; color: var(--text-muted); font-style: italic; }
+@media (max-width: 900px) {
+  .diff-layout { grid-template-columns: minmax(0, 1fr); }
+  .diff-nav { position: static; max-height: 160px; }
+}

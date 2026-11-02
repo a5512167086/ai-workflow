@@ -517,6 +517,8 @@ function renderDetail() {
   body.classList.toggle('lg-host', subtab === 'log');
   if (subtab === 'log') return renderLogTree(body, logs[`task-${detail.id}`]);
   if (subtab === 'reviews') return body.replaceChildren(reviewsView(detail.reviews));
+  // diff：GitHub 風格的並排／單欄檢視；diffview.js 沒載入時退回原文。
+  if (subtab === 'diff' && typeof diffView === 'function') return body.replaceChildren(diffView(detail.diff || ''));
   const pre = document.createElement('pre');
   pre.className = 'plain';
   pre.textContent = {

@@ -211,12 +211,12 @@
       </dialog>
       <dialog id="project-settings-dialog" class="board-dialog" aria-labelledby="project-settings-title">
         <div class="card-head"><h2 id="project-settings-title">這個專案的指令與 context</h2><button type="button" class="icon-btn" data-close aria-label="關閉專案指令"><svg class="ic"><use href="#i-x"/></svg></button></div>
-        <p class="hint">build／test／lint、功能名稱與 context 檔只屬於這個專案；其他設定都在總覽的「設定」。</p>
+        <p class="hint">全部可以留空。build／test／lint 是每個任務實作後 App 自己跑的驗證（留空會從 package.json、Cargo.toml 等自動偵測）；功能名稱只用在自動模式的分支名稱；context 檔是每次都附給 AI 的專案說明文件。其他設定都在總覽的「設定」。</p>
         <div class="form-grid">
-          <label for="pc-build" class="mono">build</label><input id="pc-build" data-command="build" type="text" class="mono" spellcheck="false" placeholder="例如 npm run build">
-          <label for="pc-test" class="mono">test</label><input id="pc-test" data-command="test" type="text" class="mono" spellcheck="false" placeholder="例如 npm test">
-          <label for="pc-lint" class="mono">lint</label><input id="pc-lint" data-command="lint" type="text" class="mono" spellcheck="false" placeholder="例如 npm run lint">
-          <label for="pc-feature">功能名稱</label><input id="pc-feature" type="text" placeholder="空白時用 PRD 想法產生分支名稱">
+          <label for="pc-build" class="mono">build</label><input id="pc-build" data-command="build" type="text" class="mono" spellcheck="false" placeholder="留空：自動偵測（例如 npm run build）">
+          <label for="pc-test" class="mono">test</label><input id="pc-test" data-command="test" type="text" class="mono" spellcheck="false" placeholder="留空：自動偵測（例如 npm test）">
+          <label for="pc-lint" class="mono">lint</label><input id="pc-lint" data-command="lint" type="text" class="mono" spellcheck="false" placeholder="留空：自動偵測（例如 npm run lint）">
+          <label for="pc-feature">功能名稱</label><input id="pc-feature" type="text" placeholder="留空：自動模式用 PRD 想法產生分支名稱">
           <label for="pc-context">context 檔</label><textarea id="pc-context" rows="2" spellcheck="false" placeholder="每行一個專案內既有檔案的路徑，例如 docs/architecture.md；每次 AI 對話都會附上"></textarea>
         </div>
         <p id="pc-data-dir" class="hint mono"></p>
@@ -356,6 +356,7 @@
   <script src="diagrams.js"></script>
   <script src="references.js"></script>
   <script src="chat.js"></script>
+  <script src="diffview.js"></script>
   <script src="human.js"></script>
   <script src="app.js"></script>
 </body>

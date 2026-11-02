@@ -46,6 +46,8 @@ pub struct AgentResult {
     pub telemetry: Value,
     pub fallback_from: Option<String>,
     pub failure: Option<UsageLimit>,
+    /// CLI 回報被權限擋下的工具（Claude 的 permission_denials）；Codex 沒有這項資訊，一律空。
+    pub denied: Vec<String>,
 }
 
 impl AgentResult {
@@ -125,7 +127,9 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     write_json(&session_file, &session)?;
     let mut telemetry = Telemetry::new(provider);
     let mut previous = String::new();
+    let mut denied: Vec<String> = Vec::new();
     let mut on_event = |event: &Value| {
+        for d in event["permission_denials"].as_array().into_iter().flatten() { if let Some(name) = d["tool_name"].as_str() { denied.push(name.to_string()); } }
         let value = telemetry.accept(event);
         let signature = value.to_string();
         if signature != previous {
@@ -172,7 +176,7 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     append_log(root, scope, &format!("── {label}：{}（{secs}s）{} ──", if outcome.ok { "完成" } else { "失敗" }, outcome.error.as_ref().map(|e| format!(" {e}")).unwrap_or_default()));
     Ok(AgentResult {
         ok: outcome.ok, text: outcome.text, error: outcome.error, provider: provider.into(), session_id, skills: prepared.snapshots,
-        telemetry: snapshot, ..Default::default()
+        telemetry: snapshot, denied, ..Default::default()
     })
 }
 
@@ -208,7 +212,10 @@ fn run_claude(opts: &AgentOpts, prompt: &str, references: &super::references::Pr
     // Skill 快照、參考資料與 handover 都在專案資料目錄（不在專案裡），讓 Claude 把它當成額外的工作目錄。
     args.extend(["--add-dir".into(), spec.to_path(&data_dir(root))?]);
     if write {
-        args.extend(["--permission-mode", "acceptEdits"].map(String::from));
+        // 預設 auto：一般開發指令（建專案、npm install、跑測試）由 Claude Code 的安全分類器放行，有風險的操作仍會被擋。
+        // acceptEdits 只允許編輯檔案，實作需要跑指令時會全部被拒絕。
+        let mode = cfg["claude"]["write_permission_mode"].as_str().filter(|m| ["auto", "acceptEdits"].contains(m)).unwrap_or("auto");
+        args.extend(["--permission-mode".to_string(), mode.to_string()]);
         let tools: Vec<&str> = cfg["claude"]["allowed_tools"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
         if !tools.is_empty() {
             args.extend(["--allowedTools".into(), tools.join(",")]);
@@ -304,6 +311,10 @@ fn run_codex(opts: &AgentOpts, prompt: &str, references: &super::references::Pre
     }
     if !effort.is_empty() {
         args.extend(["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]);
+    }
+    // workspace-write 預設不能連網，npm install 之類會失敗；寫入角色預設開放（codex.network_access=false 可關）。
+    if write && cfg["codex"]["network_access"] != false {
+        args.extend(["-c".into(), "sandbox_workspace_write.network_access=true".into()]);
     }
     // 唯讀角色也帶上，否則 Windows 上 Codex 連讀檔用的 shell 指令都無法啟動。
     if let Some(sandbox) = cfg["codex"]["windows_sandbox"].as_str().filter(|s| !s.is_empty() && spec.runtime == "windows") {

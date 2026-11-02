@@ -226,8 +226,8 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
   "wsl_distro": "",                 // 空字串＝WSL 預設發行版
   "wsl_cli": { "claude": "", "codex": "" },
   "cli": { "claude": "", "codex": "" },  // 空字串 = 從 PATH 找
-  "claude": { "model": "", "effort": "", "allowed_tools": [] },
-  "codex": { "model": "", "effort": "", "windows_sandbox": "elevated" },  // Windows 預設 elevated，其他平台空字串
+  "claude": { "model": "", "effort": "", "write_permission_mode": "auto", "allowed_tools": [] },  // auto 或 acceptEdits
+  "codex": { "model": "", "effort": "", "windows_sandbox": "elevated", "network_access": true },  // windows_sandbox：Windows 預設 elevated，其他平台空字串
   "skills": { "prd": [], "prd_review": [], "tasks": [], "implement": ["uiux-design"], "code_review": [], "fix": [], "handover": [] }
 }
 ```
@@ -258,10 +258,10 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 
   | 角色 | Claude | Codex |
   | --- | --- | --- |
-  | 會改檔案（實作者、修正者） | `--permission-mode acceptEdits` | `--sandbox workspace-write` |
+  | 會改檔案（實作者、修正者） | `--permission-mode auto` | `--sandbox workspace-write`，並開放網路 |
   | 唯讀（PRD 作者／審查、拆任務、程式碼審查、handover、對話） | `--permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit` | `--sandbox read-only` |
 
-  `acceptEdits` 只自動允許編輯檔案；Claude 實作者要跑指令時會被拒絕（驗證由 ai-workflow 自己跑）。需要的話在全域設定的 `claude.allowed_tools` 加例如 `"Bash(npm test:*)"`。
+  `auto` 由 Claude Code 的安全分類器判斷：建專案、`npm install`、跑測試這類一般開發指令會放行，有風險的操作仍會被擋。想更嚴格可以在全域設定把 `claude.write_permission_mode` 改成 `acceptEdits`（只允許編輯檔案，所有指令都會被拒絕），再用 `claude.allowed_tools` 個別允許，例如 `"Bash(npm test:*)"`。Codex 的寫入角色預設可以連網（`codex.network_access`，設成 false 就關閉）。實作者的工具呼叫被擋下又沒有任何變更時，任務會直接停在「需要人工處理」並說明原因，不會送審查空的 diff。
 - prompt 一律從 stdin 傳入，避開命令列長度限制與跳脫問題。
 - 修正輪數、PRD 審查輪數都有上限，每次 AI 呼叫與每個指令都有逾時。
 

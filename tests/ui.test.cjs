@@ -11,7 +11,7 @@ function page() {
   w.structuredClone = structuredClone;
   w.__TAURI__ = { core: { invoke: async () => ({}) } };
   const common = fs.readFileSync('src/common.js', 'utf8');
-  const chat = ['markdown.js', 'diagrams.js', 'references.js', 'chat.js', 'human.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
+  const chat = ['markdown.js', 'diagrams.js', 'references.js', 'chat.js', 'diffview.js', 'human.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
   const app = fs.readFileSync('src/app.js', 'utf8').split('\nbind();')[0];
   w.eval(`${common}\n${chat}\n${app}\nwindow.ui = {
     bindReferences, bindReferenceInput, renderReferenceWidgets, openReferenceDialog, referenceDraft, saveReferenceSelection,
@@ -28,6 +28,7 @@ function page() {
     setChat(value) { chatId = value?.id || null; chatSession = value; chatMessagesKey = ''; renderChatMessages(); renderChatControls(); },
     chat() { return chatSession; },
     renderHumanControls, editHumanPrd, editHumanTask, approveHumanPrd, openInterview,
+    parseUnifiedDiff, splitRows, diffView,
     setDetail(value) { detail = value; },
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
@@ -822,5 +823,57 @@ test('點任務以對話框顯示詳情，不改變看板版面；Esc 與關閉�
   dialog.dispatchEvent(new w.Event('cancel', { cancelable: true }));
   assert.equal(dialog.open, false);
   assert.equal(doc.querySelector('#board .task.selected'), null);
+  dom.window.close();
+});
+
+const SAMPLE_DIFF = [
+  ' src/a.js | 4 ++--', ' 3 files changed', '',
+  'diff --git a/src/a.js b/src/a.js', 'index 1111111..2222222 100644', '--- a/src/a.js', '+++ b/src/a.js',
+  '@@ -1,4 +1,4 @@ function main() {', ' const a = 1;', '-const b = 2;', '-const c = 3;', '+const b = 20;', ' const d = 4;', '+const e = "<img src=x onerror=alert(1)>";',
+  'diff --git a/new.txt b/new.txt', 'new file mode 100644', 'index 0000000..3333333', '--- /dev/null', '+++ b/new.txt', '@@ -0,0 +1,2 @@', '+hello', '+world',
+  'diff --git a/logo.png b/logo.png', 'new file mode 100644', 'index 0000000..4444444', 'Binary files /dev/null and b/logo.png differ',
+  'diff --git a/old.md b/docs/new.md', 'similarity index 100%', 'rename from old.md', 'rename to docs/new.md', '',
+].join('\n');
+
+test('diff 解析：略過 --stat 摘要，辨識新增、修改、二進位與改名，行號正確', () => {
+  const { dom, ui } = page();
+  const files = JSON.parse(JSON.stringify(ui.parseUnifiedDiff(SAMPLE_DIFF)));
+  assert.deepEqual(files.map(f => [f.path, f.status, f.adds, f.dels, f.binary]), [
+    ['src/a.js', 'modified', 2, 2, false], ['new.txt', 'added', 2, 0, false], ['logo.png', 'added', 0, 0, true], ['docs/new.md', 'renamed', 0, 0, false],
+  ]);
+  assert.equal(files[3].oldPath, 'old.md');
+  const lines = files[0].hunks[0].lines;
+  assert.deepEqual(lines.map(l => [l.type, l.old ?? null, l.new ?? null]), [['ctx', 1, 1], ['del', 2, null], ['del', 3, null], ['add', null, 2], ['ctx', 4, 3], ['add', null, 4]]);
+  // 並排：兩行刪除配一行新增，右邊空一格。
+  const rows = JSON.parse(JSON.stringify(ui.splitRows(lines)));
+  assert.equal(rows.length, 5);
+  assert.equal(rows[1].left.text, 'const b = 2;'); assert.equal(rows[1].right.text, 'const b = 20;');
+  assert.equal(rows[2].left.text, 'const c = 3;'); assert.equal(rows[2].right, null);
+  assert.equal(rows[4].left, null); assert.equal(rows[4].right.type, 'add');
+  dom.window.close();
+});
+
+test('diff 檢視：預設左右並排、可切換單欄，有檔案清單與摘要，內容不會被當成 HTML', () => {
+  const { dom, ui, doc } = page();
+  const host = doc.createElement('div'); doc.body.append(host);
+  host.append(ui.diffView(SAMPLE_DIFF));
+  assert.match(host.querySelector('.diff-summary').textContent, /4 個檔案.*\+4.*−2/);
+  assert.equal(host.querySelectorAll('.diff-nav li').length, 4);
+  assert.equal(host.querySelectorAll('.diff-file').length, 4);
+  const table = host.querySelector('.diff-table');
+  assert.ok(table.classList.contains('diff-split'));
+  assert.equal(table.querySelector('tr:not(.diff-hunk)').children.length, 4, '並排每列有左右兩組行號與內容');
+  assert.equal(host.querySelector('img'), null);
+  assert.ok([...host.querySelectorAll('td.code.add')].some(td => td.textContent.includes('<img src=x')));
+  assert.match(host.querySelectorAll('.diff-empty')[0].textContent, /二進位/);
+  assert.match(host.querySelectorAll('.diff-empty')[1].textContent, /只有改名/);
+  host.querySelector('[data-diff-mode="unified"]').click();
+  const unified = host.querySelector('.diff-table');
+  assert.ok(unified.classList.contains('diff-unified'));
+  assert.equal(unified.querySelector('tr:not(.diff-hunk)').children.length, 3);
+  host.querySelector('[data-diff-mode="split"]').click();
+  // 沒有可解析的檔案時顯示原文。
+  const plain = ui.diffView('只是一段文字');
+  assert.equal(plain.querySelector('pre').textContent, '只是一段文字');
   dom.window.close();
 });

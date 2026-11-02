@@ -61,14 +61,19 @@ pub fn default_global() -> Value {
         "claude": {
             "model": "",
             "effort": "",
-            // 實作者在 -p 模式下額外允許的工具，例如 "Bash(npm test:*)"；預設只允許編輯。
+            // 實作者與修正者的權限模式。auto：由 Claude Code 的安全分類器放行一般開發指令（npm install、建專案、跑測試），
+            // 擋下有風險的操作；acceptEdits：只允許編輯檔案，所有指令都會被拒絕（需要的指令另外列在 allowed_tools）。
+            "write_permission_mode": "auto",
+            // 額外預先允許的工具，例如 "Bash(npm test:*)"。
             "allowed_tools": []
         },
         "codex": {
             "model": "",
             "effort": "",
             // Windows 上 Codex 需要 windows.sandbox 才會真的啟用 workspace-write，否則會默默降成 read-only。
-            "windows_sandbox": if cfg!(windows) { "elevated" } else { "" }
+            "windows_sandbox": if cfg!(windows) { "elevated" } else { "" },
+            // 實作者與修正者在 workspace-write 沙箱裡可以連網（npm install、下載套件）；關掉時只能用已安裝的套件。
+            "network_access": true
         }
     })
 }
@@ -147,6 +152,12 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
     let s = |k: &str| cfg.get(k).and_then(Value::as_str);
     if !s("mode").is_some_and(|m| MODES.contains(&m)) {
         errors.push(format!("mode 必須是 {}", MODES.join(" / ")));
+    }
+    if !cfg["claude"]["write_permission_mode"].as_str().is_none_or(|m| ["auto", "acceptEdits"].contains(&m)) {
+        errors.push("claude.write_permission_mode 必須是 auto / acceptEdits".into());
+    }
+    if !cfg["codex"]["network_access"].is_null() && !cfg["codex"]["network_access"].is_boolean() {
+        errors.push("codex.network_access 必須是 true / false".into());
     }
     for role in ROLES {
         let review = REVIEW_ROLES.contains(&role);

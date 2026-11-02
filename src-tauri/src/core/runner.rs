@@ -78,8 +78,14 @@ fn tail_chars(s: &str, n: usize) -> String {
 fn run_checks(root: &Path, cfg: &Value, id: &str, scope: &str) -> Result<(bool, Vec<Check>)> {
     let mut results = Vec::new();
     let mut parts = Vec::new();
+    // 沒有手動設定任何指令時，每次驗證前重新從專案偵測（加入專案時資料夾可能還是空的，任務建出 package.json 後才有指令）。
+    let configured = ["build", "lint", "test"].iter().any(|k| cfg["commands"][k].as_str().is_some_and(|c| !c.is_empty()));
+    let commands = if configured { cfg["commands"].clone() } else { super::init::detect_commands(root) };
+    if !configured && ["build", "lint", "test"].iter().any(|k| commands[k].as_str().is_some_and(|c| !c.is_empty())) {
+        append_log(root, scope, &format!("沒有設定驗證指令，自動偵測到：{}", ["build", "lint", "test"].iter().filter_map(|k| commands[k].as_str().filter(|c| !c.is_empty()).map(|c| format!("{k}={c}"))).collect::<Vec<_>>().join("、")));
+    }
     for name in ["build", "lint", "test"] {
-        let Some(cmd) = cfg["commands"][name].as_str().filter(|c| !c.is_empty()) else { continue };
+        let Some(cmd) = commands[name].as_str().filter(|c| !c.is_empty()) else { continue };
         set_task(root, id, json!({ "step": format!("執行 {name}") }))?;
         append_log(root, scope, &format!("$ {cmd}"));
         let mut log = |d: &str| append_log(root, scope, d.trim_end());
@@ -155,11 +161,13 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
     tasks::set_status(root, id, "in-progress")?;
 
     let mut notes = String::new();
+    let mut implement_denied: Vec<String> = Vec::new();
     if !verify_only {
         let impl_ = agent(root, cfg, "implementer", implement_prompt(root, cfg, &task), true, scope, &format!("實作任務 {id}"), "implement", Some(skills_for(cfg, "implement", &task)))?;
         if !impl_.ok {
             return Err(TaskError::Stuck(format!("實作 AI 失敗：{}", impl_.error_text())));
         }
+        implement_denied = impl_.denied.clone();
         notes = impl_.text;
         fs::write(dir.join("implement.md"), &notes).map_err(AppError::from)?;
     }
@@ -189,6 +197,10 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         tasks::set_status(root, id, "review")?;
         let diff = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
         fs::write(dir.join("diff.patch"), &diff).map_err(AppError::from)?;
+        // 實作完全沒有改動時不送審查：審查只會一直判不通過，白白用掉修正輪數。最常見的原因是指令被權限擋下。
+        if diff.is_empty() && !verify_only && round == 0 && !implement_denied.is_empty() {
+            return Err(TaskError::Stuck(format!("實作 AI 的工具呼叫被權限擋下（{}），沒有產生任何變更，已停止，不送審查。Claude 請確認全域設定 config.json 的 claude.write_permission_mode 是 auto，或在 claude.allowed_tools 加入需要的指令；也可以自己完成這一步後按「我測完了，繼續」", implement_denied.join("、"))));
+        }
         let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
         let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
         let label = format!("程式碼審查 第 {} 次", round + 1);
