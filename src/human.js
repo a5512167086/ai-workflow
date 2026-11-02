@@ -78,13 +78,47 @@ async function openInterview(id) {
   if (interviewDialog) { interviewDialog.focus(); return; }
   const dialog = document.createElement('dialog'); dialog.className = 'human-dialog interview-dialog'; interviewDialog = dialog;
   dialog.innerHTML = `<div class="human-dialog-layout"><div class="card-head"><h2>Grill Me · 需求釐清</h2><button type="button" data-close aria-label="關閉需求會議">×</button></div>
-    <p class="hint">AI 先查專案、追問決策與驗收條件。你確認摘要後才會寫 PRD。可關閉後回來接續。</p>
-    <div class="interview-conversation" role="log" aria-live="polite"></div><p class="interview-status" role="status"></p>
-    <div class="interview-answer"><label class="field-label">你的回答或補充<textarea rows="3" maxlength="20000" placeholder="回答本輪問題；有多題時可依題號回答…"></textarea></label><div class="row end"><label class="hint">AI <select aria-label="需求釐清 AI"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><button type="button" data-stop hidden>停止回覆</button><button type="button" data-retry hidden>重試回覆</button><button type="button" data-restart>重新釐清</button><button type="button" data-send>送出回答</button></div></div>
-    <div class="interview-summary" hidden><label class="field-label">確認需求摘要（可人工修正）<textarea rows="6"></textarea></label><button type="button" class="primary" data-confirm>確認需求，開始寫 PRD</button></div></div>`;
-  const messages = dialog.querySelector('.interview-conversation'), status = dialog.querySelector('.interview-status'), input = dialog.querySelector('.interview-answer textarea'), provider = dialog.querySelector('select'), summary = dialog.querySelector('.interview-summary textarea');
+    <p class="hint">AI 先查專案、追問決策與驗收條件。釐清完成後右側會出現需求摘要：先檢視（可編輯）並確認，再開始寫 PRD。可關閉後回來接續。</p>
+    <div class="interview-body">
+      <div class="interview-chat">
+        <div class="interview-conversation" role="log" aria-live="polite"></div><p class="interview-status" role="status"></p>
+        <div class="interview-answer"><label class="field-label">你的回答或補充<textarea rows="3" maxlength="20000" placeholder="回答本輪問題；有多題時可依題號回答…"></textarea></label><div class="row end"><label class="hint">AI <select aria-label="需求釐清 AI"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><button type="button" data-stop hidden>停止回覆</button><button type="button" data-retry hidden>重試回覆</button><button type="button" data-restart>重新釐清</button><button type="button" data-send>送出回答</button></div></div>
+      </div>
+      <aside class="interview-summary" aria-label="需求摘要" hidden>
+        <div class="card-head"><h3>需求摘要</h3><div class="seg" role="radiogroup" aria-label="摘要顯示方式"><button type="button" role="radio" aria-checked="true" data-summary-view="preview" class="on">預覽</button><button type="button" role="radio" aria-checked="false" data-summary-view="edit">編輯</button></div></div>
+        <p class="interview-summary-note hint" role="status"></p>
+        <div class="interview-summary-body"><div class="md summary-preview" aria-label="需求摘要預覽"></div><textarea aria-label="需求摘要 Markdown" spellcheck="false" hidden></textarea></div>
+        <div class="row end interview-summary-actions"><button type="button" class="primary" data-confirm>確認需求摘要</button><button type="button" class="primary" data-draft hidden>開始寫 PRD</button></div>
+      </aside>
+    </div></div>`;
+  const messages = dialog.querySelector('.interview-conversation'), status = dialog.querySelector('.interview-status'), input = dialog.querySelector('.interview-answer textarea'), provider = dialog.querySelector('select');
+  const summary = dialog.querySelector('.interview-summary textarea'), preview = dialog.querySelector('.summary-preview'), summaryNote = dialog.querySelector('.interview-summary-note');
   input.value = interviewDrafts.get(id) || ''; provider.value = snap?.config?.roles?.interviewer || snap?.config?.roles?.author || 'claude';
-  let data, timer, pending = false, messageKey = '', summaryTurn = '';
+  let data, timer, pending = false, messageKey = '', summaryTurn = '', previewText = null;
+  // 摘要預覽：與會議訊息相同的 Markdown／Mermaid 渲染；只在內容變動時重畫。
+  const renderSummary = () => {
+    if (previewText === summary.value) return; previewText = summary.value;
+    if (typeof renderChatMarkdown === 'function') renderChatMarkdown(preview, summary.value);
+    else if (typeof window.renderMarkdown === 'function') preview.innerHTML = window.renderMarkdown(summary.value);
+    else preview.textContent = summary.value;
+  };
+  const showSummaryView = view => {
+    for (const button of dialog.querySelectorAll('[data-summary-view]')) { const on = button.dataset.summaryView === view; button.classList.toggle('on', on); button.setAttribute('aria-checked', String(on)); }
+    summary.hidden = view !== 'edit'; preview.hidden = view === 'edit';
+    if (view === 'edit') summary.focus(); else renderSummary();
+  };
+  for (const button of dialog.querySelectorAll('[data-summary-view]')) button.onclick = () => showSummaryView(button.dataset.summaryView);
+  summary.oninput = () => renderSummaryState();
+  // 確認與開始寫 PRD 分成兩步：摘要改過就要重新確認，確認後才開放「開始寫 PRD」。
+  const renderSummaryState = () => {
+    const session = data?.session; const edited = !!data?.confirmed && summary.value.trim() !== (session?.confirmedSummary || '').trim();
+    const confirmed = !!data?.confirmed && !edited;
+    summaryNote.textContent = confirmed ? '你已確認這份摘要。可以開始寫 PRD，或改成「編輯」再修改後重新確認。' : edited ? '摘要已修改，請重新確認。' : '請檢視 AI 整理的需求範圍、限制與驗收條件；可切到「編輯」直接修改，確認後才能開始寫 PRD。';
+    const confirmButton = dialog.querySelector('[data-confirm]'), draftButton = dialog.querySelector('[data-draft]');
+    confirmButton.textContent = edited ? '重新確認摘要' : confirmed ? '已確認' : '確認需求摘要';
+    confirmButton.disabled = pending || confirmed || !summary.value.trim(); confirmButton.classList.toggle('primary', !confirmed);
+    draftButton.hidden = !data?.confirmed; draftButton.disabled = pending || !confirmed;
+  };
   const close = () => dialog.close(); dialog.querySelector('[data-close]').onclick = close;
   dialog.onclose = () => { clearTimeout(timer); interviewDrafts.set(id,input.value); interviewDialog = null; dialog.remove(); };
   const render = () => {
@@ -111,9 +145,10 @@ async function openInterview(id) {
     dialog.querySelector('[data-restart]').disabled = pending || active;
     dialog.querySelector('[data-stop]').hidden = !active; dialog.querySelector('[data-retry]').hidden = !session || !['error','cancelled'].includes(session.status);
     dialog.querySelector('[data-retry]').disabled = pending || active;
-    dialog.querySelector('.interview-summary').hidden = !session?.requirementsReady || !!data?.stale || active || pending;
-    if (summaryTurn !== session?.turn && session?.requirementsReady) { summaryTurn = session.turn; summary.value = session.confirmedSummary || session.requirementsSummary || ''; }
-    dialog.querySelector('[data-confirm]').textContent = data?.confirmed ? '開始寫 PRD' : '確認需求，開始寫 PRD';
+    const showSummary = !!session?.requirementsReady && !data?.stale && !active && !pending;
+    dialog.querySelector('.interview-summary').hidden = !showSummary; dialog.classList.toggle('with-summary', showSummary);
+    if (summaryTurn !== session?.turn && session?.requirementsReady) { summaryTurn = session.turn; summary.value = session.confirmedSummary || session.requirementsSummary || ''; showSummaryView('preview'); }
+    if (showSummary) { renderSummary(); renderSummaryState(); }
     clearTimeout(timer); if (active) timer = setTimeout(load,1200);
   };
   async function load() {
@@ -130,15 +165,19 @@ async function openInterview(id) {
   }
   dialog.querySelector('[data-send]').onclick = () => send(); dialog.querySelector('[data-restart]').onclick = () => send(true); dialog.querySelector('[data-retry]').onclick = () => send(false,true);
   dialog.querySelector('[data-stop]').onclick = async () => { try { await api('/api/chat/cancel', { chatId: data.session.id }); await load(); } catch (error) { status.textContent = error.message; } };
-  dialog.querySelector('[data-confirm]').onclick = async event => {
-    if (pending || !data?.session?.requirementsReady) return;
-    event.target.disabled = true;
-    try {
-      if (!data.confirmed) data = await api('/api/backlog/confirm', { id, sessionId: data.session.id, turn: data.session.turn, summary: summary.value });
-      if (snap?.prd && !confirm('以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。')) return;
-      await api('/api/backlog/draft', { id }); interviewDrafts.delete(id); dialog.close(); toast('已確認需求，正在起草 PRD');
-    } catch (error) { status.textContent = error.message; }
-    finally { event.target.disabled = false; }
+  dialog.querySelector('[data-confirm]').onclick = async () => {
+    if (pending || !data?.session?.requirementsReady || !summary.value.trim()) return;
+    pending = true; renderSummaryState();
+    try { data = await api('/api/backlog/confirm', { id, sessionId: data.session.id, turn: data.session.turn, summary: summary.value }); toast('需求摘要已確認，可以開始寫 PRD'); }
+    catch (error) { summaryNote.textContent = error.message; }
+    finally { pending = false; renderSummaryState(); }
+  };
+  dialog.querySelector('[data-draft]').onclick = async () => {
+    if (pending || !data?.confirmed) return;
+    if (snap?.prd && !confirm('以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。')) return;
+    pending = true; renderSummaryState();
+    try { await api('/api/backlog/draft', { id }); interviewDrafts.delete(id); dialog.close(); toast('正在依確認的需求起草 PRD'); }
+    catch (error) { summaryNote.textContent = error.message; pending = false; renderSummaryState(); }
   };
   document.body.append(dialog); dialog.showModal(); await load(); if (data && !data.session) await send(false,false,true);
 }

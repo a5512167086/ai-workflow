@@ -466,11 +466,12 @@ test('需求待辦的「釐清需求」開啟 Grill Me 會議並以該需求啟�
   // AI 訊息裡的 Mermaid 決策樹要和專案對話一樣畫成圖；Mermaid 本身用假物件。
   w.URL.createObjectURL = () => 'blob:test'; w.URL.revokeObjectURL = () => {};
   w.mermaid = { initialize() {}, async render() { return { svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>tree</text></svg>' }; } };
-  const session = { id: 's1', status: 'done', turn: 't1', requirementsReady: true, requirementsSummary: '已確認：匯出 CSV', messages: [{ role: 'user', text: '請先釐清 <b>x</b>' }, { role: 'assistant', text: '**問題一**\n```mermaid\nflowchart TD\nA-->B\n```' }] };
+  const session = { id: 's1', status: 'done', turn: 't1', requirementsReady: true, requirementsSummary: '已確認：**匯出 CSV**', messages: [{ role: 'user', text: '請先釐清 <b>x</b>' }, { role: 'assistant', text: '**問題一**\n```mermaid\nflowchart TD\nA-->B\n```' }] };
   ui.setApi(async (path, body) => {
     requests.push({ path, body });
     if (path === '/api/requirements/item-1') return { item: { id: 'item-1', title: '匯出' }, session: null, stale: false, confirmed: false };
     if (path === '/api/backlog/interview') return { item: { id: 'item-1' }, session, stale: false, confirmed: false };
+    if (path === '/api/backlog/confirm') return { item: { id: 'item-1' }, session: { ...session, confirmedSummary: body.summary }, stale: false, confirmed: true };
     return {};
   });
   await ui.openInterview('item-1');
@@ -485,12 +486,29 @@ test('需求待辦的「釐清需求」開啟 Grill Me 會議並以該需求啟�
   assert.match(dialog.querySelector('.from-ai .diagram-source').textContent, /A-->B/);
   assert.equal(dialog.querySelector('.from-user .md b'), null);
   assert.match(dialog.querySelector('.from-user .md').textContent, /<b>x<\/b>/);
-  assert.equal(dialog.querySelector('.interview-summary').hidden, false);
-  assert.equal(dialog.querySelector('.interview-summary textarea').value, '已確認：匯出 CSV');
-  dialog.querySelector('.interview-summary textarea').value = '已確認：匯出 CSV，含日期範圍';
-  await dialog.querySelector('[data-confirm]').onclick({ target: dialog.querySelector('[data-confirm]') });
+  // 摘要在右側預覽（Markdown 渲染），「開始寫 PRD」要先確認摘要才出現。
+  const panel = dialog.querySelector('.interview-summary');
+  assert.equal(panel.hidden, false);
+  assert.equal(panel.querySelector('textarea').hidden, true);
+  assert.equal(panel.querySelector('.summary-preview strong').textContent, '匯出 CSV');
+  assert.equal(panel.querySelector('[data-draft]').hidden, true);
+  assert.equal(panel.querySelector('[data-confirm]').textContent, '確認需求摘要');
+  panel.querySelector('[data-summary-view="edit"]').click();
+  assert.equal(panel.querySelector('textarea').hidden, false);
+  panel.querySelector('textarea').value = '已確認：匯出 CSV，含日期範圍'; panel.querySelector('textarea').dispatchEvent(new w.Event('input'));
+  await panel.querySelector('[data-confirm]').onclick();
   const confirm = requests.find(r => r.path === '/api/backlog/confirm');
   assert.deepEqual(plain(confirm.body), { id: 'item-1', sessionId: 's1', turn: 't1', summary: '已確認：匯出 CSV，含日期範圍' });
+  assert.equal(requests.some(r => r.path === '/api/backlog/draft'), false, '確認摘要不會直接起草');
+  assert.equal(panel.querySelector('[data-confirm]').textContent, '已確認');
+  assert.equal(panel.querySelector('[data-draft]').hidden, false);
+  // 確認後再改摘要就要重新確認，起草按鈕先停用。
+  panel.querySelector('textarea').value = '又改了一下'; panel.querySelector('textarea').dispatchEvent(new w.Event('input'));
+  assert.equal(panel.querySelector('[data-confirm]').textContent, '重新確認摘要');
+  assert.equal(panel.querySelector('[data-draft]').disabled, true);
+  panel.querySelector('textarea').value = '已確認：匯出 CSV，含日期範圍'; panel.querySelector('textarea').dispatchEvent(new w.Event('input'));
+  assert.equal(panel.querySelector('[data-draft]').disabled, false);
+  await panel.querySelector('[data-draft]').onclick();
   assert.equal(requests.findIndex(r => r.path === '/api/backlog/draft') > requests.indexOf(confirm), true);
   assert.equal(doc.querySelector('dialog.interview-dialog'), null);
   dom.window.close();
