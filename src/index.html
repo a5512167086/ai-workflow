@@ -63,7 +63,6 @@
     <button data-tab="records" type="button" role="tab" aria-selected="false" aria-controls="tab-records" id="tabbtn-records" tabindex="-1">紀錄</button>
     <button data-tab="usage" type="button" role="tab" aria-selected="false" aria-controls="tab-usage" id="tabbtn-usage" tabindex="-1">用量</button>
     <button data-tab="skills" type="button" role="tab" aria-selected="false" aria-controls="tab-skills" id="tabbtn-skills" tabindex="-1">Skills</button>
-    <button data-tab="settings" type="button" role="tab" aria-selected="false" aria-controls="tab-settings" id="tabbtn-settings" tabindex="-1">設定</button>
   </nav>
 
   <main id="main" tabindex="-1">
@@ -290,17 +289,33 @@
         </div>
       </div>
     </section>
-    <section id="tab-settings" class="tab" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
+    <!-- 設定只從總覽的「設定」進入（settings=1 的內嵌頁）；專案頁沒有設定分頁。 -->
+    <section id="tab-settings" class="tab" role="tabpanel" aria-label="設定" hidden>
       <div class="settings-layout">
-        <div class="card"><h2>工作流程模式</h2><p class="hint">自動：驗證與審查通過後自動 commit。手動：不自動 commit，每個任務完成後等待你測試。與 Windows／WSL 執行環境無關。</p>      <div class="mode">
-        <span class="label" id="mode-label">模式</span>
-        <div class="seg" role="radiogroup" aria-labelledby="mode-label">
-          <button data-mode="auto" type="button" role="radio" aria-checked="false">自動</button>
-          <button data-mode="manual" type="button" role="radio" aria-checked="false">手動</button>
+        <div class="card settings-wide workflow-card">
+          <div class="workflow-grid">
+            <div>
+              <h2>工作流程模式</h2>
+              <p class="hint">自動：驗證與審查通過後自動 commit。手動：不自動 commit，每個任務完成後等待你測試。與 Windows／WSL 執行環境無關。</p>
+              <div class="mode">
+                <span class="label" id="mode-label">模式</span>
+                <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+                  <button data-mode="auto" type="button" role="radio" aria-checked="false">自動</button>
+                  <button data-mode="manual" type="button" role="radio" aria-checked="false">手動</button>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h2>全域同時執行上限</h2>
+              <p class="hint">適用所有專案；其他專案會排隊，等待人工驗收的專案不占名額。</p>
+              <div class="mode">
+                <label class="label" for="max-runs">上限</label>
+                <select id="max-runs"><option value="1">1 個</option><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select>
+                <span id="queue-line" class="hint"></span>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-</div>
-        <div class="card"><h2>全域執行佇列</h2><label for="max-runs">同時執行的專案上限</label><select id="max-runs"><option value="1">1 個</option><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select><p id="queue-line" class="hint"></p><p class="hint">適用所有專案；等待人工驗收的專案不占名額。</p></div>
         <div class="card settings-wide">
           <div class="card-head"><h2>AI 角色與模型</h2><button id="btn-save-models" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
           <p class="hint">每個階段可獨立選擇 AI、模型與推理強度；空白＝CLI 預設。PRD 審查與程式碼審查可以選「雙人審查」：Claude 與 Codex 各審一次，兩份意見分開顯示，兩份都通過才算通過。只有一個 AI 可用或額度用完改用另一個 AI 時，套用那個 AI 的設定。</p>
@@ -325,10 +340,10 @@
           </div>
           <pre id="doctor-out" class="doc hidden" role="status"></pre>
         </div>
-        <div class="card">
-          <div class="card-head"><h2>目前設定</h2><span class="hint mono">.aipipe.json</span></div>
+        <details class="card settings-wide config-card">
+          <summary><h2>目前設定</h2><span class="hint mono">.aipipe.json</span></summary>
           <pre id="config-json" class="doc"></pre>
-        </div>
+        </details>
       </div>
     </section>
 

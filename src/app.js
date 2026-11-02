@@ -1145,8 +1145,10 @@ function renderModels(force = false) {
     box.append(row);
   }
 }
+// b 可以是分頁按鈕，或直接給分頁名稱（設定頁沒有按鈕，只在 settings=1 的內嵌頁顯示）。
 function showTab(b) {
   if (!b) return;
+  if (typeof b === 'string') b = { dataset: { tab: b } };
   if (b.dataset.tab === 'settings' && !SETTINGS_ONLY) { location.href = `overview.html#settings=${PROJECT_ID}`; return; }
   if (b.dataset.tab === 'chat' && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }
   if (b.dataset.tab === 'settings') loadQueue();
@@ -1419,7 +1421,7 @@ function bind() {
 bind();
 bindSkills();
 bindBacklog();
-if (SETTINGS_ONLY || location.hash === '#settings') showTab($('#tabbtn-settings'));
+if (SETTINGS_ONLY || location.hash === '#settings') showTab('settings');
 api('/api/state').then(data => {
   onState(data);
   if (!$('#tab-chat').hidden && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }

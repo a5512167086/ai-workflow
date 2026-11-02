@@ -50,7 +50,6 @@ function render() {
       <p class="pc-reason"></p>
       <div class="pc-actions">
         <button type="button" class="icon-btn" data-act="remove">${icon('trash')}</button>
-        <a class="btn" href="#settings=${p.id}" data-project-settings="${p.id}">設定</a>
         <a class="btn primary" href="${projectHref(p.id)}">${icon('forward')}開啟</a>
       </div>`;
     card.querySelector('.pc-name a').textContent = p.name;
@@ -74,7 +73,6 @@ function render() {
       if (!confirm(`從總覽移除「${p.name}」？\n只會移出清單，不會刪除任何檔案。`)) return;
       if (await act('/api/projects/remove', { id: p.id }, '已從總覽移除')) refresh();
     };
-    card.querySelector('[data-project-settings]').onclick = (event) => { event.preventDefault(); showSettings(p.id); };
     grid.append(card);
   }
 
@@ -86,7 +84,6 @@ function render() {
   const running = names(queue.running);
   const waiting = names(queue.waiting);
   $('#queue-line').textContent = `執行中 ${running.length}/${queue.max}${running.length ? `：${running.join('、')}` : ''}${waiting.length ? `・排隊：${waiting.join('、')}` : ''}`;
-  if (document.activeElement !== $('#max-runs')) $('#max-runs').value = String(Math.min(queue.max, 4));
   $('#btn-pick').classList.toggle('hidden', !desktop);
   renderSettingsProjects();
 }
@@ -177,9 +174,6 @@ function bind() {
     } catch (err) {
       toast(String(err), true);
     }
-  };
-  $('#max-runs').onchange = async (e) => {
-    if (await act('/api/queue/config', { max: Number(e.target.value) }, `同時執行上限改為 ${e.target.value} 個`)) refresh();
   };
 }
 
