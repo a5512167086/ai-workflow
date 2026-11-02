@@ -125,7 +125,6 @@ struct Flat {
     id: String,
     deps: Vec<String>,
     status: String,
-    priority: String,
     parent: Option<usize>,
     index: usize,
     sub_index: Option<usize>,
@@ -145,7 +144,6 @@ fn flatten(tasks: &[Value]) -> Vec<Flat> {
             id: id.clone(),
             deps: deps_of(task),
             status: task["status"].as_str().unwrap_or("pending").into(),
-            priority: task["priority"].as_str().unwrap_or("medium").into(),
             parent: None,
             index: i,
             sub_index: None,
@@ -157,7 +155,6 @@ fn flatten(tasks: &[Value]) -> Vec<Flat> {
                 id: format!("{id}.{}", js_string(&sub["id"])),
                 deps,
                 status: sub["status"].as_str().unwrap_or("pending").into(),
-                priority: sub["priority"].as_str().unwrap_or("medium").into(),
                 parent: Some(i),
                 index: i,
                 sub_index: Some(k),
@@ -378,13 +375,13 @@ pub fn next_task_id(root: &Path) -> Result<Option<String>> {
     }
     let tasks = normalize(&current, true)?;
     let all = flatten(&tasks);
-    let rank = |p: &str| match p { "high" => 0, "low" => 2, _ => 1 };
+    // 「前線」：依賴都完成的任務。照拆任務時排好的清單順序做（清單就是實作順序），進行中或審查中的先接著做完；
+    // 優先序只用來顯示，不再拿來插隊，否則後面的高優先序任務會跳到前面還沒做的基礎任務之前。
     let parent_open = |t: &Flat| t.parent.is_none_or(|p| OPEN.contains(&tasks[p]["status"].as_str().unwrap_or("")));
     let mut candidates: Vec<&Flat> = all.iter().filter(|t| !t.has_subtasks && OPEN.contains(&t.status.as_str()) && parent_open(t) && eligible(t, &all)).collect();
     candidates.sort_by(|a, b| {
         ((b.status != "pending") as u8).cmp(&((a.status != "pending") as u8))
-            .then_with(|| rank(&a.priority).cmp(&rank(&b.priority)))
-            .then_with(|| natural_cmp(&a.id, &b.id))
+            .then_with(|| (a.index, a.sub_index).cmp(&(b.index, b.sub_index)))
     });
     Ok(candidates.first().map(|t| t.id.clone()))
 }

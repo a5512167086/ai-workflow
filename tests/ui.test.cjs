@@ -482,7 +482,7 @@ test('任務要先人工核准才能開始，核准後開始按鈕解鎖，內�
   assert.equal(doc.querySelector('#btn-start').disabled, true);
   assert.equal(doc.querySelector('#btn-task-approve').disabled, false);
   assert.equal(doc.querySelector('#btn-task-approve').textContent, '檢視後核准任務');
-  assert.match(doc.querySelector('#task-human-note').textContent, /核准後才會開始執行/);
+  assert.match(doc.querySelector('#task-human-note').textContent, /單獨展示與手動測試.*依賴是否只列真正擋住它的任務.*核准後照清單順序執行/);
   const requests = [];
   const approved = { ...base, state: { ...base.state, task_approval: { revision: 'rev-1' } } };
   ui.setApi(async (path, body) => { requests.push({ path, body }); return path === '/api/state' ? approved : {}; });

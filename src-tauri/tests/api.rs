@@ -28,7 +28,7 @@ fn api_專案範圍路由_總覽_backlog_與加入專案不在專案裡寫檔() 
     assert_eq!(usage["providers"].as_array().unwrap().len(), 2);
     let skills = get(&format!("/api/p/{id}/skills")).unwrap();
     let names: Vec<Value> = skills["skills"].as_array().unwrap().iter().map(|s| s["name"].clone()).collect();
-    assert_eq!(names, vec![json!("grill-me"), json!("uiux-design")]);
+    assert_eq!(names, vec![json!("grill-me"), json!("tdd"), json!("to-spec"), json!("to-tickets"), json!("uiux-design")]);
     // Skills 綁定是全域設定：從專案頁存，總覽的 /api/config 也看得到。
     post(&format!("/api/p/{id}/skills/config"), json!({ "skills": { "implement": ["uiux-design"] } })).unwrap();
     assert_eq!(get(&format!("/api/p/{id}/skills")).unwrap()["config"]["implement"], json!(["uiux-design"]));

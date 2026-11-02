@@ -65,7 +65,7 @@ function renderHumanControls() {
   const approved = !!snap.taskRevision && snap.taskRevision === snap.state.task_approval?.revision;
   $('#btn-task-approve').disabled = !!busy || !snap.tasks?.length || snap.state.prd.status !== 'approved' || approved;
   $('#btn-task-approve').textContent = approved ? '任務已核准' : '檢視後核准任務';
-  $('#task-human-note').textContent = !snap.tasks?.length ? '需求釐清 → 你確認摘要 → PRD 交叉審查與人工核准 → 拆任務 → 你檢視並核准任務 → 執行與驗收' : approved ? '任務已由你核准。手動模式每項完成後等你測試；所有模式最後都需功能驗收。' : '請檢視任務的範圍、驗收條件、粒度與依賴，可直接人工編輯；核准後才會開始執行。';
+  $('#task-human-note').textContent = !snap.tasks?.length ? '需求釐清 → 你確認摘要 → PRD 交叉審查與人工核准 → 拆任務 → 你檢視並核准任務 → 執行與驗收' : approved ? '任務已由你核准。手動模式每項完成後等你測試；所有模式最後都需功能驗收。' : '核准前請確認：每個任務做完都能單獨展示與手動測試嗎？粒度會太粗或太細嗎？依賴是否只列真正擋住它的任務？有沒有該合併或再拆的？可以直接人工編輯；核准後照清單順序執行。';
   const prd = snap.state.prd;
   $('#prd-human-note').textContent = prd.human_edited_at && prd.reviewed_version !== prd.version ? '目前含人工修改。可只請不同 AI 審查，保留你的原文；最後仍由你核准。' : 'AI 審查提供意見；你可以直接編輯、要求修改，最後由你核准。';
 }

@@ -71,14 +71,15 @@ fn 依賴不存在_循環_自我依賴與重複_id_都會被拒絕_保留舊任�
 }
 
 #[test]
-fn 保留非連續_id_與向後依賴_選擇高優先序且依賴已完成的任務() {
+fn 保留非連續_id_與向後依賴_依清單順序選擇依賴已完成的任務_優先序不插隊() {
     let root = project();
     write_tasks(&root, &tasks(json!([
         { "id": 10, "title": "later", "dependencies": [20], "priority": "high" },
         { "id": 20, "title": "first", "priority": "low" },
-        { "id": 30, "title": "other", "priority": "medium" },
+        { "id": 30, "title": "other", "priority": "high" },
     ])), None, json!({})).unwrap();
-    assert_eq!(next_task_id(&root).unwrap().as_deref(), Some("30"));
+    // 依賴都完成的有 20、30：照清單順序先做 20，不因為 30 是高優先序就插隊。
+    assert_eq!(next_task_id(&root).unwrap().as_deref(), Some("20"));
     set_status(&root, "30", "blocked").unwrap();
     assert_eq!(next_task_id(&root).unwrap().as_deref(), Some("20"));
     assert!(set_status(&root, "10", "in-progress").unwrap_err().message.contains("依賴尚未完成"));
@@ -180,7 +181,7 @@ fn 預設技能可被標準_yaml_解析_匯入完整資源並保存不可變版�
     let root = project();
     let source = project();
     let names: Vec<Value> = list_skills(&root).iter().map(|s| s["name"].clone()).collect();
-    assert_eq!(names, vec![json!("grill-me"), json!("uiux-design")]);
+    assert_eq!(names, vec![json!("grill-me"), json!("tdd"), json!("to-spec"), json!("to-tickets"), json!("uiux-design")]);
     fs::write(source.join("SKILL.md"), manifest("custom-design")).unwrap();
     fs::create_dir_all(source.join("references")).unwrap();
     fs::write(source.join("references").join("design.md"), "original").unwrap();
@@ -206,7 +207,7 @@ fn 匯入資料夾_skill_md_不分大小寫並保留子目錄_缺少時拒絕_�
     fs::write(empty.join("README.md"), "not a skill").unwrap();
     assert!(import_skill(&root, &empty.to_string_lossy()).unwrap_err().message.contains("SKILL.md"));
     assert!(import_skill(&root, &empty.join("missing").to_string_lossy()).unwrap_err().message.contains("找不到資料夾"));
-    assert_eq!(list_skills(&root).len(), 2);
+    assert_eq!(list_skills(&root).len(), ai_workflow::core::builtin_skills::BUILTIN_SKILLS.len());
     // 小寫 skill.md 也接受，存進技能庫時統一叫 SKILL.md；子目錄與資源檔完整帶入並列在 files。
     let source = project();
     fs::write(source.join("skill.md"), manifest("lower-case")).unwrap();

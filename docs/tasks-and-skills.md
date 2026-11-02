@@ -8,7 +8,7 @@ Task Master 的任務格式、PRD 拆解與依賴排程是設計參考；本專�
 
 ## 任務資料
 
-`ai-workflow tasks` 把已核准 PRD 交給設定的拆任務 AI，要求輸出 JSON 任務。內建引擎驗證 ID、依賴存在性與循環，再以原子寫入及跨程序鎖保存到該專案的資料目錄 `~/.ai-workflow/projects/<id>/tasks.json`。每個功能有自己的群組，保存 PRD 版本、產生任務的 provider／session 與狀態事件。資料都在使用者目錄，不在專案裡；核准功能的任務清單另外隨功能封存在同一個資料目錄的 `archive/`。
+`ai-workflow tasks` 把已核准 PRD 交給設定的拆任務 AI，要求輸出 JSON 任務。任務是「曳光彈」式的垂直切片：每個任務同時穿過資料、邏輯、介面與測試，做完就能單獨展示與手動測試；只有真正擋住它的任務才列為依賴，清單依可開始的順序排列，排程照清單順序挑下一個依賴都完成的任務（優先序只用來顯示）。內建引擎驗證 ID、依賴存在性與循環，再以原子寫入及跨程序鎖保存到該專案的資料目錄 `~/.ai-workflow/projects/<id>/tasks.json`。每個功能有自己的群組，保存 PRD 版本、產生任務的 provider／session 與狀態事件。資料都在使用者目錄，不在專案裡；核准功能的任務清單另外隨功能封存在同一個資料目錄的 `archive/`。
 
 任務包含 title、description、details、testStrategy、priority、dependencies、status、subtasks，可額外帶 requirement_ids、acceptanceCriteria、skills。AI 產生的需求對照仍須人工檢視；程式的圖形驗證不等於需求完整性審查。
 
@@ -20,7 +20,7 @@ Task Master 的任務格式、PRD 拆解與依賴排程是設計參考；本專�
 
 ## 共用技能
 
-App 預設提供 `grill-me` 與 `uiux-design`。技能庫在該專案的資料目錄 `~/.ai-workflow/projects/<id>/skills/<name>/`，每個技能包含標準 YAML frontmatter 與 Markdown 指令：
+App 預設提供 `grill-me`、`to-spec`、`to-tickets`、`tdd` 與 `uiux-design`。前四個改寫自 [Matt Pocock 的 skills](https://github.com/mattpocock/skills)（MIT），對應流程的需求釐清、PRD、拆任務與實作；流程各階段的提示詞已內含同樣的規則，所以不綁也會套用，綁到其他階段或開技能會議時才需要它們。技能庫在該專案的資料目錄 `~/.ai-workflow/projects/<id>/skills/<name>/`，每個技能包含標準 YAML frontmatter 與 Markdown 指令：
 
 ```markdown
 ---
