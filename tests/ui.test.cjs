@@ -144,6 +144,38 @@ test('專案頁只剩這個專案的指令與 context 欄位，儲存只送專�
   dom.window.close();
 });
 
+test('看板的功能參考與專案指令收在對話框，不佔看板版面；取消會放棄未儲存的輸入', async () => {
+  const { dom, ui, doc, w } = page();
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  const state = snapshot(); state.root = 'C:/p'; state.state.prd.rounds = [];
+  state.tasks = [{ id: 1, title: '登入', status: 'pending' }]; state.taskReferences = ['r1', 'r2'];
+  ui.setSnap(state); ui.bind(); ui.renderBoard();
+  // 兩塊內容都在對話框裡，預設關閉；按鈕顯示參考數量。
+  assert.ok(doc.querySelector('#board-refs-dialog #board-references'));
+  assert.ok(doc.querySelector('#project-settings-dialog #pc-build'));
+  assert.equal(doc.querySelector('#board-refs-dialog').open, false);
+  assert.equal(doc.querySelector('.project-settings-card'), null);
+  assert.equal(doc.querySelector('#btn-board-refs').textContent.trim(), '參考 2');
+  doc.querySelector('#btn-board-refs').click();
+  assert.equal(doc.querySelector('#board-refs-dialog').open, true);
+  doc.querySelector('#board-refs-dialog [data-close]').click();
+  assert.equal(doc.querySelector('#board-refs-dialog').open, false);
+  // 專案指令：改了沒儲存就取消，再打開時恢復原值；儲存成功會關閉對話框。
+  doc.querySelector('#btn-project-settings').click();
+  assert.equal(doc.querySelector('#project-settings-dialog').open, true);
+  assert.equal(doc.querySelector('#pc-test').value, 'npm test');
+  doc.querySelector('#pc-test').value = 'npm run broken'; doc.querySelector('#pc-test').dispatchEvent(new w.Event('input'));
+  doc.querySelector('#project-settings-dialog [data-close]').click();
+  doc.querySelector('#btn-project-settings').click();
+  assert.equal(doc.querySelector('#pc-test').value, 'npm test');
+  ui.setApi(async (path, body) => ({ config: { ...state.config, commands: body.commands } }));
+  doc.querySelector('#pc-lint').value = 'npm run lint'; doc.querySelector('#pc-lint').dispatchEvent(new w.Event('input'));
+  await ui.saveProjectSettings();
+  assert.equal(doc.querySelector('#project-settings-dialog').open, false);
+  dom.window.close();
+});
+
 test('紀錄方向鍵只切換紀錄子頁，不改變任務詳情子頁', () => {
   const { dom, ui, doc, w } = page();
   doc.querySelector('#tab-records').hidden = false;
@@ -378,10 +410,10 @@ test('參考資料取消不套用，套用和移除只影響選取的草稿', as
   const reference = {id:'ref-1',name:'規格.md',kind:'file',fileCount:1,totalBytes:12,sourcePath:'C:/spec.md'};
   ui.catalog([reference]); ui.setApi(async () => ({items:[reference]}));
   await ui.openReferenceDialog({title:'需求參考',key:'backlog',ids:[]});
-  const dialog=doc.querySelector('dialog'); dialog.querySelector('input[type=checkbox]').click(); dialog.close();
+  const dialog=doc.querySelector('dialog.reference-dialog'); dialog.querySelector('input[type=checkbox]').click(); dialog.close();
   assert.equal(ui.referenceDraft('backlog').length,0);
   await ui.openReferenceDialog({title:'需求參考',key:'backlog',ids:[]});
-  doc.querySelector('dialog input[type=checkbox]').click(); doc.querySelector('[data-apply]').click();
+  doc.querySelector('dialog.reference-dialog input[type=checkbox]').click(); doc.querySelector('[data-apply]').click();
   await new Promise(r=>setTimeout(r,0));
   assert.deepEqual([...ui.referenceDraft('backlog')],['ref-1']);
   doc.querySelector('#bl-references .reference-chip button').click(); await new Promise(r=>setTimeout(r,0));

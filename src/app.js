@@ -429,6 +429,9 @@ function renderBoard() {
   const badge = $('#tab-board-badge');
   badge.textContent = tasks.length ? `${counts.done || 0}/${tasks.length}` : '';
   badge.classList.toggle('attn', needsHuman);
+  const refCount = snap.taskReferences?.length || 0;
+  $('#btn-board-refs span').textContent = refCount ? `參考 ${refCount}` : '參考';
+  $('#btn-board-refs').setAttribute('aria-label', `功能共用參考：${refCount} 份`);
   if (typeof renderHumanControls === 'function') renderHumanControls();
   renderBoardView(facts);
   if (focusedTask) {
@@ -624,6 +627,7 @@ async function saveProjectSettings() {
     projectSettingsDirty = false;
     renderProjectSettings();
     toast('已儲存專案設定');
+    if ($('#project-settings-dialog').open) $('#project-settings-dialog').close();
   } catch (err) {
     toast(err.message, true);
   }
@@ -1462,6 +1466,17 @@ function bind() {
   $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
   for (const el of [...$$('[data-command]'), $('#pc-feature'), $('#pc-context')]) el.addEventListener('input', () => { projectSettingsDirty = true; });
   $('#pc-save').onclick = saveProjectSettings;
+  // 看板頂部的「參考」「專案指令」開對話框；關閉專案指令時放棄沒儲存的輸入。
+  const openBoardDialog = (dialog, opener) => { dialog.showModal(); dialog._opener = opener; };
+  $('#btn-board-refs').onclick = event => openBoardDialog($('#board-refs-dialog'), event.currentTarget);
+  $('#btn-project-settings').onclick = event => { projectSettingsDirty = false; renderProjectSettings(); openBoardDialog($('#project-settings-dialog'), event.currentTarget); $('#pc-build').focus(); };
+  for (const dialog of [$('#board-refs-dialog'), $('#project-settings-dialog')]) {
+    for (const close of dialog.querySelectorAll('[data-close]')) close.onclick = () => dialog.close();
+    dialog.addEventListener('close', () => {
+      if (dialog.id === 'project-settings-dialog' && projectSettingsDirty) { projectSettingsDirty = false; renderProjectSettings(); }
+      dialog._opener?.focus();
+    });
+  }
   $('#usage-short').onclick = () => showTab($('#tabbtn-usage'));
   $('#btn-usage-refresh').onclick = refreshUsage;
   bindTheme();

@@ -198,10 +198,20 @@
       <div class="board-overview" aria-label="本功能任務進度">
         <div class="board-feature"><span class="eyebrow">目前功能</span><h2 id="board-feature-title">尚未開始</h2><div id="board-progress" class="feature-progress" role="progressbar" aria-label="主線任務完成度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
         <dl id="board-metrics" class="board-metrics"></dl>
+        <!-- 功能共用參考與專案指令改成對話框，不佔看板的版面。 -->
+        <div class="board-feature-actions">
+          <button id="btn-board-refs" type="button" aria-haspopup="dialog"><svg class="ic"><use href="#i-link"/></svg><span>參考</span></button>
+          <button id="btn-project-settings" type="button" aria-haspopup="dialog"><svg class="ic"><use href="#i-edit"/></svg>專案指令</button>
+        </div>
       </div>
-      <div id="board-references" class="reference-widget"></div>
-      <details class="card project-settings-card">
-        <summary><h2>這個專案的指令與 context</h2><span class="hint">build／test／lint、功能名稱與 context 檔；其他設定都在總覽的「設定」</span></summary>
+      <dialog id="board-refs-dialog" class="board-dialog" aria-labelledby="board-refs-title">
+        <div class="card-head"><h2 id="board-refs-title">功能共用參考</h2><button type="button" class="icon-btn" data-close aria-label="關閉功能共用參考"><svg class="ic"><use href="#i-x"/></svg></button></div>
+        <p class="hint">這個功能的所有任務都會帶入這些參考；單一任務的額外參考在任務詳情裡加。</p>
+        <div id="board-references" class="reference-widget"></div>
+      </dialog>
+      <dialog id="project-settings-dialog" class="board-dialog" aria-labelledby="project-settings-title">
+        <div class="card-head"><h2 id="project-settings-title">這個專案的指令與 context</h2><button type="button" class="icon-btn" data-close aria-label="關閉專案指令"><svg class="ic"><use href="#i-x"/></svg></button></div>
+        <p class="hint">build／test／lint、功能名稱與 context 檔只屬於這個專案；其他設定都在總覽的「設定」。</p>
         <div class="form-grid">
           <label for="pc-build" class="mono">build</label><input id="pc-build" data-command="build" type="text" class="mono" spellcheck="false" placeholder="例如 npm run build">
           <label for="pc-test" class="mono">test</label><input id="pc-test" data-command="test" type="text" class="mono" spellcheck="false" placeholder="例如 npm test">
@@ -209,8 +219,9 @@
           <label for="pc-feature">功能名稱</label><input id="pc-feature" type="text" placeholder="空白時用 PRD 想法產生分支名稱">
           <label for="pc-context">context 檔</label><textarea id="pc-context" rows="2" spellcheck="false" placeholder="每行一個專案內既有檔案的路徑，例如 docs/architecture.md；每次 AI 對話都會附上"></textarea>
         </div>
-        <div class="row"><button id="pc-save" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存專案設定</button><span id="pc-data-dir" class="hint mono"></span></div>
-      </details>
+        <p id="pc-data-dir" class="hint mono"></p>
+        <div class="row end"><button type="button" data-close>取消</button><button id="pc-save" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
+      </dialog>
       <div class="board-controls">
         <div class="seg" role="radiogroup" aria-label="任務檢視">
           <button id="board-view-kanban" data-board-view="kanban" type="button" role="radio" aria-checked="true">看板</button>

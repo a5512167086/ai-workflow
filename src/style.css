@@ -633,15 +633,18 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 #overview-settings:not([hidden]) { flex: 1; min-height: 0; overflow: auto; padding-right: 2px; }
 #overview-settings .form-grid input[type="number"] { max-width: 120px; }
 /* 專案頁只剩這個專案自己的欄位（build/test/lint、功能、context 檔），放在任務看板裡可開合。 */
-.project-settings-card { flex: none; margin-bottom: var(--s-3); }
-.project-settings-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
-.project-settings-card > summary::-webkit-details-marker { display: none; }
-.project-settings-card > summary h2 { margin: 0; font-size: 15px; display: inline-flex; align-items: center; gap: var(--s-2); }
-.project-settings-card > summary h2::before { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--ease); flex: none; }
-.project-settings-card[open] > summary h2::before { transform: rotate(45deg); }
-.project-settings-card .form-grid { margin-top: var(--s-3); grid-template-columns: max-content minmax(0, 1fr); }
-.project-settings-card .form-grid textarea { width: 100%; font-family: var(--font-mono); font-size: 12.5px; }
-.project-settings-card .row { margin-top: var(--s-3); align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+/* 看板頂部「參考」「專案指令」開出的對話框。 */
+.board-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: auto; }
+.board-dialog::backdrop { background: #0007; }
+.board-dialog > .card-head { margin-bottom: var(--s-2); }
+.board-dialog > .card-head h2 { margin: 0; font-size: 16px; }
+.board-dialog > .hint { margin: 0 0 var(--s-3); }
+#project-settings-dialog .form-grid { margin-top: 0; grid-template-columns: max-content minmax(0, 1fr); }
+#project-settings-dialog .form-grid textarea { width: 100%; min-height: 72px; font-family: var(--font-mono); font-size: 12.5px; }
+#project-settings-dialog #pc-data-dir { margin: var(--s-3) 0 0; overflow-wrap: anywhere; }
+#project-settings-dialog .row { margin-top: var(--s-3); gap: var(--s-2); }
+.board-feature-actions { flex: none; display: flex; gap: var(--s-2); }
+.board-feature-actions button { white-space: nowrap; }
 #tab-board:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
 #tab-board .board-wrap { flex: 1; min-height: 100px; overflow: auto; }
 #tab-board .detail:not(.hidden) { flex: 0 1 50%; min-height: 160px; overflow: auto; }
@@ -734,6 +737,7 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 }
 @media (max-width: 620px) {
   .board-overview { align-items: stretch; flex-direction: column; gap: 8px; padding: 10px 12px; }
+  .board-feature-actions { justify-content: flex-end; }
   .board-feature h2 { font-size: 14px; margin-bottom: 6px; }.board-metrics dd { font-size: 16px; }
   .board-controls { gap: 6px; }.board-search { flex-basis: 100%; max-width: none; }
   .board-controls label { font-size: 11px; }.board-controls #board-results { font-size: 11px; }
