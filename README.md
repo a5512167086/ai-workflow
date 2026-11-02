@@ -41,14 +41,15 @@ aipipe projects add    # 加入桌面 app 的總覽，之後在 app 裡操作
 
 在專案畫面裡依序：
 
-0. **需求待辦**（選用）：先把想做的功能列進待辦、排好順序，按「起草 PRD」就用那一項開始。
-1. **需求待辦**：新增需求後按「起草 PRD」。作者 AI 起草，審查 AI 審，來回最多 `max_prd_rounds` 輪。PRD 頁右側可以展開每一輪的審查意見。
-2. 看完 PRD 後按「核准 PRD」，或在下方寫意見按「要求再改」（作者修訂後會再審一輪）。
-3. 桌面版核准後自動產生任務；只有失敗時才顯示「重新產生任務」。
-4. **任務看板**：按「開始」。點任務卡可以看目前步驟、修正輪數、即時 log、test 輸出、審查意見、diff。
-5. 流程停下來時（等待測試、功能完成、修正輪數用盡），自己測過後按「我測完了，繼續」。
+0. **需求待辦**：先把想做的功能列進待辦、排好順序。
+1. **釐清需求（Grill Me）**：新增需求後會自動開啟需求會議（之後也可按「釐清需求」接續）。`interviewer` 角色的 AI 先查專案與參考資料，每輪提出 1–4 個問題；至少回答一輪、沒有未解決問題後，才會給出可編輯的需求摘要。按「確認需求，開始寫 PRD」才會起草。需求標題、說明或參考資料改過後，舊會議與確認自動失效。
+2. **PRD**：作者 AI 依你確認的摘要起草，審查 AI 審，來回最多 `max_prd_rounds` 輪。PRD 頁右側可以展開每一輪的審查意見。你也可以按「人工編輯」直接改 PRD（存成新版本、保留紀錄），再按「只重新審查目前版本」請審查 AI 看你的版本而不改寫原文。
+3. 看完 PRD 後按「核准 PRD」，或在下方寫意見按「要求再改」（作者修訂後會再審一輪）。核准會檢查版本，別的視窗改過的 PRD 要重新閱讀再核准。
+4. 桌面版核准後自動產生任務；只有失敗時才顯示「重新產生任務」。
+5. **任務看板**：先檢視任務的範圍、驗收條件、粒度與依賴，必要時在任務詳情按「人工編輯任務」修改，再按「檢視後核准任務」。任務有實質修改時，該任務、同組子任務與後續依賴會重新待辦並撤回核准；產生新任務或 PRD 改版後也要重新核准。核准後才能按「開始」。點任務卡可以看目前步驟、修正輪數、即時 log、test 輸出、審查意見、diff。
+6. 流程停下來時（等待測試、功能完成、修正輪數用盡），自己測過後按「我測完了，繼續」。
 
-首頁「設定」可選擇專案，分別指定 PRD 作者、PRD 審查、拆任務、實作、修正、程式碼審查、handover 與專案對話的 AI、模型與推理強度；兩個審查角色也可選雙人審查，兩份意見都通過才會繼續。舊設定的拆任務沿用作者設定，修正與 handover 沿用實作者設定，之後可以各自調整。Handover 是給下一個 AI session 的交接紀錄，記錄完成內容、驗證結果與待處理事項，預設寫入 `docs/handovers/current_handover.md`。
+首頁「設定」可選擇專案，分別指定需求釐清、PRD 作者、PRD 審查、拆任務、實作、修正、程式碼審查、handover 與專案對話的 AI、模型與推理強度；兩個審查角色也可選雙人審查，兩份意見都通過才會繼續。舊設定的需求釐清與拆任務沿用作者設定，修正與 handover 沿用實作者設定，之後可以各自調整。Handover 是給下一個 AI session 的交接紀錄，記錄完成內容、驗證結果與待處理事項，預設寫入 `docs/handovers/current_handover.md`。
 
 「紀錄」整合目前功能的可展開 Log、PRD、每輪紀錄及任務，也可切換歷史功能查看封存。App 外框不捲動，長內容在各工作區內捲動；新增需求與待辦清單填滿可用高度。
 
@@ -65,14 +66,16 @@ Claude Pro 訂閱不包含 Fable 的用量；Claude Code 可選 Fable，但需�
 ```bash
 aipipe prd "加入 CSV 匯出功能，可選欄位與日期範圍"
 aipipe prd --revise "日期範圍要支援時區"   # 要求再改
+aipipe prd --review                         # 人工改過 PRD 後只重新審查，不改寫原文
 aipipe prd --approve                        # 核准
 aipipe tasks
+aipipe tasks --approve                      # 檢視後核准任務，run 之前必須核准
 aipipe run
 aipipe continue                             # 我測完了，繼續
 aipipe rerun 3 --revert                     # 還原任務 3 的變更後重跑
 aipipe mode auto                            # 切換模式
 aipipe status
-aipipe prd --backlog <id>                   # 用需求待辦裡的一項起草 PRD
+aipipe prd --backlog <id>                   # 用需求待辦裡的一項起草 PRD（需先在 App 完成需求釐清並確認摘要）
 aipipe projects list                        # 總覽裡的專案與狀態
 aipipe projects add [目錄]                  # 加入總覽（預設目前專案）
 aipipe projects remove <id|目錄|名稱>       # 移出總覽（不刪任何檔案）
@@ -199,6 +202,7 @@ aipipe skills run grill-me --input "我要做報表工具" --provider codex
   "backlog_path": "docs/aipipe/backlog.json",  // 需求待辦清單
   "archive_dir": "docs/prd",        // 功能封存的上層資料夾
   "roles": {                        // 每個角色填 claude 或 codex
+    "interviewer": "claude",        // 需求釐清（Grill Me）會議
     "author": "claude",             // 起草／修訂 PRD
     "reviewer": "codex",            // 審查 PRD
     "implementer": "claude",        // 實作、修正、更新 handover
@@ -337,9 +341,12 @@ npm run build        # tauri build
 
 ## 開發
 
+本機開發不需要安裝 `aipipe_<版本>_x64-setup.exe`：裝好 Rust stable、VS 2022 C++ Build Tools 與 Node 20+ 後，`npm install` 再 `npm run dev` 就會以開發模式開桌面視窗（Tauri dev，改前端檔案會即時重載）。命令列版用 `cargo run --manifest-path src-tauri/Cargo.toml -- <指令>`（例如 `-- status`、`-- doctor`）或 `src-tauri/target/debug/aipipe-desktop.exe <指令>`。`npm run build` 只有要產生安裝檔時才需要。
+
 ```bash
 npm test     # cargo test：不呼叫任何 AI；CLI 由 src-tauri/examples/fake_cli.rs 扮演，全域資料寫到暫存的 AIPIPE_HOME
 npm run lint # cargo clippy -D warnings
+npm run test:ui  # 只跑前端 jsdom 測試，不需要 Rust
 ```
 
 介面設計規範在 [docs/design-system.md](docs/design-system.md)。

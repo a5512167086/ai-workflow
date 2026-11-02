@@ -8,6 +8,7 @@ const PROJECT_STATUS = {
   drafting: ['PRD 起草中', 'running'],
   awaiting_approval: ['等待核准 PRD', 'waiting'],
   generating: ['產生任務中', 'running'],
+  awaiting_tasks: ['等待核准任務', 'waiting'],
   ready: ['可以開始', 'idle'],
   queued: ['排隊中', 'queued'],
   running: ['執行中', 'running'],

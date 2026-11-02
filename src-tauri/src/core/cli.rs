@@ -34,9 +34,11 @@ pub const HELP: &str = "aipipe — 用本機已登入的 Claude Code / Codex CLI
                           （互動終端機下沒加也會詢問）
   doctor                  檢查 Windows／WSL 的 Claude Code、Codex 安裝與訂閱登入
   prd \"<想法>\"            作者 AI 起草 PRD → 審查 AI 審 → 來回最多 max_prd_rounds 輪
-  prd --backlog <id>      用需求待辦清單裡的項目起草 PRD
+  prd --backlog <id>      用需求待辦裡已完成需求釐清（Grill Me）並確認摘要的項目起草 PRD
   prd --revise \"<意見>\"   依你的意見修訂後再審一次
+  prd --review            只請審查 AI 重新審查目前的 PRD（人工修改後保留原文）
   prd --approve           核准目前的 PRD（寫入 prd_path）
+  tasks --approve         人工檢視後核准目前的任務清單；run 之前必須核准
   tasks                   用 AI 拆解核准的 PRD，由內建任務引擎保存及排程
   skills list             列出共用 Skills
   skills import <資料夾>  匯入包含 SKILL.md 的技能資料夾
@@ -170,10 +172,14 @@ pub fn main(argv: &[String]) -> Result<i32> {
                 println!("PRD 已核准：{}\n下一步：aipipe tasks", file.display());
                 return Ok(0);
             }
-            if let Some(feedback) = args.get("revise") {
+            if args.flag("review") {
+                super::prd::review_current(root,&cfg)?;
+            } else if let Some(feedback) = args.get("revise") {
                 revise_prd(root, &cfg, feedback)?;
             } else if let Some(id) = args.get("backlog") {
                 let item = get_item(root, id)?;
+                // 先確認需求釐清已由使用者確認，再把待辦標成進行中，失敗時不改狀態。
+                super::requirements::prd_input(root, &item)?;
                 update_item(root, id, &json!({ "status": "in_progress" }))?;
                 draft_prd(root, &cfg, &idea_for(&item), Some(id))?;
             } else {
@@ -186,6 +192,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
             println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 aipipe prd --approve");
         }
         Some("tasks") => {
+            if args.flag("approve") { super::human::approve_tasks(root,&tasks::revision(root)?)?; println!("任務已人工核准，可執行 aipipe run"); return Ok(0); }
             let count = generate_tasks(root)?;
             println!("已產生 {count} 個任務，下一步：aipipe run 或在 UI 按「開始」");
         }
@@ -289,11 +296,11 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         tasks::validate_tasks(&list)?;
         let feature = cfg_str(&cfg, "feature");
         let tag = tasks::use_feature_tag(root, &tag_slug(if feature.is_empty() { state["prd"]["idea"].as_str().unwrap_or("") } else { feature }))?;
-        tasks::write_tasks(root, &list, Some(&tag), json!({ "references": state["prd"]["references"], "reference_feature": state["prd"]["archive_dir"], "prd_version": state["prd"]["version"], "provider": res.provider, "sessionId": res.session_id }))?;
+        tasks::write_tasks(root, &list, Some(&tag), json!({ "references": state["prd"]["references"], "reference_feature": state["prd"]["archive_dir"], "prd_version": state["prd"]["version"], "prd_scope": state["prd"]["reference_scope"], "provider": res.provider, "sessionId": res.session_id }))?;
         let count = tasks::read_tasks(root)?.len();
         update_state(root, |s| {
             s["task_gen"] = json!({ "status": "done", "pid": null, "error": "", "count": count, "via": "builtin", "tag": tag });
-            s["tasks"] = json!({});
+            s["tasks"] = json!({}); s["task_approval"]=Value::Null;
         })?;
         archive_tasks(root, json!({}))?;
         append_log(root, scope, &format!("產生 {count} 個任務（AI 拆解，內建任務引擎管理）"));

@@ -838,3 +838,31 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
   .reference-dialog-form { overflow: auto; }
   .reference-library { flex: none; max-height: 30dvh; }
 }
+
+/* Human decisions stay in the project workflow, with scroll contained in dialogs. */
+.human-dialog { width: min(1100px, calc(100vw - 32px)); height: min(820px, calc(100dvh - 40px)); padding: 20px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.human-dialog::backdrop { background: #0007; }
+.human-dialog-layout { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 12px; }
+.human-dialog-layout > .card-head, .human-dialog-layout > p, .human-dialog-layout > .row { flex: none; margin: 0; }
+.human-editor-body { flex: 1; min-height: 0; overflow: auto; }
+.human-prd-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; overflow: hidden; }
+.human-prd-editor > textarea { width: 100%; height: 100%; resize: none; }
+.human-preview { padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.human-task-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding-right: 8px; align-content: start; }
+.human-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.human-field:first-child, .human-field:nth-child(3), .human-field:nth-child(4) { grid-column: 1 / -1; }
+.human-error { max-height: 90px; overflow: auto; }
+.human-loop-note { flex: none; margin: 0 0 8px; }
+.interview-dialog { width: min(900px, calc(100vw - 32px)); }
+.interview-dialog .human-dialog-layout { overflow: auto; }
+.interview-conversation { flex: 1 1 200px; min-height: 100px; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.interview-conversation .chat-message { margin-bottom: 12px; padding: 8px 12px; }
+.interview-conversation b { font-size: 12px; }.interview-conversation .plain-text { white-space: pre-wrap; }
+.interview-answer, .interview-summary { flex: none; }
+.interview-answer textarea { display: block; min-height: 54px; max-height: 120px; margin: 5px 0 8px; resize: vertical; }
+.interview-answer .row { flex-wrap: wrap; gap: 6px; }.interview-answer select { min-height: 30px; padding: 3px 6px; }
+.interview-status { font-size: 12px; white-space: pre-wrap; color: var(--text-muted); }
+.interview-summary { max-height: 220px; overflow: auto; border-top: 1px solid var(--border); padding-top: 8px; }
+.interview-summary textarea { width: 100%; min-height: 100px; margin: 5px 0 8px; }
+@media (max-width: 760px) { .human-prd-editor, .human-task-editor { grid-template-columns: 1fr; }.human-preview { display: none; }.human-dialog { padding: 12px; }.human-dialog .card-head h2 { font-size: 14px; } }
+@media (max-height: 620px) { .interview-conversation { min-height: 60px; }.interview-dialog .human-dialog-layout { gap: 8px; }.interview-answer textarea { height: 54px; }.interview-summary { max-height: 160px; } }

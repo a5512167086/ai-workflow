@@ -58,3 +58,5 @@ aipipe skills run grill-me --input "使用者是財務人員" --session <上次�
 共用模式接受 name、description、metadata、license、compatibility。Claude 專屬的 hooks、context、agent、allowed-tools 等欄位可保存但會顯示不相容，執行前需人工轉寫；不默默忽略它們或改變權限。MCP、圖片生成、設計預覽等工具能力仍由實際 CLI 環境提供。
 
 Grill Me 會議屬唯讀釐清，會議中 AI 的建議不等於已確認需求；轉入 PRD 時仍由使用者作決策。
+
+需求待辦的「釐清需求」就是以 `grill-me` 主持的需求會議：`interviewer` 角色的 AI 先查專案與參考資料，每輪提出 1–4 個問題，至少回答一輪後才會產生可編輯的需求摘要；使用者確認摘要後才能起草 PRD。會議以 `kind: requirements` 的對話保存在 `.aipipe/chats/`，不出現在專案對話清單；需求標題、說明或參考資料修改後，舊會議與確認即失效，需要重新釐清。

@@ -51,7 +51,7 @@ pub fn list_chats(root: &Path) -> Vec<Value> {
         let name = entry.file_name().to_string_lossy().into_owned();
         let id = name.strip_suffix(".json").filter(|id| valid_id(id))?;
         Some(match get_chat(root, id) {
-            Ok(chat) => json!({ "id": id, "title": chat["title"], "updated_at": chat["updated_at"], "status": chat["status"], "provider": chat["provider"] }),
+            Ok(chat) => json!({ "id": id, "title": chat["title"], "updated_at": chat["updated_at"], "status": chat["status"], "provider": chat["provider"], "kind": chat["kind"] }),
             Err(_) => json!({ "id": id, "title": "無法讀取的對話", "status": "error", "updated_at": "" }),
         })
     }).collect();
@@ -62,7 +62,7 @@ fn save(root: &Path, chat: &mut Value) -> Result<()> {
     chat["updated_at"] = json!(now_iso());
     write_json(&file(root, chat["id"].as_str().unwrap_or(""))?, chat)
 }
-fn change(root: &Path, id: &str, action: impl FnOnce(&mut Value) -> Result<()>) -> Result<Value> {
+pub(super) fn change(root: &Path, id: &str, action: impl FnOnce(&mut Value) -> Result<()>) -> Result<Value> {
     locked(root, || { let mut chat = get_chat(root, id)?; action(&mut chat)?; save(root, &mut chat)?; Ok(chat) })
 }
 fn turn_config(root: &Path, provider: &str, model: &str, effort: &str) -> Result<Value> {
@@ -91,6 +91,15 @@ pub fn start_turn(root: &Path, body: &Value, launch: &dyn Fn(&str, &str) -> Resu
         let id = body["chatId"].as_str().filter(|id| !id.is_empty()).map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mut chat = if body["chatId"].as_str().is_some_and(|id| !id.is_empty()) { get_chat(root, &id)? }
             else { json!({ "version": 1, "id": id, "title": input.chars().take(40).collect::<String>(), "created_at": now_iso(), "messages": [] }) };
+        if body["kind"]=="requirements" && chat["kind"].is_null() {
+            let item=super::backlog::get_item(root,body["backlogId"].as_str().unwrap_or(""))?;
+            chat["kind"]=json!("requirements"); chat["backlogId"]=item["id"].clone(); chat["sourceHash"]=json!(super::requirements::fingerprint(&item)); chat["title"]=json!(format!("需求釐清：{}",item["title"].as_str().unwrap_or("")));
+        }
+        if chat["kind"]=="requirements" {
+            super::requirements::validate_session(root,&chat)?;
+            if body["backlogId"]!=chat["backlogId"] { crate::bail!(400; "請從需求待辦接續這個需求會議"); }
+            chat["requirementsReady"]=json!(false); chat["confirmed_at"]=Value::Null;
+        }
         let messages = chat["messages"].as_array_mut().unwrap();
         if retry {
             if !messages.last().is_some_and(|message| message["role"] == "user") { crate::bail!(400; "這個對話沒有可重試的訊息"); }
@@ -143,10 +152,12 @@ pub fn run_turn(root: &Path, id: &str, turn: &str) -> Result<Value> {
         let references_truncated=refs.len()>24; refs.truncate(24);
         cfg["_reference_ids"]=json!(refs);
         cfg["_visual_reference_ids"]=chat["messages"].as_array().and_then(|m|m.last()).map(|m|m["references"].clone()).unwrap_or(json!([]));
-        let (prompt, count, truncated) = conversation_prompt(root, &cfg, &chat);
+        let interview=chat["kind"]=="requirements";
+        let (mut prompt, count, truncated) = conversation_prompt(root, &cfg, &chat);
+        if interview { prompt=super::requirements::prompt(root,&cfg,&chat)?; }
         change(root, id, |chat| { chat["contextMessages"] = json!(count); chat["contextTruncated"] = json!(truncated); chat["contextReferencesTruncated"]=json!(references_truncated); Ok(()) })?;
         let scope = format!("chat-{turn}");
-        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: "專案對話", stage: Some("chat"), role: Some("chat"), skills: Some(vec![]) })?;
+        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: if interview { "需求釐清" } else { "專案對話" }, stage: Some("chat"), role: Some(if interview { "interviewer" } else { "chat" }), skills: Some(if interview { vec!["grill-me".into()] } else { vec![] }) })?;
         if !result.ok { return Err(AppError::new(result.error_text())); }
         Ok(result)
     })();
@@ -155,7 +166,8 @@ pub fn run_turn(root: &Path, id: &str, turn: &str) -> Result<Value> {
         chat["pid"] = Value::Null;
         match result {
             Ok(result) => {
-                chat["messages"].as_array_mut().unwrap().push(json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "assistant", "text": result.text, "at": now_iso(), "provider": result.provider, "sessionId": result.session_id, "telemetry": result.telemetry }));
+                let text=if chat["kind"]=="requirements" { super::requirements::accept_response(chat,&result.text) } else { result.text.clone() };
+                chat["messages"].as_array_mut().unwrap().push(json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "assistant", "text": text, "at": now_iso(), "provider": result.provider, "sessionId": result.session_id, "telemetry": result.telemetry }));
                 chat["status"] = json!("done");
             }
             Err(error) => { chat["status"] = json!(if cancel.exists() { "cancelled" } else { "error" }); chat["error"] = json!(error.message); }

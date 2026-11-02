@@ -66,6 +66,7 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         "prd": current_prd(root),
         "tasks": read_tasks(root).unwrap_or_default(),
         "taskTag": super::tasks::current_tag(root).unwrap_or_default(),
+        "taskRevision": super::tasks::revision(root).unwrap_or_default(),
         "taskReferences": super::tasks::group_metadata(root).unwrap_or(Value::Null)["references"],
         "usage": usage_snapshot(root, &cfg),
         "state": state,
@@ -96,7 +97,7 @@ fn task_detail(root: &Path, id: &str) -> Result<Value> {
     let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
     let task = super::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
     Ok(json!({
-        "id": id,
+        "id": id, "revision": super::tasks::revision(root)?, "tag":super::tasks::current_tag(root)?,
         "state": read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null),
         "task": task,
         "checks": read_text(dir.join("checks.txt")),
@@ -177,6 +178,12 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             Ok(json!({"ok":true}))
         }
+        "backlog/interview" => super::requirements::start(root,body,&|id,turn|spawn_detached_cli(root,&["chat".into(),"--id".into(),id.into(),"--turn".into(),turn.into()])),
+        "backlog/confirm" => super::requirements::confirm(root,body),
+        "prd/save" => { busy_guard(&snap)?; super::prd::save_manual(root,&text_field(body,"text"),&body["version"],&body["scope"]) },
+        "prd/review" => { busy_guard(&snap)?; spawn(root,&["prd","--review"]) },
+        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body,"id")) { return Err(http(400,"任務 id 不正確")); } let result=super::tasks::edit_task(root,&text_field(body,"id"),&text_field(body,"tag"),&text_field(body,"revision"),&body["task"])?; let _=super::archive::archive_tasks(root,json!({})); Ok(result) },
+        "tasks/approve" => { busy_guard(&snap)?; super::human::approve_tasks(root,&text_field(body,"revision")) },
         "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
         "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),
         "chat/rename" => super::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
@@ -191,6 +198,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "prd/approve" => {
             busy_guard(&snap)?;
+            if body.get("version").is_some() && (body["version"]!=snap["state"]["prd"]["version"] || body["scope"]!=snap["state"]["prd"]["reference_scope"]) { return Err(http(409,"PRD 已更新，請重新閱讀後核准")); }
             approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
         }
         "prd/revise" => {
@@ -319,6 +327,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "backlog/draft" => {
             busy_guard(&snap)?;
             let item = get_item(root, &text_field(body, "id"))?;
+            super::requirements::prd_input(root,&item)?;
             spawn(root, &["prd", "--backlog", item["id"].as_str().unwrap_or("")])
         }
         _ => Err(http(404, "未知操作")),
@@ -348,7 +357,7 @@ fn percent_decode(s: &str) -> String {
 fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<Value> {
     if method == "GET" {
         match rest {
-            "chats" => return Ok(json!({ "items": super::chat::list_chats(root) })),
+            "chats" => return Ok(json!({ "items": super::chat::list_chats(root).into_iter().filter(|chat|chat["kind"]!="requirements").collect::<Vec<_>>() })),
             "state" => return snapshot(root),
             "usage" => return Ok(usage_snapshot(root, &load_config(root)?)),
             "skills" => return Ok(json!({ "skills": list_skills(root), "stages": SKILL_STAGES, "config": load_config(root)?["skills"] })),
@@ -369,6 +378,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
             }
             _ => {}
         }
+        if let Some(id)=rest.strip_prefix("requirements/") { return super::requirements::get(root,id); }
         if let Some(id) = rest.strip_prefix("chat/") { return super::chat::get_chat(root, id); }
         if let Some(name) = rest.strip_prefix("archive/") {
             return read_archive(root, &percent_decode(name), &load_config(root)?);

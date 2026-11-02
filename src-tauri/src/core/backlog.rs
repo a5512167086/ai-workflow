@@ -112,6 +112,7 @@ pub fn update_item(root: &Path, id: &str, patch: &Value) -> Result<Value> {
             }
             item["status"] = status.clone();
         }
+        if let Some(id)=patch.get("interviewId") { item["interviewId"]=id.clone(); }
         if let Some(feature) = patch.get("feature") {
             item["feature"] = feature.clone();
         }

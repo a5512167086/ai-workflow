@@ -323,6 +323,8 @@ fn pipeline_loop(root: &Path, first_task: Option<&str>, verify_only: bool, provi
         return Ok("waiting".into());
     }
 
+    super::human::require_task_approval(root)?;
+
     // 全域佇列：其他專案正在跑時在這裡排隊；排隊中按暫停就放棄排隊。
     let granted = acquire_slot(root, |position, running| {
         let names: Vec<String> = running.iter().filter_map(|e| e["root"].as_str()).map(|r| Path::new(r).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();

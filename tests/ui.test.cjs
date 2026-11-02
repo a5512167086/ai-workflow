@@ -11,7 +11,7 @@ function page() {
   w.structuredClone = structuredClone;
   w.__TAURI__ = { core: { invoke: async () => ({}) } };
   const common = fs.readFileSync('src/common.js', 'utf8');
-  const chat = ['markdown.js', 'diagrams.js', 'references.js', 'chat.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
+  const chat = ['markdown.js', 'diagrams.js', 'references.js', 'chat.js', 'human.js'].map(name => fs.readFileSync(`src/${name}`, 'utf8')).join('\n');
   const app = fs.readFileSync('src/app.js', 'utf8').split('\nbind();')[0];
   w.eval(`${common}\n${chat}\n${app}\nwindow.ui = {
     bindReferences, bindReferenceInput, renderReferenceWidgets, openReferenceDialog, referenceDraft, saveReferenceSelection,
@@ -27,7 +27,9 @@ function page() {
     renderBoard, boardFacts, selectTask, renderTaskGates,
     sendChat, openChat, newChat, renderChatMessages, renderChatMarkdown,
     setChat(value) { chatId = value?.id || null; chatSession = value; chatMessagesKey = ''; renderChatMessages(); renderChatControls(); },
-    chat() { return chatSession; }
+    chat() { return chatSession; },
+    renderHumanControls, editHumanPrd, editHumanTask, approveHumanPrd, openInterview,
+    setDetail(value) { detail = value; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
@@ -343,4 +345,85 @@ test('原生拖放使用真實路徑，綁定到游標所在的聊天區域', as
   assert.deepEqual(paths,['C:/external/設計.png','C:/external/source']);
   assert.deepEqual([...ui.referenceDraft('chat:new')],['file-1','file-2']);
   assert.equal(ui.referenceDraft('backlog').length,0); dom.window.close();
+});
+
+// jsdom 視窗裡建立的物件和測試程序不是同一個 realm，deepEqual 前先轉成純資料。
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test('任務要先人工核准才能開始，核准後開始按鈕解鎖，內容改版後核准失效', async () => {
+  const { dom, ui, doc } = page();
+  const base = snapshot(); base.root = 'C:/p'; base.state.prd.rounds = [];
+  base.tasks = [{ id: 1, title: '登入', status: 'pending' }]; base.taskRevision = 'rev-1';
+  ui.setSnap(base); ui.bind(); ui.renderBoard();
+  assert.equal(doc.querySelector('#btn-start').disabled, true);
+  assert.equal(doc.querySelector('#btn-task-approve').disabled, false);
+  assert.equal(doc.querySelector('#btn-task-approve').textContent, '檢視後核准任務');
+  assert.match(doc.querySelector('#task-human-note').textContent, /核准後才會開始執行/);
+  const requests = [];
+  const approved = { ...base, state: { ...base.state, task_approval: { revision: 'rev-1' } } };
+  ui.setApi(async (path, body) => { requests.push({ path, body }); return path === '/api/state' ? approved : {}; });
+  await doc.querySelector('#btn-task-approve').onclick();
+  assert.deepEqual(plain(requests[0]), { path: '/api/tasks/approve', body: { revision: 'rev-1' } });
+  assert.equal(doc.querySelector('#btn-start').disabled, false);
+  assert.equal(doc.querySelector('#btn-task-approve').disabled, true);
+  assert.equal(doc.querySelector('#btn-task-approve').textContent, '任務已核准');
+  ui.setSnap({ ...approved, taskRevision: 'rev-2' }); ui.renderBoard();
+  assert.equal(doc.querySelector('#btn-start').disabled, true);
+  assert.equal(doc.querySelector('#btn-task-approve').disabled, false);
+  dom.window.close();
+});
+
+test('需求待辦的「釐清需求」開啟 Grill Me 會議並以該需求啟動，不直接起草 PRD', async () => {
+  const { dom, ui, doc, w } = page(); ui.setSnap(snapshot());
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  const requests = [];
+  const session = { id: 's1', status: 'done', turn: 't1', requirementsReady: true, requirementsSummary: '已確認：匯出 CSV', messages: [{ role: 'user', text: '請先釐清 <b>x</b>' }, { role: 'assistant', text: '**問題一**' }] };
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body });
+    if (path === '/api/requirements/item-1') return { item: { id: 'item-1', title: '匯出' }, session: null, stale: false, confirmed: false };
+    if (path === '/api/backlog/interview') return { item: { id: 'item-1' }, session, stale: false, confirmed: false };
+    return {};
+  });
+  await ui.openInterview('item-1');
+  assert.equal(requests[0].path, '/api/requirements/item-1');
+  assert.equal(requests[1].path, '/api/backlog/interview');
+  assert.equal(requests[1].body.id, 'item-1');
+  assert.equal(requests.some(r => /backlog\/draft|\/prd/.test(r.path)), false);
+  const dialog = doc.querySelector('dialog.interview-dialog');
+  assert.equal(dialog.querySelector('.from-ai strong').textContent, '問題一');
+  assert.equal(dialog.querySelector('.from-user .md b'), null);
+  assert.match(dialog.querySelector('.from-user .md').textContent, /<b>x<\/b>/);
+  assert.equal(dialog.querySelector('.interview-summary').hidden, false);
+  assert.equal(dialog.querySelector('.interview-summary textarea').value, '已確認：匯出 CSV');
+  dialog.querySelector('.interview-summary textarea').value = '已確認：匯出 CSV，含日期範圍';
+  await dialog.querySelector('[data-confirm]').onclick({ target: dialog.querySelector('[data-confirm]') });
+  const confirm = requests.find(r => r.path === '/api/backlog/confirm');
+  assert.deepEqual(plain(confirm.body), { id: 'item-1', sessionId: 's1', turn: 't1', summary: '已確認：匯出 CSV，含日期範圍' });
+  assert.equal(requests.findIndex(r => r.path === '/api/backlog/draft') > requests.indexOf(confirm), true);
+  assert.equal(doc.querySelector('dialog.interview-dialog'), null);
+  dom.window.close();
+});
+
+test('人工編輯 PRD 以目前版本儲存，核准時帶版本避免核准到過期內容', async () => {
+  const { dom, ui, doc, w } = page();
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  const state = snapshot(); state.root = 'C:/p'; state.prd = '# 舊 PRD';
+  state.state.prd = { status: 'awaiting_approval', version: 3, reference_scope: 'scope-a', rounds: [] };
+  ui.setSnap(state); ui.bind(); ui.renderPrd();
+  assert.equal(doc.querySelector('#btn-prd-edit').disabled, false);
+  assert.equal(doc.querySelector('#btn-prd-review').disabled, false);
+  const requests = [];
+  ui.setApi(async (path, body) => { requests.push({ path, body }); return path === '/api/state' ? state : {}; });
+  ui.editHumanPrd();
+  const dialog = doc.querySelector('dialog.human-dialog');
+  const input = dialog.querySelector('textarea'); input.value = '# 新 PRD'; input.dispatchEvent(new w.Event('input'));
+  assert.match(dialog.querySelector('.human-preview').textContent, /新 PRD/);
+  await dialog.querySelector('[data-save]').onclick();
+  assert.deepEqual(plain(requests[0]), { path: '/api/prd/save', body: { text: '# 新 PRD', version: 3, scope: 'scope-a' } });
+  assert.equal(doc.querySelector('dialog.human-dialog'), null);
+  await ui.approveHumanPrd();
+  assert.deepEqual(plain(requests.find(r => r.path === '/api/prd/approve').body), { version: 3, scope: 'scope-a' });
+  dom.window.close();
 });

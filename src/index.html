@@ -94,7 +94,7 @@
           <input id="bl-title" type="text" maxlength="200" placeholder="例如：報表可以匯出 CSV">
           <label for="bl-detail" class="field-label spaced">說明（選填，支援 Markdown）</label>
           <div id="bl-references" class="reference-widget"></div>
-          <textarea id="bl-detail" rows="5" placeholder="背景、驗收條件、限制…"></textarea>
+          <textarea id="bl-detail" rows="5" placeholder="先描述你的想法，新增後 AI 會追問需要釐清的資訊…"></textarea>
           <div class="row end"><button id="bl-add" class="primary" type="button"><svg class="ic"><use href="#i-plus"/></svg>新增</button></div>
         </div>
         <div class="card">
@@ -150,6 +150,7 @@
                   <button data-view="preview" type="button" role="radio" aria-checked="true">預覽</button>
                   <button data-view="raw" type="button" role="radio" aria-checked="false">原始 Markdown</button>
                 </div>
+                <button id="btn-prd-edit" type="button">人工編輯</button>
                 <button id="btn-prd-copy" class="icon-btn" type="button" aria-label="複製 PRD 原文" title="複製 PRD 原文"><svg class="ic"><use href="#i-copy"/></svg></button>
               </div>
             </div>
@@ -164,6 +165,8 @@
           <div class="card" id="prd-actions">
             <div id="prd-references" class="reference-widget"></div>
             <div class="card-head"><h2>決定</h2></div>
+            <p id="prd-human-note" class="hint"></p>
+            <button id="btn-prd-review" class="block" type="button">只重新審查目前版本</button>
             <button id="btn-prd-approve" class="primary block" type="button"><svg class="ic"><use href="#i-check"/></svg>核准 PRD</button>
             <div class="divider"><span>或</span></div>
             <label for="feedback" class="field-label">附意見要求再改</label>
@@ -185,12 +188,14 @@
     <section id="tab-board" class="tab" role="tabpanel" aria-labelledby="tabbtn-board" hidden>
       <div class="toolbar">
         <div class="btn-group">
+          <button id="btn-task-approve" type="button">核准任務</button>
           <button id="btn-start" class="primary" type="button"><svg class="ic"><use href="#i-play"/></svg>開始</button>
           <button id="btn-pause" type="button"><svg class="ic"><use href="#i-pause"/></svg>暫停</button>
           <button id="btn-continue" type="button"><svg class="ic"><use href="#i-forward"/></svg>我測完了，繼續</button>
         </div>
         <span id="runner-info" class="hint mono-ish"></span>
       </div>
+      <p id="task-human-note" class="hint human-loop-note"></p>
       <div class="board-overview" aria-label="本功能任務進度">
         <div class="board-feature"><span class="eyebrow">目前功能</span><h2 id="board-feature-title">尚未開始</h2><div id="board-progress" class="feature-progress" role="progressbar" aria-label="主線任務完成度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div></div>
         <dl id="board-metrics" class="board-metrics"></dl>
@@ -225,6 +230,7 @@
         <section class="gate-section" aria-labelledby="d-gates-title"><h3 id="d-gates-title">完成條件</h3><ul id="d-gates" class="gate-list"></ul></section>
         <div class="row detail-actions">
           <label class="check"><input type="checkbox" id="d-revert"> 重跑前還原這個任務的變更</label>
+          <button id="d-edit" type="button">人工編輯任務</button>
           <button id="d-rerun" type="button"><svg class="ic"><use href="#i-redo"/></svg>重跑任務</button>
         </div>
         <div class="subtabs" role="tablist" aria-label="任務詳情內容">
@@ -333,6 +339,7 @@
   <script src="diagrams.js"></script>
   <script src="references.js"></script>
   <script src="chat.js"></script>
+  <script src="human.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

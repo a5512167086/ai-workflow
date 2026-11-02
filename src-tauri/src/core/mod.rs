@@ -1,5 +1,7 @@
 pub mod agent_errors;
 pub mod agents;
+pub mod human;
+pub mod requirements;
 pub mod references;
 pub mod api;
 pub mod archive;

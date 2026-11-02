@@ -117,6 +117,8 @@ fn with_error_state(root: &Path, f: impl FnOnce() -> Result<()>) -> Result<()> {
 }
 
 pub fn draft_prd(root: &Path, cfg: &Value, idea: &str, backlog_id: Option<&str>) -> Result<()> {
+    let confirmed;
+    let idea=if let Some(id)=backlog_id { confirmed=super::requirements::prd_input(root,&super::backlog::get_item(root,id)?)?; confirmed.as_str() } else { idea };
     guard(root)?;
     // 開始新功能前，把上一個功能最後的任務狀態寫進它的封存；之後 archive_dir 清空，核准時會建新的資料夾。
     if let Err(err) = archive_tasks(root, json!({})) {
@@ -198,4 +200,39 @@ pub fn approve_prd(root: &Path, cfg: &Value) -> Result<PathBuf> {
         Err(err) => append_log(root, SCOPE, &format!("⚠ 封存 PRD 失敗：{}", err.message)),
     }
     Ok(target)
+}
+
+/// 人工直接修改 PRD：存成新版本，不經作者 AI 改寫。同一個功能的封存資料夾沿用（與 revise_prd 相同），重新核准時更新。
+pub fn save_manual(root: &Path, text: &str, version: &Value, scope: &Value) -> Result<Value> {
+    super::human::idle(root)?;
+    if text.trim().is_empty() || text.len()>500000 { crate::bail!(400; "PRD 不能空白，且必須小於 500 KB"); }
+    super::home::with_project_lock(root,"human",|| {
+        let state=read_state(root);
+        if state["prd"]["version"]!=*version || state["prd"]["reference_scope"]!=*scope { crate::bail!(409; "PRD 已更新，請重新載入再編輯；你的草稿仍保留"); }
+        if current_prd(root)==text { return Ok(json!({"ok":true,"unchanged":true,"version":version})); }
+        let _=archive_tasks(root,json!({}));
+        let v=save_version(root,text)?;
+        update_state(root,|s| {
+            s["prd"]["status"]=json!("awaiting_approval"); s["prd"]["approved_at"]=Value::Null; s["prd"]["error"]=json!("");
+            s["prd"]["human_edited_at"]=json!(now_iso()); s["prd"]["reviewed_version"]=Value::Null;
+            s["task_approval"]=Value::Null; s["task_gen"]=json!({"status":"stale","error":"PRD 已人工修改，需重新核准並產生任務"});
+        })?;
+        add_round(root,json!({"kind":"human_edit","provider":"human","version":v,"file":format!("v{v}.md")}))?;
+        Ok(json!({"ok":true,"version":v}))
+    })
+}
+pub fn review_current(root: &Path, cfg: &Value) -> Result<()> {
+    guard(root)?;
+    with_error_state(root,|| {
+        let prd=current_prd(root); if prd.is_empty() { crate::bail!("沒有可審查的 PRD"); }
+        update_state(root,|s|s["prd"]["status"]=json!("reviewing"))?;
+        let round=read_state(root)["prd"]["round"].as_u64().unwrap_or(0)+1;
+        let reviews=run_reviews(AgentOpts { root,cfg,provider:"",prompt:prd_review_prompt(root,cfg,&prd,round),write:false,scope:SCOPE,label:"人工版本交叉審查",stage:Some("prd_review"),role:Some("reviewer"),skills:None },&["APPROVE"])?;
+        let version=read_state(root)["prd"]["version"].clone();
+        for review in &reviews {
+            let file=format!("human-review-{round}-{}.md",review.provider); fs::write(prd_dir(root).join(&file),&review.text)?;
+            add_round(root,json!({"kind":"review","round":round,"provider":review.provider,"verdict":review.verdict,"version":version,"file":file}))?;
+        }
+        update_state(root,|s| { s["prd"]["round"]=json!(round); s["prd"]["reviewed_version"]=version; s["prd"]["status"]=json!("awaiting_approval"); })
+    })
 }

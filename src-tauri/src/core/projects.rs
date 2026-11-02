@@ -128,7 +128,7 @@ mod tests {
 }
 
 /// 總覽用的狀態摘要。attention 為 true 表示流程停下來等使用者（核准 PRD、測試、處理卡住）。
-/// status：missing | idle | drafting | awaiting_approval | generating | ready | queued | running |
+/// status：missing | idle | drafting | awaiting_approval | generating | awaiting_tasks | ready | queued | running |
 ///         paused | waiting | feature_test | stuck | error | complete
 pub fn project_summary(project: &Value) -> Value {
     let root = path_of(project);
@@ -180,12 +180,15 @@ pub fn project_summary(project: &Value) -> Value {
         // runner 已經不在但狀態沒收尾（例如程序被關掉）
         status = "idle".into();
     } else if ps == "idle" && prd_status == "approved" && !tasks.is_empty() && done < tasks.len() {
-        status = "ready".into();
-        reason = "可以開始執行".into();
+        // 任務產生後要先由使用者檢視並核准，才算可以開始。
+        match super::human::require_task_approval(&root) {
+            Ok(()) => { status = "ready".into(); reason = "可以開始執行".into(); }
+            Err(err) => { status = "awaiting_tasks".into(); reason = err.message; }
+        }
     } else if ps == "idle" && prd_status == "none" {
         reason = "尚未開始功能".into();
     }
-    let attention = ["awaiting_approval", "waiting", "feature_test", "stuck", "error"].contains(&status.as_str());
+    let attention = ["awaiting_approval", "awaiting_tasks", "waiting", "feature_test", "stuck", "error"].contains(&status.as_str());
     let feature = cfg["feature"].as_str().filter(|f| !f.is_empty()).or(state["prd"]["idea"].as_str()).unwrap_or("");
     let queue_position = if queue_waiting { queue.as_ref().unwrap()["position"].clone() } else { Value::Null };
     set(json!({

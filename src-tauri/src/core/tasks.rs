@@ -494,3 +494,64 @@ pub fn update_feature_references(root: &Path, feature: &Value, refs: &Value) -> 
         Ok(())
     })
 }
+
+/// Content revision excludes execution status so normal runner transitions keep approval valid.
+fn content_revision(tasks: &[Value]) -> String {
+    let mut content=tasks.to_vec();
+    for task in &mut content {
+        task.as_object_mut().unwrap().remove("status");
+        for child in task["subtasks"].as_array_mut().into_iter().flatten() { child.as_object_mut().unwrap().remove("status"); }
+    }
+    hex::encode(Sha256::digest(serde_json::to_vec(&content).unwrap()))
+}
+fn store_revision(store: &Value) -> String {
+    let tag=store["currentTag"].as_str().unwrap_or("master"); let meta=&store["groups"][tag]["metadata"];
+    hex::encode(Sha256::digest(json!([content_revision(&group_tasks(store)),meta["references"],meta["prd_scope"],meta["prd_version"]]).to_string().as_bytes()))
+}
+pub fn revision(root: &Path) -> Result<String> { Ok(store_revision(&load_store(root)?)) }
+pub fn edit_task(root: &Path, id: &str, tag: &str, expected: &str, patch: &Value) -> Result<Value> {
+    super::human::idle(root)?;
+    mutate(root,|store| {
+        if store["currentTag"] != tag { crate::bail!(409; "任務群組已變更，請重新開啟"); }
+        let original=group_tasks(store);
+        if store_revision(store) != expected { crate::bail!(409; "任務已被其他視窗修改，請重新載入後再編輯；你的草稿仍保留"); }
+        let mut list=original.clone(); let parts:Vec<_>=id.split('.').collect();
+        let parent=list.iter_mut().find(|t|js_string(&t["id"])==parts[0]).ok_or_else(||AppError::new("找不到任務"))?;
+        let target=if parts.len()==2 { parent["subtasks"].as_array_mut().and_then(|ts|ts.iter_mut().find(|t|js_string(&t["id"])==parts[1])).ok_or_else(||AppError::new("找不到子任務"))? } else if parts.len()==1 { parent } else { crate::bail!(400; "任務 id 不正確"); };
+        for field in ["title","description","details","testStrategy","priority","dependencies","acceptanceCriteria","requirement_ids","skills"] {
+            if let Some(value)=patch.get(field) {
+                if ["title","description","details","testStrategy","priority"].contains(&field) && (!value.is_string() || value.as_str().unwrap().len()>100000) { crate::bail!(400; "{field} 必須是文字且小於 100 KB"); }
+                if ["dependencies","acceptanceCriteria","requirement_ids","skills"].contains(&field) && !value.is_array() { crate::bail!(400; "{field} 必須是陣列"); }
+                if field=="priority" && !["high","medium","low"].contains(&value.as_str().unwrap_or("")) { crate::bail!(400; "優先序不正確"); }
+                target[field]=value.clone();
+            }
+        }
+        let mut list=normalize(&list,true)?;
+        if content_revision(&list)==content_revision(&original) { return Ok(json!({"unchanged":true,"revision":store_revision(store)})); }
+        let all=flatten(&list);
+        let mut impacted=HashSet::from([id.to_string()]);
+        if let Some((parent,_))=id.split_once('.') { impacted.insert(parent.to_string()); }
+        loop {
+            let before=impacted.len();
+            for task in &all {
+                if task.deps.iter().any(|d|impacted.contains(d)) || task.id.split_once('.').is_some_and(|(p,_)|impacted.contains(p)) { impacted.insert(task.id.clone()); }
+            }
+            if before==impacted.len() { break; }
+        }
+        for task in &mut list {
+            let parent_id=js_string(&task["id"]); let mut child_changed=false;
+            for child in task["subtasks"].as_array_mut().into_iter().flatten() {
+                if impacted.contains(&format!("{parent_id}.{}",js_string(&child["id"]))) { child["status"]=json!("pending"); child_changed=true; }
+            }
+            if impacted.contains(&parent_id) || child_changed { task["status"]=json!("pending"); impacted.insert(parent_id); }
+        }
+        super::state::update_state(root,|s| {
+            s["task_approval"]=Value::Null;
+            for id in &impacted { if let Some(states)=s["tasks"].as_object_mut() { states.remove(id); } }
+            s["pipeline"]["status"]=json!("paused"); s["pipeline"]["reason"]=json!("任務已人工修改，請重新檢視並核准任務");
+        })?;
+        store["groups"][tag]["tasks"]=json!(list);
+        push_event(store,json!({"kind":"human-edit","task":id,"at":now_iso(),"before":original,"invalidated":impacted}));
+        Ok(json!({"tasks":list,"invalidated":impacted,"revision":store_revision(store)}))
+    })
+}

@@ -247,8 +247,14 @@ fn 專案摘要_prd_等待核准時標成需要處理_任務進度正確() {
     assert_eq!(sum["attention"], true);
     update_state(&dir, |s| s["prd"]["status"] = json!("approved")).unwrap();
     write_tasks(&dir, &tasks(json!([{ "title": "A", "description": "a" }, { "title": "B", "description": "b" }])), None, json!({})).unwrap();
+    // 任務產生後要先人工核准，總覽標成需要處理；核准後才是「可以開始」。
+    let sum = project_summary(&p);
+    assert_eq!(sum["status"], "awaiting_tasks");
+    assert_eq!(sum["attention"], true);
+    aipipe::core::human::approve_tasks(&dir, &aipipe::core::tasks::revision(&dir).unwrap()).unwrap();
     let sum = project_summary(&p);
     assert_eq!(sum["status"], "ready");
+    assert_eq!(sum["attention"], false);
     assert_eq!(sum["progress"], json!({ "done": 0, "total": 2 }));
     remove_project(p["id"].as_str().unwrap()).unwrap();
 }

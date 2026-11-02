@@ -8,7 +8,7 @@ use super::util::{pretty, resolve, valid_skill_name};
 use super::{AppError, Result};
 
 pub const CONFIG_FILE: &str = ".aipipe.json";
-pub const ROLES: [&str; 8] = ["author", "reviewer", "task_planner", "implementer", "fixer", "code_reviewer", "handover", "chat"];
+pub const ROLES: [&str; 9] = ["interviewer", "author", "reviewer", "task_planner", "implementer", "fixer", "code_reviewer", "handover", "chat"];
 pub const PROVIDERS: [&str; 2] = ["claude", "codex"];
 pub const MODES: [&str; 2] = ["auto", "manual"];
 pub const CLI_NAMES: [&str; 2] = ["claude", "codex"];
@@ -28,7 +28,7 @@ pub fn default_config() -> Value {
         "backlog_path": "docs/aipipe/backlog.json",
         "archive_dir": "docs/prd",
         // reviewer／code_reviewer 可以是 both：Claude 與 Codex 各審一次，兩份都通過才算通過。
-        "roles": { "author": "claude", "reviewer": "codex", "task_planner": "claude", "implementer": "claude", "fixer": "claude", "code_reviewer": "codex", "handover": "claude", "chat": "claude" },
+        "roles": { "interviewer": "claude", "author": "claude", "reviewer": "codex", "task_planner": "claude", "implementer": "claude", "fixer": "claude", "code_reviewer": "codex", "handover": "claude", "chat": "claude" },
         // 每個角色、每個 AI 的模型與推理強度；空字串＝沿用 claude.model／codex.model（再空就是 CLI 預設）。
         // 依實際執行的 AI 取用，所以單 AI 模式或額度切換時也會套用對應的設定。
         "models": default_models(),
@@ -193,7 +193,7 @@ pub fn load_config(root: &Path) -> Result<Value> {
     let raw = read_raw(&file)?;
     let mut cfg = deep_merge(&default_config(), &raw);
     // 舊版共用作者／實作者設定；拆開後先沿用，避免升級改掉使用者選擇。
-    for (role, previous) in [("task_planner", "author"), ("fixer", "implementer"), ("handover", "implementer"), ("chat", "author")] {
+    for (role, previous) in [("interviewer", "author"), ("task_planner", "author"), ("fixer", "implementer"), ("handover", "implementer"), ("chat", "author")] {
         if raw["roles"][role].is_null() { cfg["roles"][role] = cfg["roles"][previous].clone(); }
         if raw["models"][role].is_null() { cfg["models"][role] = cfg["models"][previous].clone(); }
     }
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn 舊角色設定拆開後沿用_新角色可各自覆寫() {
         let root = super::super::util::temp_dir("role-upgrade-");
-        fs::write(config_path(&root), json!({ "roles": { "author": "codex", "implementer": "codex" }, "models": { "author": { "codex": { "model": "a", "effort": "high" } }, "implementer": { "codex": { "model": "b", "effort": "low" } } } }).to_string()).unwrap();
+        fs::write(config_path(&root), json!({ "roles": { "interviewer": "claude", "author": "codex", "implementer": "codex" }, "models": { "author": { "codex": { "model": "a", "effort": "high" } }, "implementer": { "codex": { "model": "b", "effort": "low" } } } }).to_string()).unwrap();
         let cfg = load_config(&root).unwrap();
         assert_eq!(cfg["roles"]["task_planner"], "codex");
         assert_eq!(model_for(&cfg, Some("task_planner"), "codex").0, "a");

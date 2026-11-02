@@ -226,10 +226,29 @@ fn git_project_with(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
 
 fn pipeline_scenario() -> Value {
     json!({ "codex": { "rules": [
+        { "contains": "需求釐清會議", "text": json!({ "message": "請確認以下摘要", "ready": true, "summary": "已確認：報表功能，使用者是財務人員", "open_questions": [] }).to_string() },
         { "contains": "拆成可以逐一", "text": json!({ "tasks": [{ "title": "first", "skills": ["uiux-design"] }, { "title": "second", "dependencies": [1] }] }).to_string() },
         { "contains": "程式碼審查者", "text": "看起來沒問題\nVERDICT: PASS" },
         { "contains": "PRD 審查者", "text": "VERDICT: APPROVE" },
     ], "text": "# PRD\nR1: reports" } })
+}
+
+/// 拆完任務後由「使用者」檢視並核准，run 才會開始（對應 UI 的「檢視後核准任務」）。
+fn approve_tasks(root: &Path) {
+    aipipe::core::human::approve_tasks(root, &aipipe::core::tasks::revision(root).unwrap()).unwrap();
+}
+
+/// 需求釐清會議：自動開場一輪、使用者回答一輪，AI 回報 ready 後由使用者確認摘要。
+fn confirm_requirements(root: &Path, id: &str) -> Value {
+    use aipipe::core::{chat, requirements};
+    let launch = |_: &str, _: &str| -> aipipe::core::Result<u32> { Ok(std::process::id()) };
+    let run = |session: &Value| chat::run_turn(root, session["id"].as_str().unwrap(), session["turn"].as_str().unwrap()).unwrap();
+    let opened = requirements::start(root, &json!({ "id": id, "provider": "codex" }), &launch).unwrap();
+    run(&opened["session"]);
+    let answered = requirements::start(root, &json!({ "id": id, "input": "使用者是財務人員", "provider": "codex" }), &launch).unwrap();
+    let session = run(&answered["session"]);
+    assert_eq!(session["requirementsReady"], true, "{session}");
+    requirements::confirm(root, &json!({ "id": id, "sessionId": session["id"], "turn": session["turn"], "summary": session["requirementsSummary"] })).unwrap()
 }
 
 #[test]
@@ -246,6 +265,9 @@ fn 不安裝_task_master_即可拆任務_手動實作審查_人工確認並解�
     assert_eq!(generate_tasks(&root).unwrap(), 2);
     assert!(!root.join(".taskmaster").exists());
     assert_eq!(next_task_id(&root).unwrap().as_deref(), Some("1"));
+    // 未經人工核准的任務不會開始執行。
+    assert!(run_pipeline(&root, None, false).unwrap_err().message.contains("核准任務"));
+    approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting", "{}", read_state(&root)["pipeline"]["reason"]);
     assert_eq!(read_tasks(&root).unwrap()[0]["status"], "review");
     assert!(matches!(acknowledge(&root).unwrap(), Next::Run));
@@ -268,6 +290,7 @@ fn 完整流程_prd_核准_拆任務_執行_重跑還原與功能完成() {
     let archive = read_state(&root)["prd"]["archive_dir"].as_str().unwrap().to_string();
     assert!(root.join(&archive).join("prd.md").exists());
     generate_tasks(&root).unwrap();
+    approve_tasks(&root);
 
     // 實作者改了一個檔案；手動模式停在等待測試。
     let mut scenario = pipeline_scenario();
@@ -308,6 +331,7 @@ fn 自動模式在功能分支上逐任務_commit() {
     draft_prd(&root, &cfg, "reports", None).unwrap();
     approve_prd(&root, &cfg).unwrap();
     generate_tasks(&root).unwrap();
+    approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "feature_test");
     assert_eq!(git(&root, &["branch", "--show-current"]).trim(), "aipipe/reports");
     let log = git(&root, &["log", "--format=%s"]);
@@ -383,6 +407,7 @@ VERDICT: PASS" }] });
     fs::write(&file, "# PRD").unwrap();
     update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
     generate_tasks(&root).unwrap();
+    approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
     let dir = root.join(".aipipe/tasks/1");
     assert!(fs::read_to_string(dir.join("review-1-claude.md")).unwrap().contains("Claude 看過"));
@@ -406,6 +431,7 @@ fn 確認後本次單_ai_不嘗試限額_ai_且保留角色設定() {
     fs::write(file, "# PRD").unwrap();
     update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
     generate_tasks(&root).unwrap();
+    approve_tasks(&root);
     let before = calls(&root).len();
     assert_eq!(aipipe::core::runner::run_pipeline_with_provider(&root, None, false, Some("codex")).unwrap(), "waiting");
     assert!(calls(&root)[before..].iter().all(|c| c["provider"] == "codex"));
@@ -418,7 +444,7 @@ fn 確認後本次單_ai_不嘗試限額_ai_且保留角色設定() {
 #[test]
 fn 拆任務_實作_修正_交接各自套用模型() {
     let mut scenario = pipeline_scenario();
-    scenario["codex"]["rules"][1]["text"] = json!("VERDICT: FAIL");
+    scenario["codex"]["rules"][2]["text"] = json!("VERDICT: FAIL");
     let (root, mut cfg) = git_project(scenario);
     cfg["max_fix_rounds"] = json!(1);
     for role in ["task_planner", "implementer", "fixer", "handover"] {
@@ -429,6 +455,7 @@ fn 拆任務_實作_修正_交接各自套用模型() {
     fs::create_dir_all(file.parent().unwrap()).unwrap(); fs::write(file, "# PRD").unwrap();
     update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
     generate_tasks(&root).unwrap();
+    approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "stuck");
     fs::write(root.join(".fake-cli.json"), pipeline_scenario().to_string()).unwrap();
     assert!(matches!(acknowledge(&root).unwrap(), Next::Verify(_)));
@@ -451,11 +478,16 @@ fn 需求參考傳到雙人審查_拆任務與各執行角色_新功能不繼承
     fs::write(root.join("reference.md"),"UNIQUE_REFERENCE_SPEC").unwrap();
     let reference=aipipe::core::references::import(&root,&json!({"path":root.join("reference.md")})).unwrap();
     let item=aipipe::core::backlog::add_item_with_references(&root,Some(&json!("報表")),None,&json!([reference["id"]])).unwrap();
+    // 需求待辦的項目要先完成需求釐清並由使用者確認，才能起草 PRD；確認的摘要會帶進 PRD 作者的 prompt。
+    assert_eq!(draft_prd(&root,&cfg,"報表",item["id"].as_str()).unwrap_err().status,409);
+    confirm_requirements(&root,item["id"].as_str().unwrap());
     draft_prd(&root,&cfg,"報表",item["id"].as_str()).unwrap();
+    assert!(calls(&root).iter().any(|c| c["prompt"].as_str().unwrap().contains("使用者確認的需求摘要") && c["prompt"].as_str().unwrap().contains("財務人員")));
     approve_prd(&root,&cfg).unwrap(); generate_tasks(&root).unwrap();
+    approve_tasks(&root);
     assert_eq!(run_pipeline(&root,None,false).unwrap(),"waiting");
     let records=calls(&root);
-    assert!(records.len()>=6);
+    assert!(records.len()>=8);
     for record in &records { assert!(record["prompt"].as_str().unwrap().contains("UNIQUE_REFERENCE_SPEC")); }
     for stage in ["prd","prd_review","tasks","implement","code_review"] {
         assert!(sessions(&root).iter().any(|s| s["stage"]==stage && s["references"][0]["id"]==reference["id"]),"{stage}");

@@ -252,6 +252,7 @@ function renderPrd() {
   busyEl.classList.toggle('hidden', !busyText);
   busyEl.classList.toggle('bad', !snap.prdBusy && !!state.prd.error);
   renderPrdBody();
+  if (typeof renderHumanControls === 'function') renderHumanControls();
   const busy = snap.prdBusy || snap.runnerAlive || snap.taskGenBusy;
 
   $('#btn-prd-approve').disabled = busy || state.prd.status !== 'awaiting_approval';
@@ -419,7 +420,7 @@ function renderBoard() {
   const busy = alive || snap.prdBusy || snap.taskGenBusy;
   const st = state.pipeline.status;
   const needsHuman = NEEDS_HUMAN.includes(st);
-  $('#btn-start').disabled = busy || !tasks.length || state.prd.status !== 'approved';
+  $('#btn-start').disabled = busy || !tasks.length || state.prd.status !== 'approved' || snap.taskRevision !== state.task_approval?.revision;
   $('#btn-pause').disabled = !alive || state.control.pause_requested;
   $('#btn-continue').disabled = busy || !needsHuman;
   // 每個畫面只有一個主要按鈕：等待人工時換成「繼續」。
@@ -433,6 +434,7 @@ function renderBoard() {
   const badge = $('#tab-board-badge');
   badge.textContent = tasks.length ? `${counts.done || 0}/${tasks.length}` : '';
   badge.classList.toggle('attn', needsHuman);
+  if (typeof renderHumanControls === 'function') renderHumanControls();
   renderBoardView(facts);
   if (focusedTask) {
     const host = boardView === 'roadmap' ? $('#task-roadmap') : $('#board');
@@ -734,7 +736,7 @@ function renderBacklog() {
         <button type="button" data-act="references">參考</button>
         <button type="button" class="icon-btn" data-act="edit" aria-label="編輯">${icon('edit')}</button>
         <button type="button" class="icon-btn" data-act="delete" aria-label="刪除">${icon('trash')}</button>
-        <button type="button" data-act="draft">${icon('sparkle')}起草 PRD</button>
+        <button type="button" data-act="draft">${icon('sparkle')}釐清需求</button>
       </div>`;
     li.querySelector('.bl-num').textContent = i + 1;
     li.querySelector('.bl-title').textContent = item.title;
@@ -781,6 +783,7 @@ function bindBacklog() {
       referenceDrafts.delete('backlog'); renderReferenceWidgets();
       await loadBacklog();
       $('#bl-title').focus();
+      if (data.item?.id) openInterview(data.item.id);
     }
   };
   $('#bl-title').addEventListener('keydown', (e) => {
@@ -817,16 +820,7 @@ function bindBacklog() {
         if (!confirm(`刪除需求「${item.title}」？`)) return;
         if (await act('/api/backlog/delete', { id }, '已刪除')) await loadBacklog();
         return;
-      case 'draft': {
-        const msg = snap?.prd
-          ? `用「${item.title}」開始新功能並起草 PRD？\n目前的 PRD 會被取代（已核准的 PRD 已保存在封存裡）。`
-          : `用「${item.title}」起草 PRD？`;
-        if (!confirm(msg)) return;
-        if (await act('/api/backlog/draft', { id }, '已開始起草 PRD')) {
-          await loadBacklog();
-          showTab($('#tabbtn-prd'));
-        }
-      }
+      case 'draft': return openInterview(id);
     }
   });
   // 拖曳排序（滑鼠）；鍵盤與觸控用上／下按鈕。
@@ -1045,7 +1039,7 @@ function renderRecords() {
 }
 
 // ---------- 設定：AI 角色與模型 ----------
-const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）', chat: '專案對話' };
+const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）', chat: '專案對話', interviewer: '需求釐清（Grill Me）' };
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 let modelOptions = null;
 let modelDraft = null;
@@ -1079,7 +1073,7 @@ function renderModels(force = false) {
   if (!force && $('#role-models').contains(document.activeElement)) return;
   if (!modelsDirty) {
     modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
-    for (const [role, parent] of [['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer'], ['chat', 'author']]) {
+    for (const [role, parent] of [['interviewer', 'author'], ['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer'], ['chat', 'author']]) {
       modelDraft.roles[role] ??= modelDraft.roles[parent];
       modelDraft.models[role] ??= structuredClone(modelDraft.models[parent] || {});
     }
@@ -1290,6 +1284,7 @@ async function runAction(path, body = {}, message) {
 }
 
 function bind() {
+  if (typeof bindHuman === 'function') bindHuman();
   if (typeof bindReferences === 'function') bindReferences();
   if (typeof bindChat === 'function') bindChat();
   tabKeys($$('[data-board-view]'), button => button.click());
@@ -1355,7 +1350,7 @@ function bind() {
       $('#btn-doctor').disabled = false;
     }
   };
-  $('#btn-prd-approve').onclick = () => act('/api/prd/approve', {}, 'PRD 已核准，正在自動產生任務');
+  $('#btn-prd-approve').onclick = () => approveHumanPrd();
   $('#btn-prd-revise').onclick = () => act('/api/prd/revise', { feedback: $('#feedback').value }, '已送出修改意見');
   $('#btn-tasks').onclick = () => act('/api/tasks/generate', {}, '已開始產生任務');
   $('#btn-start').onclick = () => runAction('/api/run/start', {}, '流程已開始');
