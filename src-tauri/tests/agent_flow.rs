@@ -189,9 +189,11 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
                 { "type": "result", "result": "done", "is_error": false, "usage": { "input_tokens": 100, "cache_read_input_tokens": 20, "output_tokens": 10 }, "modelUsage": { "test": { "contextWindow": 800 } } },
             ])
         } else {
+            // app-server 的通知：最後回覆、累計 tokens（cachedInputTokens 是 inputTokens 的一部分）、回合結束。
             json!([
-                { "type": "item.completed", "item": { "type": "agent_message", "text": "done" } },
-                { "type": "turn.completed", "usage": { "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 10 } },
+                { "method": "item/completed", "params": { "item": { "type": "agentMessage", "id": "m", "text": "done" } } },
+                { "method": "thread/tokenUsage/updated", "params": { "tokenUsage": { "total": { "inputTokens": 100, "cachedInputTokens": 20, "outputTokens": 10, "reasoningOutputTokens": 0, "totalTokens": 110 }, "last": { "inputTokens": 100, "cachedInputTokens": 20, "outputTokens": 10, "reasoningOutputTokens": 0, "totalTokens": 110 } } } },
+                { "method": "turn/completed", "params": { "turn": { "id": "t", "status": "completed" } } },
             ])
         };
         let (root, cfg) = fixture(&[provider], json!({ provider: { "events": events } }));
@@ -378,14 +380,16 @@ fn 每個角色的模型與推理強度會帶給實際執行的_cli() {
     cfg["models"]["author"]["codex"] = json!({ "model": "m-author", "effort": "high" });
     cfg["codex"]["model"] = json!("m-default");
     draft_prd(&root, &cfg, "idea", None).unwrap();
+    // Codex 走 app-server：模型在 thread/start、推理強度在 turn/start。
     let c = calls(&root);
-    let args = |i: usize| c[i]["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string()).collect::<Vec<_>>();
-    let (author, reviewer) = (args(0), args(1));
-    assert!(author.windows(2).any(|w| w == ["-m", "m-author"]), "{author:?}");
-    assert!(author.contains(&"model_reasoning_effort=\"high\"".to_string()), "{author:?}");
+    assert_eq!(c[0]["thread"]["model"], "m-author", "{}", c[0]);
+    assert_eq!(c[0]["turn"]["effort"], "high");
     // 審查者沒有自己的設定：用 codex.model，不帶推理強度。
-    assert!(reviewer.windows(2).any(|w| w == ["-m", "m-default"]), "{reviewer:?}");
-    assert!(!reviewer.iter().any(|a| a.starts_with("model_reasoning_effort")));
+    assert_eq!(c[1]["thread"]["model"], "m-default");
+    assert!(c[1]["turn"]["effort"].is_null());
+    // 唯讀角色不問使用者；沙箱是唯讀。
+    assert_eq!(c[1]["thread"]["sandbox"], "read-only");
+    assert_eq!(c[1]["thread"]["approvalPolicy"], "never");
 }
 
 #[test]
@@ -472,7 +476,7 @@ fn 拆任務_實作_修正_交接各自套用模型() {
     let calls = calls(&root);
     for role in ["task_planner", "implementer", "fixer", "handover"] {
         let model = format!("model-{role}");
-        assert!(calls.iter().any(|c| c["args"].as_array().unwrap().windows(2).any(|w| w[0] == "-m" && w[1] == model)), "{role}");
+        assert!(calls.iter().any(|c| c["thread"]["model"] == model.as_str()), "{role}");
     }
 }
 
@@ -516,9 +520,9 @@ fn 圖片附件使用_claude_結構化輸入與_codex_image_旗標() {
     assert!(records[0]["args"].as_array().unwrap().contains(&json!("--input-format")));
     let message: Value = serde_json::from_str(records[0]["prompt"].as_str().unwrap()).unwrap();
     assert_eq!(message["message"]["content"][1]["type"], "image");
-    let args = records[1]["args"].as_array().unwrap();
-    let index = args.iter().position(|a| a == "--image").unwrap();
-    assert!(Path::new(args[index + 1].as_str().unwrap()).exists());
+    // Codex：圖片以 localImage 放在 turn/start 的 input。
+    let image = records[1]["turn"]["input"].as_array().unwrap().iter().find(|i| i["type"] == "localImage").expect("localImage");
+    assert!(Path::new(image["path"].as_str().unwrap()).exists());
 }
 
 #[test]
@@ -585,4 +589,61 @@ fn 寫入角色要求權限時_等使用者在_app_回答_允許後才執行_結
     assert!(args.as_array().unwrap().windows(2).any(|w| w[0] == "--permission-prompt-tool" && w[1] == "stdio"), "{args}");
     let log = fs::read_to_string(ai_workflow::core::state::data_dir(&root).join("logs/task-1.log")).unwrap();
     assert!(log.contains("等待你允許：Bash npm init -y") && log.contains("你允許了這次執行的同類操作"), "{log}");
+}
+
+#[test]
+fn codex_走_app_server_需要核准時_等使用者在_app_回答_拒絕就不執行() {
+    let scenario = json!({ "codex": {
+        "ask": [{ "input": { "command": "npm install" }, "description": "安裝套件需要網路" }],
+        "write": { "path": "package-lock.json", "content": "{}" }, "text": "done" } });
+    let (root, mut cfg) = fixture(&["codex"], scenario);
+    cfg["roles"]["implementer"] = json!("codex");
+    save_config(&root, &cfg).unwrap();
+    // 扮演使用者：拒絕並說明原因。
+    let answerer = {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            for _ in 0..200 {
+                if let Some(entry) = ai_workflow::core::permissions::pending(&root).first() {
+                    assert_eq!(entry["provider"], "codex");
+                    assert_eq!(entry["input"]["command"], "npm install");
+                    assert_eq!(entry["description"], "安裝套件需要網路");
+                    ai_workflow::core::permissions::answer(&root, entry["id"].as_str().unwrap(), "deny", "先不要安裝").unwrap();
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            false
+        })
+    };
+    let mut opts = agent(&root, &cfg, "codex", true, Some("implement"));
+    opts.scope = "task-1"; opts.label = "實作任務 1"; opts.role = Some("implementer"); opts.skills = Some(vec![]);
+    let result = run_agent(opts).unwrap();
+    assert!(answerer.join().unwrap(), "應該出現等待回答的核准請求");
+    assert!(result.ok, "{:?}", result.error);
+    assert_eq!(result.text, "done");
+    assert!(!root.join("package-lock.json").exists(), "拒絕後不執行");
+    let answer: Value = serde_json::from_str(fs::read_to_string(root.join(".fake-cli-answers.jsonl")).unwrap().lines().next().unwrap()).unwrap();
+    assert_eq!(answer, json!({ "decision": "decline" }));
+    let call = &calls(&root)[0];
+    assert_eq!(call["args"][0], "app-server");
+    assert_eq!(call["thread"]["sandbox"], "workspace-write");
+    assert_eq!(call["thread"]["approvalPolicy"], "on-request");
+    assert!(call["args"].as_array().unwrap().iter().any(|a| a == "sandbox_workspace_write.network_access=true"));
+    assert!(ai_workflow::core::permissions::pending(&root).is_empty());
+    // 用量來自 thread/tokenUsage/updated。
+    assert_eq!(result.telemetry["tokens"]["totalTokens"], 1050);
+}
+
+#[test]
+fn codex_沙箱被降成唯讀時_寫入角色直接回報_不開始回合() {
+    let (root, mut cfg) = fixture(&["codex"], json!({ "codex": { "sandbox_downgrade": true, "text": "done" } }));
+    cfg["roles"]["implementer"] = json!("codex");
+    save_config(&root, &cfg).unwrap();
+    let mut opts = agent(&root, &cfg, "codex", true, Some("implement"));
+    opts.role = Some("implementer"); opts.skills = Some(vec![]);
+    let result = run_agent(opts).unwrap();
+    assert!(!result.ok);
+    assert!(result.error.unwrap().contains("read-only"));
+    assert!(calls(&root).is_empty(), "沒有開始回合");
 }

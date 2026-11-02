@@ -60,7 +60,7 @@ fn 需求釐清至少回答一輪才能確認_確認後才能起草_需求修改
     let first = &records[0];
     let prompt = first["prompt"].as_str().unwrap();
     assert!(prompt.contains("需求釐清會議") && prompt.contains("匯出 CSV") && prompt.contains("財務報表"), "{prompt}");
-    assert!(first["args"].as_array().unwrap().windows(2).any(|a| a == [json!("--sandbox"), json!("read-only")]));
+    assert_eq!(first["thread"]["sandbox"], "read-only");
     // 會議固定載入 grill-me 技能，並以需求釐清角色記錄 session。
     let sessions: Vec<Value> = fs::read_dir(data_dir(&root).join("sessions")).unwrap().map(|e| serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap()).collect();
     assert!(sessions.iter().any(|s| s["stage"] == "chat" && s["skills"][0]["name"] == "grill-me"), "{sessions:?}");

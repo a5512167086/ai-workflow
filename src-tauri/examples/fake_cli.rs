@@ -20,25 +20,87 @@ fn main() {
         Some("--version") => println!("{provider} 1.0"),
         Some("auth") => println!("{}", me["auth"].as_str().unwrap_or(r#"{"loggedIn":true,"authMethod":"claude.ai"}"#)),
         Some("login") => eprintln!("Logged in using ChatGPT"),
-        Some("app-server") => app_server(),
+        Some("app-server") => app_server(me, &args),
         _ => run(provider, me, &args),
     }
 }
 
-/// Codex app-server：完成 initialize → initialized 握手後才回答額度查詢，其他請求一律失敗。
-fn app_server() {
+/// Codex app-server：完成 initialize → initialized 握手後才回答其他請求。
+/// 支援額度查詢，以及 thread/start → turn/start 的完整回合（AI 實作、審查都走這裡）；其他請求一律失敗。
+/// turn/start 會把 { provider, pid, args, prompt, thread, turn } 記到 .fake-cli-calls.jsonl，
+/// thread 與 turn 是收到的參數（模型、沙箱、核准政策、推理強度、圖片）。
+fn app_server(me: &Value, args: &[String]) {
     let mut initialized = false;
-    for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
+    let mut thread = Value::Null;
+    let mut lines = std::io::stdin().lock().lines();
+    while let Some(Ok(line)) = lines.next() {
         let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
         match message["method"].as_str() {
-            Some("initialize") => println!("{}", json!({ "id": message["id"], "result": {} })),
+            Some("initialize") => print_line(&json!({ "id": message["id"], "result": {} })),
             Some("initialized") => initialized = true,
-            Some("account/rateLimits/read") if initialized => println!("{}", json!({ "id": message["id"], "result": { "rateLimits": { "primary": { "usedPercent": 25 } } } })),
+            Some("account/rateLimits/read") if initialized => print_line(&json!({ "id": message["id"], "result": { "rateLimits": { "primary": { "usedPercent": 25 } } } })),
+            Some("thread/start") if initialized => {
+                thread = message["params"].clone();
+                let sandbox = if me["sandbox_downgrade"] == true || thread["sandbox"] == "read-only" { "readOnly" } else { "workspaceWrite" };
+                print_line(&json!({ "id": message["id"], "result": { "thread": { "id": "thread-1" }, "sandbox": { "type": sandbox } } }));
+            }
+            Some("turn/start") if initialized => {
+                print_line(&json!({ "id": message["id"], "result": { "turn": { "id": "turn-1", "status": "inProgress" } } }));
+                codex_turn(me, args, &thread, &message["params"], &mut lines);
+            }
             _ => std::process::exit(3),
         }
-        std::io::stdout().flush().unwrap();
     }
+}
+
+/// 一個 Codex 回合：依 scenario 送核准請求、寫檔、回覆文字或失敗，最後送 turn/completed。
+fn codex_turn(me: &Value, args: &[String], thread: &Value, turn: &Value, lines: &mut std::io::Lines<std::io::StdinLock<'static>>) {
+    let prompt: String = turn["input"].as_array().into_iter().flatten().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>().join("\n");
+    let record = json!({ "provider": "codex", "pid": std::process::id(), "args": args, "prompt": prompt, "thread": thread, "turn": turn });
+    let mut log = fs::OpenOptions::new().create(true).append(true).open(".fake-cli-calls.jsonl").unwrap();
+    writeln!(log, "{record}").unwrap();
+    if let Some(ms) = me["delay_ms"].as_u64() { std::thread::sleep(std::time::Duration::from_millis(ms)); }
+    let mut allowed = true;
+    for (i, ask) in me["ask"].as_array().into_iter().flatten().enumerate() {
+        let id = 1000 + i as u64;
+        print_line(&json!({ "id": id, "method": "item/commandExecution/requestApproval", "params": { "threadId": "thread-1", "turnId": "turn-1", "itemId": format!("item-{i}"), "command": ask["input"]["command"], "cwd": thread["cwd"], "reason": ask["description"] } }));
+        for line in lines.by_ref() {
+            let Ok(line) = line else { break };
+            let v: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+            if v["id"] == id && v["method"].is_null() {
+                let mut answers = fs::OpenOptions::new().create(true).append(true).open(".fake-cli-answers.jsonl").unwrap();
+                writeln!(answers, "{}", v["result"]).unwrap();
+                if !["accept", "acceptForSession"].contains(&v["result"]["decision"].as_str().unwrap_or("")) { allowed = false; }
+                break;
+            }
+        }
+    }
+    if let Some(w) = me.get("write").filter(|_| allowed) {
+        let path = Path::new(w["path"].as_str().unwrap());
+        if let Some(dir) = path.parent() { fs::create_dir_all(dir).unwrap(); }
+        fs::write(path, w["content"].as_str().unwrap_or("")).unwrap();
+        print_line(&json!({ "method": "item/completed", "params": { "item": { "type": "fileChange", "id": "item-write", "changes": [{ "path": w["path"] }], "status": "completed" } } }));
+    }
+    if let Some(fail) = me["fail"].as_str() {
+        print_line(&json!({ "method": "error", "params": { "error": { "message": fail }, "willRetry": false, "threadId": "thread-1", "turnId": "turn-1" } }));
+        print_line(&json!({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "failed", "error": { "message": fail } } } }));
+        return;
+    }
+    if let Some(events) = me["events"].as_array() {
+        for e in events { println!("{}", e.as_str().map(String::from).unwrap_or_else(|| e.to_string())); }
+        std::io::stdout().flush().unwrap();
+        return;
+    }
+    let text = me["rules"].as_array().into_iter().flatten()
+        .find(|r| r["contains"].as_str().is_some_and(|c| prompt.contains(c)))
+        .and_then(|r| r["text"].as_str())
+        .or(me["text"].as_str())
+        .unwrap_or("ok");
+    print_line(&json!({ "method": "item/completed", "params": { "item": { "type": "agentMessage", "id": "item-msg", "text": text } } }));
+    print_line(&json!({ "method": "thread/tokenUsage/updated", "params": { "threadId": "thread-1", "turnId": "turn-1", "tokenUsage": {
+        "total": { "inputTokens": 1000, "cachedInputTokens": 200, "outputTokens": 50, "reasoningOutputTokens": 10, "totalTokens": 1050 },
+        "last": { "inputTokens": 1000, "cachedInputTokens": 200, "outputTokens": 50, "reasoningOutputTokens": 10, "totalTokens": 1050 }, "modelContextWindow": 200000 } } }));
+    print_line(&json!({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } } }));
 }
 
 fn print_line(value: &Value) {

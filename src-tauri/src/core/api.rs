@@ -6,25 +6,25 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::archive::{list_archives, read_archive};
-use super::backlog::{delete_item, get_item, read_backlog, reorder_items, update_item};
-use super::cli::spawn_detached_cli;
-use super::config::{global_config_text, load_config, load_global, patch_config, patch_global, project_registered, CLI_NAMES, MODES, RUNTIMES, SKILL_STAGES};
-use super::doctor::doctor_report;
-use super::git::is_git_repo;
-use super::home::{app_home, home_dir};
-use super::init::prepare_project;
-use super::prd::{approve_prd, current_prd};
-use super::proc::{query_claude_initialize, query_codex_rpc_with, resolve_cli_for};
-use super::projects::{add_project, get_project, list_projects, project_id, project_summary, remove_project, touch_project};
-use super::queue::{queue_entry_for, queue_snapshot, set_max_concurrent};
-use super::runner::request_pause;
-use super::skills::{import_skill, list_skill_runs, list_skills, load_skill, save_skill};
-use super::state::{data_dir, is_pid_alive_value, log_path, read_state};
-use super::tasks::read_tasks;
-use super::usage::{refresh_usage_limits, usage_snapshot};
-use super::util::{read_text, resolve, str_of, truthy};
-use super::{AppError, Result};
+use crate::core::archive::{list_archives, read_archive};
+use crate::core::backlog::{delete_item, get_item, read_backlog, reorder_items, update_item};
+use crate::core::cli::spawn_detached_cli;
+use crate::core::config::{global_config_text, load_config, load_global, patch_config, patch_global, project_registered, CLI_NAMES, MODES, RUNTIMES, SKILL_STAGES};
+use crate::core::doctor::doctor_report;
+use crate::core::git::is_git_repo;
+use crate::core::home::{app_home, home_dir};
+use crate::core::init::prepare_project;
+use crate::core::prd::{approve_prd, current_prd};
+use crate::core::proc::{query_claude_initialize, query_codex_rpc_with, resolve_cli_for};
+use crate::core::projects::{add_project, get_project, list_projects, project_id, project_summary, remove_project, touch_project};
+use crate::core::queue::{queue_entry_for, queue_snapshot, set_max_concurrent};
+use crate::core::runner::request_pause;
+use crate::core::skills::{import_skill, list_skill_runs, list_skills, load_skill, save_skill};
+use crate::core::state::{data_dir, is_pid_alive_value, log_path, read_state};
+use crate::core::tasks::read_tasks;
+use crate::core::usage::{refresh_usage_limits, usage_snapshot};
+use crate::core::util::{read_text, resolve, str_of, truthy};
+use crate::core::{AppError, Result};
 
 fn http(status: u16, message: impl Into<String>) -> AppError {
     AppError::with_status(status, message)
@@ -54,7 +54,7 @@ fn project_name(root: &Path) -> String {
 pub fn snapshot(root: &Path) -> Result<Value> {
     let cfg = load_config(root)?;
     // PRD 程序中途被結束時，狀態不會自己回來；在這裡發現並恢復，避免畫面一直停在「修訂中」。
-    let _ = super::prd::recover_interrupted(root);
+    let _ = crate::core::prd::recover_interrupted(root);
     let state = read_state(root);
     let runner_alive = is_pid_alive_value(&state["runner"]["pid"]);
     Ok(json!({
@@ -69,12 +69,12 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         "queue": if runner_alive { queue_entry_for(root).unwrap_or(Value::Null) } else { Value::Null },
         "prd": current_prd(root),
         "tasks": read_tasks(root).unwrap_or_default(),
-        "taskTag": super::tasks::current_tag(root).unwrap_or_default(),
-        "taskRevision": super::tasks::revision(root).unwrap_or_default(),
-        "taskReferences": super::tasks::group_metadata(root).unwrap_or(Value::Null)["references"],
+        "taskTag": crate::core::tasks::current_tag(root).unwrap_or_default(),
+        "taskRevision": crate::core::tasks::revision(root).unwrap_or_default(),
+        "taskReferences": crate::core::tasks::group_metadata(root).unwrap_or(Value::Null)["references"],
         "usage": usage_snapshot(root, &cfg),
         // AI 要求、等使用者允許或拒絕的工具權限（最舊的在前）。
-        "permissions": super::permissions::pending(root),
+        "permissions": crate::core::permissions::pending(root),
         "state": state,
     }))
 }
@@ -101,9 +101,9 @@ fn task_detail(root: &Path, id: &str) -> Result<Value> {
         .collect();
     reviews.sort();
     let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
-    let task = super::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
+    let task = crate::core::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
     Ok(json!({
-        "id": id, "revision": super::tasks::revision(root)?, "tag": super::tasks::current_tag(root)?,
+        "id": id, "revision": crate::core::tasks::revision(root)?, "tag": crate::core::tasks::current_tag(root)?,
         "state": read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null),
         "task": task,
         "checks": read_text(dir.join("checks.txt")),
@@ -144,16 +144,16 @@ fn is_task_id(id: &str) -> bool {
 
 fn approve_and_generate(root: &Path, cfg: &Value, launch: &dyn Fn(&Path) -> Result<Value>) -> Result<Value> {
     let file = approve_prd(root, cfg)?;
-    super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": null, "error": "", "started_at": super::util::now_iso() }))?;
+    crate::core::state::update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": null, "error": "", "started_at": crate::core::util::now_iso() }))?;
     match launch(root) {
         Ok(job) => {
-            super::state::update_state(root, |s| {
+            crate::core::state::update_state(root, |s| {
                 if s["task_gen"]["status"] == "running" && s["task_gen"]["pid"].is_null() { s["task_gen"]["pid"] = job["pid"].clone(); }
             })?;
             Ok(json!({ "file": file.to_string_lossy(), "taskGeneration": job }))
         }
         Err(err) => {
-            super::state::update_state(root, |s| s["task_gen"] = json!({ "status": "error", "error": err.message }))?;
+            crate::core::state::update_state(root, |s| s["task_gen"] = json!({ "status": "error", "error": err.message }))?;
             Ok(json!({ "file": file.to_string_lossy(), "taskError": err.message }))
         }
     }
@@ -245,31 +245,31 @@ fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Valu
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
     match action {
-        "references/suggest" => super::references::suggest(root, &text_field(body, "query")),
-        "references/import" => super::references::import(root, body),
+        "references/suggest" => crate::core::references::suggest(root, &text_field(body, "query")),
+        "references/import" => crate::core::references::import(root, body),
         "references/assign" => {
-            let refs = json!(super::references::ids(root, &body["references"])?);
+            let refs = json!(crate::core::references::ids(root, &body["references"])?);
             match body["target"].as_str().unwrap_or("") {
-                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } super::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; super::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
-                "group" => { busy_guard(&snap)?; super::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
-                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } super::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
-                "backlog" => { super::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
+                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } crate::core::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; crate::core::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
+                "group" => { busy_guard(&snap)?; crate::core::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
+                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
+                "backlog" => { crate::core::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
                 _ => return Err(http(400, "參考資料目標不正確")),
             }
             Ok(json!({ "ok": true }))
         }
-        "backlog/interview" => super::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
-        "backlog/confirm" => super::requirements::confirm(root, body),
-        "prd/save" => { busy_guard(&snap)?; super::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
+        "backlog/interview" => crate::core::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
+        "backlog/confirm" => crate::core::requirements::confirm(root, body),
+        "prd/save" => { busy_guard(&snap)?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
         "prd/review" => { busy_guard(&snap)?; spawn(root, &["prd", "--review"]) },
-        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } let result = super::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = super::archive::archive_tasks(root, json!({})); Ok(result) },
+        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
         // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
-        "permissions/answer" => super::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
-        "tasks/approve" => { busy_guard(&snap)?; super::human::approve_tasks(root, &text_field(body, "revision")) },
-        "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
-        "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),
-        "chat/rename" => super::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
-        "chat/delete" => { super::chat::delete_chat(root, &text_field(body, "chatId"))?; Ok(json!({ "ok": true })) },
+        "permissions/answer" => crate::core::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
+        "tasks/approve" => { busy_guard(&snap)?; crate::core::human::approve_tasks(root, &text_field(body, "revision")) },
+        "chat/send" => crate::core::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
+        "chat/cancel" => crate::core::chat::cancel_turn(root, &text_field(body, "chatId")),
+        "chat/rename" => crate::core::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
+        "chat/delete" => { crate::core::chat::delete_chat(root, &text_field(body, "chatId"))?; Ok(json!({ "ok": true })) },
         "prd/new" => {
             busy_guard(&snap)?;
             let idea = text_field(body, "idea").trim().to_string();
@@ -349,7 +349,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "skills/delete" => {
             busy_guard(&snap)?;
-            super::skills::delete_skill(root, &text_field(body, "name"))
+            crate::core::skills::delete_skill(root, &text_field(body, "name"))
         }
         "skills/config" => {
             busy_guard(&snap)?;
@@ -376,7 +376,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
         }
-        "backlog/add" => Ok(json!({ "item": super::backlog::add_item_with_references(root, body.get("title"), body.get("detail"), &body["references"])? })),
+        "backlog/add" => Ok(json!({ "item": crate::core::backlog::add_item_with_references(root, body.get("title"), body.get("detail"), &body["references"])? })),
         "backlog/update" => {
             let mut patch = json!({});
             for k in ["title", "detail", "status", "references"] {
@@ -391,7 +391,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "backlog/draft" => {
             busy_guard(&snap)?;
             let item = get_item(root, &text_field(body, "id"))?;
-            super::requirements::prd_input(root, &item)?;
+            crate::core::requirements::prd_input(root, &item)?;
             spawn(root, &["prd", "--backlog", item["id"].as_str().unwrap_or("")])
         }
         _ => Err(http(404, "未知操作")),
@@ -421,7 +421,7 @@ fn percent_decode(s: &str) -> String {
 fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<Value> {
     if method == "GET" {
         match rest {
-            "chats" => return Ok(json!({ "items": super::chat::list_chats(root).into_iter().filter(|chat| chat["kind"] != "requirements").collect::<Vec<_>>() })),
+            "chats" => return Ok(json!({ "items": crate::core::chat::list_chats(root).into_iter().filter(|chat| chat["kind"] != "requirements").collect::<Vec<_>>() })),
             "state" => return snapshot(root),
             "usage" => return Ok(usage_snapshot(root, &load_config(root)?)),
             "skills" => return Ok(json!({ "skills": list_skills(root), "stages": SKILL_STAGES, "config": load_config(root)?["skills"] })),
@@ -431,13 +431,13 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
                 let state = read_state(root);
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
             }
-            "references" => return Ok(json!({ "items": super::references::list(root) })),
-            "backlog" => return Ok(json!({ "items": read_backlog(root)?, "path": super::backlog::backlog_file(root).to_string_lossy() })),
-            "archive" => return Ok(json!({ "items": list_archives(root)?, "dir": super::archive::archive_root(root).to_string_lossy() })),
+            "references" => return Ok(json!({ "items": crate::core::references::list(root) })),
+            "backlog" => return Ok(json!({ "items": read_backlog(root)?, "path": crate::core::backlog::backlog_file(root).to_string_lossy() })),
+            "archive" => return Ok(json!({ "items": list_archives(root)?, "dir": crate::core::archive::archive_root(root).to_string_lossy() })),
             _ => {}
         }
-        if let Some(id) = rest.strip_prefix("requirements/") { return super::requirements::get(root, id); }
-        if let Some(id) = rest.strip_prefix("chat/") { return super::chat::get_chat(root, id); }
+        if let Some(id) = rest.strip_prefix("requirements/") { return crate::core::requirements::get(root, id); }
+        if let Some(id) = rest.strip_prefix("chat/") { return crate::core::chat::get_chat(root, id); }
         if let Some(name) = rest.strip_prefix("archive/") {
             return read_archive(root, &percent_decode(name));
         }
@@ -496,9 +496,9 @@ fn available_models(root: &Path, cfg: &Value) -> Value {
     };
     let mut settings = json!({});
     // WSL 使用另一份設定，不能誤拿 Windows 使用者設定充當預設值。
-    if super::runtime::cli_environment(cfg, "claude", root).runtime == "windows" {
+    if crate::core::runtime::cli_environment(cfg, "claude", root).runtime == "windows" {
         for file in [home_dir().join(".claude/settings.json"), root.join(".claude/settings.json"), root.join(".claude/settings.local.json")] {
-            if let Some(value) = super::util::read_json(file) { settings = super::config::deep_merge(&settings, &value); }
+            if let Some(value) = crate::core::util::read_json(file) { settings = crate::core::config::deep_merge(&settings, &value); }
         }
     }
     let default_model = if settings["model"].is_string() { settings["model"].clone() } else { cli_default };
@@ -548,7 +548,7 @@ fn handle_global(action: &str, body: &Value) -> Result<Value> {
                 if !truthy(body.get("init")) {
                     return Ok(json!({ "needs_init": true, "needs_git": true, "path": dir.to_string_lossy() }));
                 }
-                super::init::init_project(&dir, &super::init::InitOptions { git_init: true, ..Default::default() })?;
+                crate::core::init::init_project(&dir, &crate::core::init::InitOptions { git_init: true, ..Default::default() })?;
             }
             let name = body["name"].as_str().map(str::trim).filter(|n| !n.is_empty());
             Ok(json!({ "project": add_project(&dir, name)? }))
@@ -590,7 +590,7 @@ pub fn handle(method: &str, path: &str, body: &Value) -> Result<Value> {
         match path {
             "/api/projects" => return Ok(projects_payload()),
             "/api/config" => return global_config_payload(),
-            "/api/models" => return Ok(available_models(&home_dir(), &super::config::load_config_or_default(&home_dir())?)),
+            "/api/models" => return Ok(available_models(&home_dir(), &crate::core::config::load_config_or_default(&home_dir())?)),
             _ => {}
         }
     }
@@ -613,8 +613,8 @@ mod tests {
 
     #[test]
     fn 任務詳情支援藍圖的子任務與依賴() {
-        let root = super::super::util::temp_dir("task-detail-");
-        super::super::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "parent", "subtasks": [{ "id": 1, "title": "child" }, { "id": 2, "title": "dependent", "dependencies": [1] }] })], Some("master"), json!({})).unwrap();
+        let root = crate::core::util::temp_dir("task-detail-");
+        crate::core::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "parent", "subtasks": [{ "id": 1, "title": "child" }, { "id": 2, "title": "dependent", "dependencies": [1] }] })], Some("master"), json!({})).unwrap();
         let detail = task_detail(&root, "1.2").unwrap();
         assert_eq!(detail["task"]["title"], "dependent");
         assert_eq!(detail["task"]["id"], "1.2");
@@ -625,37 +625,37 @@ mod tests {
     #[test]
     fn 核准後自動拆任務_啟動失敗保留核准並提供重試狀態() {
         for fail in [false, true] {
-            let root = super::super::util::temp_dir("auto-tasks-");
-            super::super::state::ensure_dirs(&root).unwrap();
+            let root = crate::core::util::temp_dir("auto-tasks-");
+            crate::core::state::ensure_dirs(&root).unwrap();
             fs::write(data_dir(&root).join("prd/current.md"), "# PRD").unwrap();
-            super::super::state::update_state(&root, |s| s["prd"]["status"] = json!("awaiting_approval")).unwrap();
-            let result = approve_and_generate(&root, &super::super::config::default_config(), &|_| {
+            crate::core::state::update_state(&root, |s| s["prd"]["status"] = json!("awaiting_approval")).unwrap();
+            let result = approve_and_generate(&root, &crate::core::config::default_config(), &|_| {
                 if fail { Err(http(500, "無法啟動")) } else { Ok(json!({ "pid": 123 })) }
             }).unwrap();
             let state = read_state(&root);
             assert_eq!(state["prd"]["status"], "approved");
             assert_eq!(state["task_gen"]["status"], if fail { "error" } else { "running" });
             assert_eq!(result["taskError"].is_string(), fail);
-            assert!(super::super::state::prd_file(&root).exists());
+            assert!(crate::core::state::prd_file(&root).exists());
             assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "核准 PRD 不能在專案資料夾寫檔");
         }
     }
 
     #[test]
     fn 參考資料拒絕過期的功能與任務群組_更新共用參考不重設任務狀態() {
-        let root = super::super::util::temp_dir("reference-api-");
-        super::super::config::save_config(&root, &super::super::config::default_config()).unwrap();
-        let reference = super::super::references::import(&root, &json!({ "name": "spec.md", "data": "c3BlYw==" })).unwrap();
-        super::super::state::update_state(&root, |s| { s["prd"]["reference_scope"] = json!("new-feature"); s["prd"]["archive_dir"] = json!("archive/feature"); }).unwrap();
-        super::super::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "existing", "status": "done" })], Some("master"), json!({ "reference_feature": "archive/feature" })).unwrap();
-        super::super::tasks::set_status(&root, "1", "review").unwrap();
-        super::super::tasks::set_status(&root, "1", "done").unwrap();
+        let root = crate::core::util::temp_dir("reference-api-");
+        crate::core::config::save_config(&root, &crate::core::config::default_config()).unwrap();
+        let reference = crate::core::references::import(&root, &json!({ "name": "spec.md", "data": "c3BlYw==" })).unwrap();
+        crate::core::state::update_state(&root, |s| { s["prd"]["reference_scope"] = json!("new-feature"); s["prd"]["archive_dir"] = json!("archive/feature"); }).unwrap();
+        crate::core::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "existing", "status": "done" })], Some("master"), json!({ "reference_feature": "archive/feature" })).unwrap();
+        crate::core::tasks::set_status(&root, "1", "review").unwrap();
+        crate::core::tasks::set_status(&root, "1", "done").unwrap();
         let refs = json!([reference["id"]]);
         let error = handle_action(&root, "references/assign", &json!({ "target": "feature", "featureScope": "old-feature", "references": refs })).unwrap_err();
         assert_eq!(error.status, 409);
         assert!(read_state(&root)["prd"]["references"].is_null());
         handle_action(&root, "references/assign", &json!({ "target": "feature", "featureScope": "new-feature", "references": refs })).unwrap();
-        assert_eq!(super::super::tasks::group_metadata(&root).unwrap()["references"], refs);
+        assert_eq!(crate::core::tasks::group_metadata(&root).unwrap()["references"], refs);
         assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
         assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "old-tag", "id": "1", "references": refs })).unwrap_err().status, 409);
         assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "master", "id": "1.1.1", "references": refs })).unwrap_err().status, 400);

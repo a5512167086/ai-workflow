@@ -6,23 +6,23 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-use super::agents::{run_agent, AgentOpts};
-use super::archive::{archive_tasks, tag_slug};
-use super::backlog::{get_item, idea_for, update_item};
-use super::config::{cfg_str, find_project_root, load_config, project_registered, MODES, ROLES};
-use super::doctor::doctor_report;
-use super::git::is_git_repo;
-use super::init::{init_project, prepare_project, InitOptions};
-use super::prd::{approve_prd, draft_prd, revise_prd};
-use super::projects::{add_project, list_projects, project_summary, remove_project};
-use super::prompts::tasks_from_prd_prompt;
-use super::queue::{queue_snapshot, set_max_concurrent};
-use super::runner::{acknowledge, prepare_rerun, request_pause, run_pipeline_with_provider, Next};
-use super::skills::{import_skill, list_skills, load_skill, new_skill_run, save_skill_run};
-use super::state::{append_log, data_dir, ensure_dirs, prd_file, read_state, update_state};
-use super::tasks;
-use super::util::{js_string, now_iso, read_text, resolve};
-use super::Result;
+use crate::core::agents::{run_agent, AgentOpts};
+use crate::core::archive::{archive_tasks, tag_slug};
+use crate::core::backlog::{get_item, idea_for, update_item};
+use crate::core::config::{cfg_str, find_project_root, load_config, project_registered, MODES, ROLES};
+use crate::core::doctor::doctor_report;
+use crate::core::git::is_git_repo;
+use crate::core::init::{init_project, prepare_project, InitOptions};
+use crate::core::prd::{approve_prd, draft_prd, revise_prd};
+use crate::core::projects::{add_project, list_projects, project_summary, remove_project};
+use crate::core::prompts::tasks_from_prd_prompt;
+use crate::core::queue::{queue_snapshot, set_max_concurrent};
+use crate::core::runner::{acknowledge, prepare_rerun, request_pause, run_pipeline_with_provider, Next};
+use crate::core::skills::{import_skill, list_skills, load_skill, new_skill_run, save_skill_run};
+use crate::core::state::{append_log, data_dir, ensure_dirs, prd_file, read_state, update_state};
+use crate::core::tasks;
+use crate::core::util::{js_string, now_iso, read_text, resolve};
+use crate::core::Result;
 
 pub const HELP: &str = "ai-workflow — 用本機已登入的 Claude Code / Codex CLI 跑 AI 開發流程
 
@@ -137,9 +137,9 @@ pub fn main(argv: &[String]) -> Result<i32> {
 
     match cmd {
         Some("chat") => {
-            let id = args.get("id").ok_or_else(|| super::AppError::new("請指定對話 id"))?;
-            let turn = args.get("turn").ok_or_else(|| super::AppError::new("請指定對話回合"))?;
-            let chat = super::chat::run_turn(root, id, turn)?;
+            let id = args.get("id").ok_or_else(|| crate::core::AppError::new("請指定對話 id"))?;
+            let turn = args.get("turn").ok_or_else(|| crate::core::AppError::new("請指定對話回合"))?;
+            let chat = crate::core::chat::run_turn(root, id, turn)?;
             if chat["status"] != "done" { crate::bail!("{}", chat["error"].as_str().unwrap_or("對話未完成")); }
         }
         Some("init") => {
@@ -179,13 +179,13 @@ pub fn main(argv: &[String]) -> Result<i32> {
                 return Ok(0);
             }
             if args.flag("review") {
-                super::prd::review_current(root, &cfg)?;
+                crate::core::prd::review_current(root, &cfg)?;
             } else if let Some(feedback) = args.get("revise") {
                 revise_prd(root, &cfg, feedback)?;
             } else if let Some(id) = args.get("backlog") {
                 let item = get_item(root, id)?;
                 // 先確認需求釐清已由使用者確認，再把待辦標成進行中，失敗時不改狀態。
-                super::requirements::prd_input(root, &item)?;
+                crate::core::requirements::prd_input(root, &item)?;
                 update_item(root, id, &json!({ "status": "in_progress" }))?;
                 draft_prd(root, &cfg, &idea_for(&item), Some(id))?;
             } else {
@@ -198,7 +198,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
             println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 ai-workflow prd --approve");
         }
         Some("tasks") => {
-            if args.flag("approve") { super::human::approve_tasks(root, &tasks::revision(root)?)?; println!("任務已人工核准，可執行 ai-workflow run"); return Ok(0); }
+            if args.flag("approve") { crate::core::human::approve_tasks(root, &tasks::revision(root)?)?; println!("任務已人工核准，可執行 ai-workflow run"); return Ok(0); }
             let count = generate_tasks(root)?;
             println!("已產生 {count} 個任務，下一步：ai-workflow run 或在 UI 按「開始」");
         }
@@ -248,7 +248,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
             if !MODES.contains(&mode) {
                 crate::bail!("模式必須是 {}", MODES.join(" / "));
             }
-            super::config::patch_global(&json!({ "mode": mode }))?;
+            crate::core::config::patch_global(&json!({ "mode": mode }))?;
             println!("已切換為 {mode} 模式（全域設定）");
         }
         Some("status") => print_status(root)?,
@@ -298,7 +298,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         }
         let text = res.text.trim();
         let parsed: Value = match (text.find('{'), text.rfind('}')) {
-            (Some(a), Some(b)) if a < b => serde_json::from_str(&text[a..=b]).map_err(|e| super::AppError::new(format!("AI 回覆的任務不是合法 JSON：{e}")))?,
+            (Some(a), Some(b)) if a < b => serde_json::from_str(&text[a..=b]).map_err(|e| crate::core::AppError::new(format!("AI 回覆的任務不是合法 JSON：{e}")))?,
             _ => crate::bail!("AI 回覆裡找不到任務 JSON"),
         };
         let list = parsed["tasks"].as_array().cloned().unwrap_or_default();
@@ -345,7 +345,7 @@ pub fn run_skill(root: &Path, name: &str, input: &str, provider: Option<&str>, p
     let result = run_agent(AgentOpts {
         root, cfg: &cfg, provider: provider.unwrap_or(cfg_str(&cfg["roles"], "author")), prompt, write: false, scope: &scope, label: &label,
         stage: None, skills: Some(vec![name.to_string()]), role: None,
-    }).and_then(|r| if r.ok { Ok(r) } else { Err(super::AppError::new(r.error_text())) });
+    }).and_then(|r| if r.ok { Ok(r) } else { Err(crate::core::AppError::new(r.error_text())) });
     let out = match result {
         Ok(r) => {
             run["messages"].as_array_mut().unwrap().push(json!({ "role": "assistant", "text": r.text, "at": now_iso(), "provider": r.provider }));

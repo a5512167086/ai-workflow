@@ -2,7 +2,7 @@
 
 把「多個 AI 討論 → 寫 PRD 並交叉審查 → 內建引擎拆任務 → 每個任務開新對話並帶 handover → 驗證與審查 → 更新 handover → 人工測試」這套流程自動化的 Windows 桌面工具，同一支程式也能當命令列使用。
 
-- **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex exec`），不需要也不使用 API key。
+- **只用你自己的訂閱**：一律呼叫本機已登入的官方 CLI（`claude -p`、`codex app-server`），不需要也不使用 API key。
 - **不碰你的專案**：所有設定、狀態、log、PRD、任務、封存都放在使用者目錄 `~/.ai-workflow/`，專案資料夾裡一個檔案都不留。
 - **通用**：任何有 git 的軟體專案都能用，build/test/lint 指令在加入專案時自動偵測，之後可在專案頁修改。
 - **兩種模式**：自動（通過檢查就 commit，少停）與手動（不 commit，每個任務都停下來等你測）。
@@ -252,7 +252,7 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 
 ## 費用與安全
 
-- 只呼叫官方 CLI：`claude -p`、`codex exec`。
+- 只呼叫官方 CLI：`claude -p`、`codex app-server`（和 Codex 桌面版、IDE 外掛相同的 JSON-RPC 介面）。
 - 啟動任何子程序前（含 build/test/lint）會移除這些環境變數：`ANTHROPIC_*`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`CODEX_API_KEY`、`OPENAI_CODEX_API_KEY`，以及從上層 Claude Code session 繼承的 `CLAUDECODE`、`CLAUDE_CODE_*`（`CLAUDE_CODE_GIT_BASH_PATH` 除外）、`CLAUDE_AGENT_SDK_*`。CLI 只能用訂閱登入，沒登入就直接失敗，不會改走付費 API。
 - 不使用 `--dangerously-skip-permissions` 或 `--dangerously-bypass-approvals-and-sandbox`：
 
@@ -261,7 +261,7 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
   | 會改檔案（實作者、修正者） | `--permission-mode auto`，沒有自動允許的操作跳出對話框問你 | `--sandbox workspace-write`，並開放網路 |
   | 唯讀（PRD 作者／審查、拆任務、程式碼審查、handover、對話） | `--permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit` | `--sandbox read-only` |
 
-  `auto` 由 Claude Code 的安全分類器判斷：建專案、`npm install`、跑測試這類一般開發指令直接放行。沒有自動放行的操作不會被默默拒絕，而是在 App 跳出「AI 要求執行操作」對話框，顯示指令或檔案，讓你選「允許這一次」「這次執行都允許」（只在這次 AI 執行有效，不寫進專案的設定檔）或「拒絕」（可附原因告訴 AI）。想每個指令都自己確認，可以在全域設定把 `claude.write_permission_mode` 改成 `acceptEdits`：編輯檔案自動允許，指令一律先問你；`claude.allowed_tools` 列出的工具（例如 `"Bash(npm test:*)"`）不會再問。對話框可以按「稍後決定」，右下角會留下提示；流程結束、逾時或取消時，還沒回答的請求自動失效並視為拒絕。總覽的專案卡片會顯示「等待你允許操作」並跳 Windows 通知。Codex 的 `exec` 模式不支援執行中詢問，所以 Codex 實作者仍依沙箱設定直接執行或失敗。Codex 的寫入角色預設可以連網（`codex.network_access`，設成 false 就關閉）。實作者的工具呼叫被擋下又沒有任何變更時，任務會直接停在「需要人工處理」並說明原因，不會送審查空的 diff。
+  `auto` 由 Claude Code 的安全分類器判斷：建專案、`npm install`、跑測試這類一般開發指令直接放行。沒有自動放行的操作不會被默默拒絕，而是在 App 跳出「AI 要求執行操作」對話框，顯示指令或檔案，讓你選「允許這一次」「這次執行都允許」（只在這次 AI 執行有效，不寫進專案的設定檔）或「拒絕」（可附原因告訴 AI）。想每個指令都自己確認，可以在全域設定把 `claude.write_permission_mode` 改成 `acceptEdits`：編輯檔案自動允許，指令一律先問你；`claude.allowed_tools` 列出的工具（例如 `"Bash(npm test:*)"`）不會再問。對話框可以按「稍後決定」，右下角會留下提示；流程結束、逾時或取消時，還沒回答的請求自動失效並視為拒絕。總覽的專案卡片會顯示「等待你允許操作」並跳 Windows 通知。Codex 走 `app-server`：寫入角色用 workspace-write 沙箱、核准政策 `on-request`（`codex.approval_policy`，可改 `untrusted` 讓更多指令先問你），沙箱內的操作直接執行，超出沙箱的指令、改檔或額外權限會用同一個對話框問你；唯讀角色用 read-only 沙箱、不詢問。Codex 的寫入角色預設可以連網（`codex.network_access`，設成 false 就關閉）。實作者的工具呼叫被擋下又沒有任何變更時，任務會直接停在「需要人工處理」並說明原因，不會送審查空的 diff。
 - prompt 一律從 stdin 傳入，避開命令列長度限制與跳脫問題。
 - 修正輪數、PRD 審查輪數都有上限，每次 AI 呼叫與每個指令都有逾時。
 
@@ -336,7 +336,7 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 
 標準的 Tauri 2 專案：`src/` 是前端（原生 HTML／JS，不需要打包工具），`src-tauri/` 是 Rust 後端。
 
-- **全部在 Rust**：PRD 流程、內建任務引擎、執行器、git、WSL、用量追蹤都在 `src-tauri/src/core/`。前端透過 Tauri command `api`（路徑和格式沿用舊版 HTTP API，例如 `/api/p/<id>/state`、全域設定用 `/api/config`）呼叫，狀態與 log 的變化以 Tauri 事件推送。
+- **全部在 Rust**：PRD 流程、內建任務引擎、執行器、git、WSL、用量追蹤都在 `src-tauri/src/core/`，依領域分資料夾：`agents/`（Claude、Codex CLI 與權限請求）、`workflow/`（需求、PRD、任務、執行流程）、`project/`（設定、狀態、專案清單、佇列）、`skills/`、`system/`（子程序、WSL、git）。Tauri 的組裝在 `lib.rs`，前端呼叫的 commands 在 `commands/`，系統匣與通知在 `tray.rs`、`notifications.rs`，`main.rs` 只負責分流命令列或開 App。前端透過 Tauri command `api`（路徑和格式沿用舊版 HTTP API，例如 `/api/p/<id>/state`、全域設定用 `/api/config`）呼叫，狀態與 log 的變化以 Tauri 事件推送。
 - **同一支 exe 也是 CLI**：帶子指令執行時不開視窗（從終端機執行會接到目前的主控台）。UI 按鈕啟動的流程也是用這個方式另開背景程序，關掉 app 不會中斷。
 - **原生功能**：總覽的「選擇資料夾」用系統對話框；系統匣圖示（左鍵開視窗、右鍵「結束 ai-workflow」）；關閉視窗會縮到系統匣，背景繼續監看；專案進入等待核准、等待測試、功能待測試、需要人工處理、錯誤時跳 Windows 通知。
 

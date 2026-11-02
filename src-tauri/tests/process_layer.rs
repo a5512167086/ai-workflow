@@ -125,7 +125,9 @@ fn codex_額度_rpc_完成_handshake_只查額度() {
     let spec = resolve_cli_for(&cfg, "codex", &root).unwrap();
     let result = query_codex_rpc(&spec, &root, "account/rateLimits/read", 5).unwrap();
     assert_eq!(result["rateLimits"]["primary"]["usedPercent"], 25);
-    assert!(query_codex_rpc(&spec, &root, "thread/start", 5).is_err());
+    assert!(query_codex_rpc(&spec, &root, "unknown/method", 5).is_err());
+    // 查額度不會開始任何模型回合（假 CLI 只在 turn/start 時記錄呼叫）。
+    assert!(calls(&root).is_empty());
 }
 
 #[test]

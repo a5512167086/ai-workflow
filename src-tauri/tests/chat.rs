@@ -43,9 +43,9 @@ fn 專案對話可在流程執行中詢問_追問帶入前文及最新狀態_使
     assert_eq!(calls.len(), 2);
     let prompt = calls[1]["prompt"].as_str().unwrap();
     for text in ["目前跑到哪裡", "目前正在驗證", "flowchart LR", "新的進度：等待人工測試", "請解釋剛剛的架構圖"] { assert!(prompt.contains(text), "{text}"); }
-    let args = calls[0]["args"].as_array().unwrap();
-    assert!(args.windows(2).any(|a| a == [json!("--sandbox"), json!("read-only")]));
-    assert!(args.windows(2).any(|a| a == [json!("-m"), json!("chat-model")]));
+    assert_eq!(calls[0]["thread"]["sandbox"], "read-only");
+    assert_eq!(calls[0]["thread"]["model"], "chat-model");
+    assert_eq!(calls[0]["thread"]["approvalPolicy"], "never");
     assert_eq!(read_state(&root)["pipeline"]["status"], "running");
     assert!(!prd_file(&root).exists());
     assert_eq!(chat::list_chats(&root).len(), 1);
