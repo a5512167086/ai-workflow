@@ -107,6 +107,7 @@ fn show_main(app: &AppHandle) {
 /// 專案停下來等使用者時的通知文字。
 fn attention_label(status: &str) -> Option<&'static str> {
     match status {
+        "awaiting_permission" => Some("AI 等待你允許操作"),
         "awaiting_approval" => Some("PRD 等待核准"),
         "waiting" => Some("任務等待人工測試"),
         "feature_test" => Some("功能完成，等待功能測試"),

@@ -48,6 +48,7 @@ impl ProjectWatcher {
             mtime(&usage_file(&self.root)),
             mtime(&tasks_file(&self.root)),
             mtime(&self.root.join(".taskmaster").join("state.json")),
+            mtime(&super::permissions::marker(&self.root)),
         ];
         if self.last.as_ref() != Some(&sig) {
             self.last = Some(sig);

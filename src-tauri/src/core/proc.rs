@@ -331,6 +331,9 @@ pub struct RunOpts<'a> {
     pub cancel_file: Option<PathBuf>,
     pub on_stdout: Option<&'a mut dyn FnMut(&str)>,
     pub on_stderr: Option<&'a mut dyn FnMut(&str)>,
+    /// 互動模式：寫完 input 後 stdin 不關閉，之後從這個 channel 收到的文字照順序寫入；收到 None 或 channel 關閉才關閉 stdin。
+    /// 用來回覆 Claude CLI 的 can_use_tool 權限請求。
+    pub stdin_rx: Option<mpsc::Receiver<Option<String>>>,
 }
 
 enum Chunk {
@@ -395,8 +398,13 @@ pub fn run_with(spec: Option<&CliSpec>, args: &[String], shell_line: Option<&str
     let readers = [pump(child.stdout.take().unwrap(), tx.clone(), false), pump(child.stderr.take().unwrap(), tx, true)];
     let mut stdin = child.stdin.take().unwrap();
     let input = opts.input.unwrap_or("").to_string();
+    let more = opts.stdin_rx.take();
     std::thread::spawn(move || {
-        let _ = stdin.write_all(input.as_bytes());
+        if stdin.write_all(input.as_bytes()).and_then(|_| stdin.flush()).is_err() { return; }
+        let Some(rx) = more else { return };
+        while let Ok(Some(text)) = rx.recv() {
+            if stdin.write_all(text.as_bytes()).and_then(|_| stdin.flush()).is_err() { return; }
+        }
     });
     let start = Instant::now();
     let mut result = RunResult::default();

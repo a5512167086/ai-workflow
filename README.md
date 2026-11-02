@@ -258,10 +258,10 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 
   | 角色 | Claude | Codex |
   | --- | --- | --- |
-  | 會改檔案（實作者、修正者） | `--permission-mode auto` | `--sandbox workspace-write`，並開放網路 |
+  | 會改檔案（實作者、修正者） | `--permission-mode auto`，沒有自動允許的操作跳出對話框問你 | `--sandbox workspace-write`，並開放網路 |
   | 唯讀（PRD 作者／審查、拆任務、程式碼審查、handover、對話） | `--permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit` | `--sandbox read-only` |
 
-  `auto` 由 Claude Code 的安全分類器判斷：建專案、`npm install`、跑測試這類一般開發指令會放行，有風險的操作仍會被擋。想更嚴格可以在全域設定把 `claude.write_permission_mode` 改成 `acceptEdits`（只允許編輯檔案，所有指令都會被拒絕），再用 `claude.allowed_tools` 個別允許，例如 `"Bash(npm test:*)"`。Codex 的寫入角色預設可以連網（`codex.network_access`，設成 false 就關閉）。實作者的工具呼叫被擋下又沒有任何變更時，任務會直接停在「需要人工處理」並說明原因，不會送審查空的 diff。
+  `auto` 由 Claude Code 的安全分類器判斷：建專案、`npm install`、跑測試這類一般開發指令直接放行。沒有自動放行的操作不會被默默拒絕，而是在 App 跳出「AI 要求執行操作」對話框，顯示指令或檔案，讓你選「允許這一次」「這次執行都允許」（只在這次 AI 執行有效，不寫進專案的設定檔）或「拒絕」（可附原因告訴 AI）。想每個指令都自己確認，可以在全域設定把 `claude.write_permission_mode` 改成 `acceptEdits`：編輯檔案自動允許，指令一律先問你；`claude.allowed_tools` 列出的工具（例如 `"Bash(npm test:*)"`）不會再問。對話框可以按「稍後決定」，右下角會留下提示；流程結束、逾時或取消時，還沒回答的請求自動失效並視為拒絕。總覽的專案卡片會顯示「等待你允許操作」並跳 Windows 通知。Codex 的 `exec` 模式不支援執行中詢問，所以 Codex 實作者仍依沙箱設定直接執行或失敗。Codex 的寫入角色預設可以連網（`codex.network_access`，設成 false 就關閉）。實作者的工具呼叫被擋下又沒有任何變更時，任務會直接停在「需要人工處理」並說明原因，不會送審查空的 diff。
 - prompt 一律從 stdin 傳入，避開命令列長度限制與跳脫問題。
 - 修正輪數、PRD 審查輪數都有上限，每次 AI 呼叫與每個指令都有逾時。
 

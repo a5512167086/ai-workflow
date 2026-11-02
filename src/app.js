@@ -643,6 +643,7 @@ function onState(data) {
   const prevPrd = snap?.state.prd.rounds.length;
   const prevStatus = snap?.state.prd.status;
   snap = data;
+  if (typeof renderPermissions === 'function') renderPermissions();
   if (typeof renderReferenceWidgets === 'function') renderReferenceWidgets();
   if (typeof renderChatContext === 'function') renderChatContext();
   const blocked = data.state.usage_blocked;

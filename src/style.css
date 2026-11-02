@@ -691,7 +691,7 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .stage-chip.stage-doing, .stage-chip.stage-review { background: var(--info-soft); color: var(--info); }
 .board-empty { position: absolute; bottom: 20px; left: 16px; right: 16px; padding: var(--s-4); margin: 0; border: 1px dashed var(--border-strong); background: var(--surface); color: var(--text-muted); border-radius: var(--r-md); text-align: center; pointer-events: none; }
 /* 任務詳情對話框：置中、接近滿版高度；內容區（log／diff／審查）在對話框內捲動，看板不受影響。 */
-#tab-board dialog.task-dialog { width: min(1100px, calc(100vw - 32px)); height: min(880px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+#tab-board dialog.task-dialog { width: min(1480px, calc(100vw - 32px)); height: min(920px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
 #tab-board dialog.task-dialog[open] { display: flex; flex-direction: column; }
 #tab-board dialog.task-dialog::backdrop { background: #0007; }
 #tab-board dialog.task-dialog > * { flex: none; }
@@ -1063,3 +1063,20 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
   .diff-layout { grid-template-columns: minmax(0, 1fr); }
   .diff-nav { position: static; max-height: 160px; }
 }
+
+/* AI 要求權限的對話框：說明誰要做什麼、指令或檔案，拒絕／這次執行都允許／允許這一次。 */
+.permission-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--warn); border-radius: 12px; box-shadow: var(--shadow); overflow: auto; }
+.permission-dialog::backdrop { background: #0007; }
+.permission-dialog .card-head { margin-bottom: var(--s-2); }
+.permission-dialog h2 { margin: 0; font-size: 16px; }
+.permission-who { margin: 0 0 4px; font-weight: 600; }
+.permission-desc { margin: 0 0 var(--s-3); color: var(--text-muted); }
+.permission-desc:empty, .permission-reason:empty { display: none; }
+.permission-input .field-label { margin-bottom: 4px; }
+.permission-code { margin: 0; padding: 10px 12px; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.permission-reason { margin: var(--s-2) 0 0; }
+.permission-deny-label { display: block; margin-top: var(--s-3); }
+.permission-deny-label textarea { display: block; width: 100%; margin-top: 4px; resize: vertical; }
+.permission-actions { margin-top: var(--s-3); gap: var(--s-2); flex-wrap: wrap; align-items: center; }
+.permission-actions .spacer { flex: 1; }
+.permission-notice { position: fixed; right: 16px; bottom: 16px; z-index: 30; display: flex; align-items: center; gap: var(--s-3); padding: 10px 14px; background: var(--surface); border: 1px solid var(--warn); border-radius: var(--r-md); box-shadow: var(--shadow); font-size: 13px; }

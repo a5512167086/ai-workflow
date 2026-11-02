@@ -191,3 +191,77 @@ function bindHuman() {
     catch (error) { toast(error.message,true); }
   };
 }
+
+/* AI 要求的工具權限：流程執行中 CLI 想跑沒有預先允許的指令時，跳出允許／拒絕的對話框。 */
+let permissionDialog = null;
+const permissionLater = new Set();
+function permissionInputView(entry) {
+  const input = entry.input || {};
+  const wrap = document.createElement('div'); wrap.className = 'permission-input';
+  const label = document.createElement('div'); label.className = 'field-label';
+  const pre = document.createElement('pre'); pre.className = 'permission-code';
+  if (typeof input.command === 'string') { label.textContent = '指令'; pre.textContent = input.command; }
+  else if (typeof input.file_path === 'string') { label.textContent = '檔案'; pre.textContent = input.file_path; }
+  else if (typeof input.url === 'string') { label.textContent = '網址'; pre.textContent = input.url; }
+  else { label.textContent = '內容'; pre.textContent = JSON.stringify(input, null, 2); }
+  wrap.append(label, pre);
+  return wrap;
+}
+function permissionRuleText(entry) {
+  const rules = (entry.suggestions || []).flatMap(s => s.rules || []);
+  return rules.map(rule => rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName).filter(Boolean).join('、');
+}
+function renderPermissionNotice(waiting) {
+  let notice = $('#permission-notice');
+  if (!waiting.length || permissionDialog) { notice?.remove(); return; }
+  if (!notice) {
+    notice = document.createElement('div'); notice.id = 'permission-notice'; notice.className = 'permission-notice'; notice.setAttribute('role', 'status');
+    notice.innerHTML = '<span></span><button type="button" class="primary">檢視</button>';
+    notice.querySelector('button').onclick = () => { permissionLater.clear(); renderPermissions(true); };
+    document.body.append(notice);
+  }
+  notice.querySelector('span').textContent = `AI 等待你允許 ${waiting.length} 個操作`;
+}
+function renderPermissions(force = false) {
+  const waiting = snap?.permissions || [];
+  // 對話框裡的請求已經失效（執行結束、逾時或在別處回答）就關掉。
+  if (permissionDialog && !waiting.some(entry => entry.id === permissionDialog.dataset.id)) permissionDialog.close();
+  const next = waiting.find(entry => force || !permissionLater.has(entry.id));
+  if (permissionDialog || !next) { renderPermissionNotice(waiting); return; }
+  const dialog = document.createElement('dialog'); dialog.className = 'permission-dialog'; dialog.dataset.id = next.id; permissionDialog = dialog;
+  dialog.setAttribute('aria-labelledby', 'permission-title');
+  dialog.innerHTML = `<div class="card-head"><h2 id="permission-title">AI 要求執行操作</h2><span class="hint permission-count"></span></div>
+    <p class="permission-who"></p><p class="permission-desc"></p><div class="permission-body"></div><p class="hint permission-reason"></p>
+    <label class="field-label permission-deny-label">拒絕原因（選填，會告訴 AI）<textarea rows="2" maxlength="2000" placeholder="例如：請改用 pnpm，或先不要安裝這個套件"></textarea></label>
+    <p class="permission-error notice bad" role="alert" hidden></p>
+    <div class="row permission-actions"><button type="button" data-later>稍後決定</button><span class="spacer"></span><button type="button" data-decision="deny">拒絕</button><button type="button" data-decision="allow_session" hidden></button><button type="button" class="primary" data-decision="allow">允許這一次</button></div>`;
+  const others = waiting.length - 1;
+  dialog.querySelector('.permission-count').textContent = others > 0 ? `還有 ${others} 個等待中` : '';
+  dialog.querySelector('.permission-who').textContent = `${next.label || next.scope}・${next.provider === 'codex' ? 'Codex' : 'Claude'} 想使用 ${next.display_name || next.tool}`;
+  dialog.querySelector('.permission-desc').textContent = next.description || '';
+  dialog.querySelector('.permission-body').append(permissionInputView(next));
+  dialog.querySelector('.permission-reason').textContent = next.reason ? `CLI：${next.reason}` : '';
+  const rule = permissionRuleText(next);
+  const session = dialog.querySelector('[data-decision="allow_session"]');
+  if (rule) { session.hidden = false; session.textContent = `這次執行都允許 ${rule}`; session.title = '只在這次 AI 執行期間有效，不會寫進專案的設定檔'; }
+  const error = dialog.querySelector('.permission-error'), reason = dialog.querySelector('textarea');
+  for (const button of dialog.querySelectorAll('[data-decision]')) {
+    button.onclick = async () => {
+      dialog.querySelectorAll('button').forEach(b => b.disabled = true); error.hidden = true;
+      try {
+        await api('/api/permissions/answer', { id: next.id, decision: button.dataset.decision, message: button.dataset.decision === 'deny' ? reason.value : '' });
+        snap.permissions = (snap.permissions || []).filter(entry => entry.id !== next.id);
+        toast(button.dataset.decision === 'deny' ? '已拒絕，AI 會改用其他做法或停下' : '已允許，AI 繼續執行');
+        dialog.close();
+      } catch (err) { error.textContent = err.message; error.hidden = false; dialog.querySelectorAll('button').forEach(b => b.disabled = false); }
+    };
+  }
+  dialog.querySelector('[data-later]').onclick = () => { permissionLater.add(next.id); dialog.close(); };
+  // Esc 等於「稍後決定」，不會被當成拒絕。
+  dialog.addEventListener('cancel', event => { event.preventDefault(); permissionLater.add(next.id); dialog.close(); });
+  dialog.addEventListener('close', () => { permissionDialog = null; dialog.remove(); renderPermissions(); });
+  document.body.append(dialog);
+  if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+  dialog.querySelector('[data-decision="allow"]').focus();
+  renderPermissionNotice(waiting);
+}

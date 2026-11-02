@@ -164,7 +164,11 @@ pub fn project_summary(project: &Value) -> Value {
     let queue_waiting = queue.as_ref().is_some_and(|q| q["state"] == "waiting");
     let mut status = ps.clone();
     let mut reason = state["pipeline"]["reason"].as_str().unwrap_or("").to_string();
-    if is_pid_alive_value(&state["prd"]["pid"]) {
+    let waiting_permission = super::permissions::pending(&root).len();
+    if runner_alive && waiting_permission > 0 {
+        status = "awaiting_permission".into();
+        reason = format!("AI 等待你允許 {waiting_permission} 個操作");
+    } else if is_pid_alive_value(&state["prd"]["pid"]) {
         status = "drafting".into();
         reason = "PRD 起草／審查中".into();
     } else if is_pid_alive_value(&state["task_gen"]["pid"]) {
@@ -192,7 +196,7 @@ pub fn project_summary(project: &Value) -> Value {
     } else if ps == "idle" && prd_status == "none" {
         reason = "尚未開始功能".into();
     }
-    let attention = ["awaiting_approval", "awaiting_tasks", "waiting", "feature_test", "stuck", "error"].contains(&status.as_str());
+    let attention = ["awaiting_permission", "awaiting_approval", "awaiting_tasks", "waiting", "feature_test", "stuck", "error"].contains(&status.as_str());
     let feature = cfg["feature"].as_str().filter(|f| !f.is_empty()).or(state["prd"]["idea"].as_str()).unwrap_or("");
     let queue_position = if queue_waiting { queue.as_ref().unwrap()["position"].clone() } else { Value::Null };
     set(json!({

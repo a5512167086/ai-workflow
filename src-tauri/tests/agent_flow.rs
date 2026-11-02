@@ -544,3 +544,45 @@ fn 實作者的指令被權限擋下且沒有變更時_立刻停下_不送審查
     assert!(args.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "auto"), "{args:?}");
     assert_eq!(read_state(&root)["tasks"]["1"]["fix_round"], 0);
 }
+
+#[test]
+fn 寫入角色要求權限時_等使用者在_app_回答_允許後才執行_結束後沒有殘留請求() {
+    let scenario = json!({ "claude": {
+        "ask": [{ "tool_name": "Bash", "input": { "command": "npm init -y" }, "description": "建立 package.json", "permission_suggestions": [{ "type": "addRules", "rules": [{ "toolName": "Bash", "ruleContent": "npm init *" }], "behavior": "allow", "destination": "localSettings" }] }],
+        "write": { "path": "package.json", "content": "{}" }, "text": "done" } });
+    let (root, mut cfg) = fixture(&["claude"], scenario);
+    cfg["roles"]["implementer"] = json!("claude");
+    save_config(&root, &cfg).unwrap();
+    // 扮演使用者：看到等待中的請求就選「這次執行都允許」。
+    let answerer = {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            for _ in 0..200 {
+                if let Some(entry) = ai_workflow::core::permissions::pending(&root).first() {
+                    assert_eq!(entry["tool"], "Bash");
+                    assert_eq!(entry["input"]["command"], "npm init -y");
+                    assert_eq!(entry["label"], "實作任務 1");
+                    ai_workflow::core::permissions::answer(&root, entry["id"].as_str().unwrap(), "allow_session", "").unwrap();
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            false
+        })
+    };
+    let mut opts = agent(&root, &cfg, "claude", true, Some("implement"));
+    opts.scope = "task-1"; opts.label = "實作任務 1"; opts.role = Some("implementer"); opts.skills = Some(vec![]);
+    let result = run_agent(opts).unwrap();
+    assert!(answerer.join().unwrap(), "應該出現等待回答的權限請求");
+    assert!(result.ok, "{:?}", result.error);
+    assert!(root.join("package.json").exists(), "允許後才執行");
+    let answers = fs::read_to_string(root.join(".fake-cli-answers.jsonl")).unwrap();
+    let answer: Value = serde_json::from_str(answers.lines().next().unwrap()).unwrap();
+    assert_eq!(answer["behavior"], "allow");
+    assert_eq!(answer["updatedPermissions"][0]["destination"], "session");
+    assert!(ai_workflow::core::permissions::pending(&root).is_empty());
+    let args = calls(&root)[0]["args"].clone();
+    assert!(args.as_array().unwrap().windows(2).any(|w| w[0] == "--permission-prompt-tool" && w[1] == "stdio"), "{args}");
+    let log = fs::read_to_string(ai_workflow::core::state::data_dir(&root).join("logs/task-1.log")).unwrap();
+    assert!(log.contains("等待你允許：Bash npm init -y") && log.contains("你允許了這次執行的同類操作"), "{log}");
+}

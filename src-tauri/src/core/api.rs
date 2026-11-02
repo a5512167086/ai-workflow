@@ -73,6 +73,8 @@ pub fn snapshot(root: &Path) -> Result<Value> {
         "taskRevision": super::tasks::revision(root).unwrap_or_default(),
         "taskReferences": super::tasks::group_metadata(root).unwrap_or(Value::Null)["references"],
         "usage": usage_snapshot(root, &cfg),
+        // AI 要求、等使用者允許或拒絕的工具權限（最舊的在前）。
+        "permissions": super::permissions::pending(root),
         "state": state,
     }))
 }
@@ -261,6 +263,8 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "prd/save" => { busy_guard(&snap)?; super::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
         "prd/review" => { busy_guard(&snap)?; spawn(root, &["prd", "--review"]) },
         "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } let result = super::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = super::archive::archive_tasks(root, json!({})); Ok(result) },
+        // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
+        "permissions/answer" => super::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
         "tasks/approve" => { busy_guard(&snap)?; super::human::approve_tasks(root, &text_field(body, "revision")) },
         "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
         "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),

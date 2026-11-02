@@ -61,10 +61,10 @@ pub fn default_global() -> Value {
         "claude": {
             "model": "",
             "effort": "",
-            // 實作者與修正者的權限模式。auto：由 Claude Code 的安全分類器放行一般開發指令（npm install、建專案、跑測試），
-            // 擋下有風險的操作；acceptEdits：只允許編輯檔案，所有指令都會被拒絕（需要的指令另外列在 allowed_tools）。
+            // 實作者與修正者的權限模式。auto：由 Claude Code 的安全分類器放行一般開發指令（npm install、建專案、跑測試）；
+            // acceptEdits：只有編輯檔案自動允許。兩種模式下沒有自動允許的操作都會在 App 跳出對話框問使用者。
             "write_permission_mode": "auto",
-            // 額外預先允許的工具，例如 "Bash(npm test:*)"。
+            // 額外預先允許、不必再問的工具，例如 "Bash(npm test:*)"。
             "allowed_tools": []
         },
         "codex": {

@@ -29,6 +29,7 @@ function page() {
     chat() { return chatSession; },
     renderHumanControls, editHumanPrd, editHumanTask, approveHumanPrd, openInterview,
     parseUnifiedDiff, splitRows, diffView,
+    renderPermissions,
     setDetail(value) { detail = value; },
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
@@ -875,5 +876,48 @@ test('diff 檢視：預設左右並排、可切換單欄，有檔案清單與摘
   // 沒有可解析的檔案時顯示原文。
   const plain = ui.diffView('只是一段文字');
   assert.equal(plain.querySelector('pre').textContent, '只是一段文字');
+  dom.window.close();
+});
+
+test('AI 要求權限時跳出對話框：顯示指令與規則，回答送到後端；稍後決定會留下提示可再打開', async () => {
+  const { dom, ui, doc, w } = page();
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  const ask = id => ({ id, scope: 'task-1', label: '實作任務 1', provider: 'claude', tool: 'Bash', display_name: 'Bash', input: { command: 'npm init -y <b>x</b>' }, description: '建立 package.json', reason: 'This command requires approval', suggestions: [{ rules: [{ toolName: 'Bash', ruleContent: 'npm init *' }] }] });
+  const state = snapshot(); state.permissions = [ask('p1'), ask('p2')];
+  ui.setSnap(state);
+  const requests = [];
+  ui.setApi(async (path, body) => { requests.push({ path, body: JSON.parse(JSON.stringify(body)) }); return {}; });
+  ui.renderPermissions();
+  let dialog = doc.querySelector('dialog.permission-dialog');
+  assert.ok(dialog && dialog.open);
+  assert.equal(dialog.querySelector('.permission-code').textContent, 'npm init -y <b>x</b>');
+  assert.equal(dialog.querySelector('.permission-code b'), null, '指令以純文字顯示');
+  assert.match(dialog.querySelector('.permission-who').textContent, /實作任務 1.*Claude.*Bash/);
+  assert.match(dialog.querySelector('.permission-count').textContent, /還有 1 個/);
+  const session = dialog.querySelector('[data-decision="allow_session"]');
+  assert.equal(session.hidden, false); assert.match(session.textContent, /Bash\(npm init \*\)/);
+  // 允許這一次：送出回答、關掉對話框，接著顯示下一個請求。
+  await dialog.querySelector('[data-decision="allow"]').onclick();
+  assert.deepEqual(requests[0], { path: '/api/permissions/answer', body: { id: 'p1', decision: 'allow', message: '' } });
+  dialog = doc.querySelector('dialog.permission-dialog');
+  assert.equal(dialog.dataset.id, 'p2');
+  // 拒絕時帶上原因。
+  dialog.querySelector('textarea').value = '請改用 pnpm';
+  await dialog.querySelector('[data-decision="deny"]').onclick();
+  assert.deepEqual(requests[1].body, { id: 'p2', decision: 'deny', message: '請改用 pnpm' });
+  assert.equal(doc.querySelector('dialog.permission-dialog'), null);
+  // 稍後決定：關掉對話框但留下提示，按「檢視」再打開；請求失效時對話框自動關閉。
+  state.permissions = [ask('p3')]; ui.setSnap(state); ui.renderPermissions();
+  doc.querySelector('dialog.permission-dialog [data-later]').click();
+  assert.equal(doc.querySelector('dialog.permission-dialog'), null);
+  assert.match(doc.querySelector('#permission-notice').textContent, /等待你允許 1 個操作/);
+  ui.renderPermissions();
+  assert.equal(doc.querySelector('dialog.permission-dialog'), null, '稍後決定的請求不會馬上又跳出來');
+  doc.querySelector('#permission-notice button').click();
+  assert.ok(doc.querySelector('dialog.permission-dialog'));
+  state.permissions = []; ui.setSnap(state); ui.renderPermissions();
+  assert.equal(doc.querySelector('dialog.permission-dialog'), null);
+  assert.equal(doc.querySelector('#permission-notice'), null);
   dom.window.close();
 });
