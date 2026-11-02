@@ -5,11 +5,11 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aipipe::core::api::handle;
-use aipipe::core::config::{default_config, save_config, ROLES};
-use aipipe::core::projects::{add_project, remove_project};
-use aipipe::core::state::{read_state, update_state};
-use aipipe::core::{backlog, chat, human, prd, requirements, tasks};
+use ai_workflow::core::api::handle;
+use ai_workflow::core::config::{default_config, save_config, ROLES};
+use ai_workflow::core::projects::{add_project, remove_project};
+use ai_workflow::core::state::{data_dir, read_state, update_state};
+use ai_workflow::core::{backlog, chat, human, prd, requirements, tasks};
 use common::*;
 use serde_json::{json, Value};
 
@@ -28,14 +28,10 @@ fn scenario(root: &Path, value: Value) {
     fs::write(root.join(".fake-cli.json"), value.to_string()).unwrap();
 }
 
-fn launch(_: &str, _: &str) -> aipipe::core::Result<u32> { Ok(std::process::id()) }
+fn launch(_: &str, _: &str) -> ai_workflow::core::Result<u32> { Ok(std::process::id()) }
 
 fn run(root: &Path, session: &Value) -> Value {
     chat::run_turn(root, session["id"].as_str().unwrap(), session["turn"].as_str().unwrap()).unwrap()
-}
-
-fn calls(root: &Path) -> Vec<Value> {
-    fs::read_to_string(root.join(".aipipe/calls.jsonl")).unwrap_or_default().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
 fn ready_reply() -> String {
@@ -66,7 +62,7 @@ fn 需求釐清至少回答一輪才能確認_確認後才能起草_需求修改
     assert!(prompt.contains("需求釐清會議") && prompt.contains("匯出 CSV") && prompt.contains("財務報表"), "{prompt}");
     assert!(first["args"].as_array().unwrap().windows(2).any(|a| a == [json!("--sandbox"), json!("read-only")]));
     // 會議固定載入 grill-me 技能，並以需求釐清角色記錄 session。
-    let sessions: Vec<Value> = fs::read_dir(root.join(".aipipe/sessions")).unwrap().map(|e| serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap()).collect();
+    let sessions: Vec<Value> = fs::read_dir(data_dir(&root).join("sessions")).unwrap().map(|e| serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap()).collect();
     assert!(sessions.iter().any(|s| s["stage"] == "chat" && s["skills"][0]["name"] == "grill-me"), "{sessions:?}");
 
     // 使用者回答後接續同一個會議，AI 回報 ready 才出現可確認的摘要。
@@ -112,6 +108,7 @@ fn 需求釐清至少回答一輪才能確認_確認後才能起草_需求修改
     // 舊會議仍保留，沒有被覆寫。
     assert!(chat::get_chat(&root, session["id"].as_str().unwrap()).is_ok());
     remove_project(&pid).unwrap();
+    assert_no_app_files(&root);
 }
 
 #[test]
@@ -125,7 +122,7 @@ fn 需求會議對話檔遺失時可重新開始_ai_回傳非_json_時不算完�
     assert_eq!(session["requirementsReady"], false);
     assert_eq!(session["messages"][1]["text"], "我還有幾個問題：1. 誰會用？");
     assert_eq!(session["openQuestions"].as_array().unwrap().len(), 1);
-    fs::remove_file(root.join(".aipipe/chats").join(format!("{}.json", session["id"].as_str().unwrap()))).unwrap();
+    fs::remove_file(data_dir(&root).join("chats").join(format!("{}.json", session["id"].as_str().unwrap()))).unwrap();
     assert!(requirements::get(&root, id).unwrap()["session"].is_null());
     let restarted = requirements::start(&root, &json!({ "id": id }), &launch).unwrap();
     assert_ne!(restarted["session"]["id"], session["id"]);
@@ -226,8 +223,9 @@ fn 人工編輯_prd_存成新版本並撤回任務核准_可只重新審查_核�
     let saved = prd::save_manual(&root, "# PRD\n人工版本", &json!(1), &scope).unwrap();
     assert_eq!(saved["version"], 2);
     assert_eq!(prd::current_prd(&root), "# PRD\n人工版本");
-    assert_eq!(fs::read_to_string(root.join(".aipipe/prd/v1.md")).unwrap(), "# PRD\n由 AI 起草");
-    assert_eq!(fs::read_to_string(root.join(".aipipe/prd/v2.md")).unwrap(), "# PRD\n人工版本");
+    let prd_dir = data_dir(&root).join("prd");
+    assert_eq!(fs::read_to_string(prd_dir.join("v1.md")).unwrap(), "# PRD\n由 AI 起草");
+    assert_eq!(fs::read_to_string(prd_dir.join("v2.md")).unwrap(), "# PRD\n人工版本");
     let state = read_state(&root);
     assert_eq!(state["prd"]["status"], "awaiting_approval");
     assert!(state["prd"]["human_edited_at"].is_string());
@@ -257,7 +255,7 @@ fn 人工編輯_prd_存成新版本並撤回任務核准_可只重新審查_核�
     assert_eq!(last["kind"], "review");
     assert_eq!(last["verdict"], "APPROVE");
     assert_eq!(last["version"], 2);
-    assert!(fs::read_to_string(root.join(".aipipe/prd").join(last["file"].as_str().unwrap())).unwrap().contains("VERDICT: APPROVE"));
+    assert!(fs::read_to_string(prd_dir.join(last["file"].as_str().unwrap())).unwrap().contains("VERDICT: APPROVE"));
 
     // API 核准帶版本：過期版本或錯誤範圍都被拒絕，PRD 狀態不變。
     let p = add_project(&root, None).unwrap();

@@ -8,7 +8,7 @@ Task Master 的任務格式、PRD 拆解與依賴排程是設計參考；本專�
 
 ## 任務資料
 
-`aipipe tasks` 把已核准 PRD 交給設定的作者 AI，要求輸出 JSON 任務。內建引擎驗證 ID、依賴存在性與循環，再以原子寫入及跨程序鎖保存到專案 `.aipipe/tasks.json`。每個功能有自己的群組，保存 PRD 版本、產生任務的 provider／session 與狀態事件。資料在本機；核准功能的任務清單另外隨功能封存，可提交 Git。
+`ai-workflow tasks` 把已核准 PRD 交給設定的拆任務 AI，要求輸出 JSON 任務。內建引擎驗證 ID、依賴存在性與循環，再以原子寫入及跨程序鎖保存到該專案的資料目錄 `~/.ai-workflow/projects/<id>/tasks.json`。每個功能有自己的群組，保存 PRD 版本、產生任務的 provider／session 與狀態事件。資料都在使用者目錄，不在專案裡；核准功能的任務清單另外隨功能封存在同一個資料目錄的 `archive/`。
 
 任務包含 title、description、details、testStrategy、priority、dependencies、status、subtasks，可額外帶 requirement_ids、acceptanceCriteria、skills。AI 產生的需求對照仍須人工檢視；程式的圖形驗證不等於需求完整性審查。
 
@@ -20,7 +20,7 @@ Task Master 的任務格式、PRD 拆解與依賴排程是設計參考；本專�
 
 ## 共用技能
 
-App 預設提供 `grill-me` 與 `uiux-design`。技能庫在專案 `.aipipe/skills/<name>/`，每個技能包含標準 YAML frontmatter 與 Markdown 指令：
+App 預設提供 `grill-me` 與 `uiux-design`。技能庫在該專案的資料目錄 `~/.ai-workflow/projects/<id>/skills/<name>/`，每個技能包含標準 YAML frontmatter 與 Markdown 指令：
 
 ```markdown
 ---
@@ -33,15 +33,15 @@ description: 說明技能用途及使用時機。
 可帶 references、scripts、assets 等相對資源。匯入會保留完整目錄；不自動執行腳本。單一技能上限 500 個檔案、10 MB，SKILL.md 上限 100 KB；符號連結不支援。
 
 ```bash
-aipipe skills list
-aipipe skills import <包含-SKILL.md-的資料夾>
-aipipe skills run grill-me --input "我要做報表工具" --provider codex
-aipipe skills run grill-me --input "使用者是財務人員" --session <上次回覆-id>
+ai-workflow skills list
+ai-workflow skills import <包含-SKILL.md-的資料夾>
+ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
+ai-workflow skills run grill-me --input "使用者是財務人員" --session <上次回覆-id>
 ```
 
 在桌面 UI 的「Skills」頁可匯入／編輯技能、選擇執行器、接續會議，以及將會議帶入 PRD 需求欄位。每次送出建立全新 CLI session，透過明確的會議紀錄交接；不 resume 原 session。
 
-設定 skills 可將技能綁定到 prd、prd_review、tasks、implement、code_review、fix、handover 階段，預設皆為空。任務自己的 skills 在實作、修正與程式碼審查時一起載入。
+全域設定的 skills 可將技能綁定到 prd、prd_review、tasks、implement、code_review、fix、handover 階段，預設皆為空。任務自己的 skills 在實作、修正與程式碼審查時一起載入。
 
 ```json
 {
@@ -53,10 +53,10 @@ aipipe skills run grill-me --input "使用者是財務人員" --session <上次�
 }
 ```
 
-同一份可攜式 Skill 指令由 App 明確放入 Codex／Claude Code 的 prompt，搭配對應 runtime 的資源路徑；不修改使用者全域的原生技能目錄，也不依賴 slash command 自動觸發。每次執行將內容與資源雜湊，保存快照於 `.aipipe/tmp/skills/`，session 紀錄在 `.aipipe/sessions/`。
+同一份可攜式 Skill 指令由 App 明確放入 Codex／Claude Code 的 prompt，搭配對應 runtime 的資源路徑；不修改使用者全域的原生技能目錄，也不依賴 slash command 自動觸發。每次執行將內容與資源雜湊，保存快照於資料目錄的 `tmp/skills/`，session 紀錄在 `sessions/`。
 
 共用模式接受 name、description、metadata、license、compatibility。Claude 專屬的 hooks、context、agent、allowed-tools 等欄位可保存但會顯示不相容，執行前需人工轉寫；不默默忽略它們或改變權限。MCP、圖片生成、設計預覽等工具能力仍由實際 CLI 環境提供。
 
 Grill Me 會議屬唯讀釐清，會議中 AI 的建議不等於已確認需求；轉入 PRD 時仍由使用者作決策。
 
-需求待辦的「釐清需求」就是以 `grill-me` 主持的需求會議：`interviewer` 角色的 AI 先查專案與參考資料，每輪提出 1–4 個問題，至少回答一輪後才會產生可編輯的需求摘要；使用者確認摘要後才能起草 PRD。會議以 `kind: requirements` 的對話保存在 `.aipipe/chats/`，不出現在專案對話清單；需求標題、說明或參考資料修改後，舊會議與確認即失效，需要重新釐清。
+需求待辦的「釐清需求」就是以 `grill-me` 主持的需求會議：`interviewer` 角色的 AI 先查專案與參考資料，每輪提出 1–4 個問題，至少回答一輪後才會產生可編輯的需求摘要；使用者確認摘要後才能起草 PRD。會議以 `kind: requirements` 的對話保存在資料目錄的 `chats/`，不出現在專案對話清單；需求標題、說明或參考資料修改後，舊會議與確認即失效，需要重新釐清。

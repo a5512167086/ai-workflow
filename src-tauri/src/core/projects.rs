@@ -1,11 +1,12 @@
-//! 全域專案清單（對應 legacy/src/projects.js）：~/.aipipe/projects.json。只記錄路徑與使用時間，專案本身的狀態仍在各自的 .aipipe/。
+//! 全域專案清單：<home>/projects.json。記錄路徑、名稱與使用時間；專案本身的流程資料在 <home>/projects/<id>/。
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 
-use super::config::{load_config, CONFIG_FILE};
-use super::home::{aipipe_home, with_lock};
+use super::config::{load_config, project_registered};
+use super::home::{app_home, with_lock};
+use super::init::{init_project, prepare_project, InitOptions};
 use super::queue::queue_entry_for;
 use super::state::{is_pid_alive_value, read_state};
 use super::tasks::read_tasks;
@@ -13,7 +14,7 @@ use super::util::{now_iso, read_json, resolve, write_json};
 use super::Result;
 
 fn file() -> PathBuf {
-    aipipe_home().join("projects.json")
+    app_home().join("projects.json")
 }
 
 fn key(p: &Path) -> String {
@@ -21,7 +22,7 @@ fn key(p: &Path) -> String {
     if cfg!(windows) { s.to_lowercase() } else { s }
 }
 
-/// 與 Node 版相同：sha1(正規化路徑) 的前 10 碼，舊的 /p/<id>/ 網址與通知都沿用。
+/// sha1(正規化路徑) 的前 10 碼；也是 <home>/projects/<id>/ 的資料夾名稱。
 pub fn project_id(root: &Path) -> String {
     hex::encode(Sha1::digest(key(root).as_bytes()))[..10].to_string()
 }
@@ -60,14 +61,17 @@ pub fn find_project_by_path(dir: &Path) -> Option<Value> {
     list_projects().into_iter().find(|p| key(&path_of(p)) == key(dir))
 }
 
-/// 加入專案（已存在就只更新名稱）。資料夾必須存在且已有 .aipipe.json。
+/// 加入專案（已存在就只更新名稱）。資料夾必須存在且是 git repo；第一次加入時自動偵測 build/test/lint 指令，
+/// 並把舊版留在專案裡的資料搬到 <home>/projects/<id>/。專案資料夾裡不會新增任何檔案。
 pub fn add_project(dir: &Path, name: Option<&str>) -> Result<Value> {
     let root = resolve(dir);
     if !root.is_dir() {
         crate::bail!("資料夾不存在：{}", root.display());
     }
-    if !root.join(CONFIG_FILE).exists() {
-        crate::bail!("{} 還沒有 {CONFIG_FILE}，請先執行 aipipe init", root.display());
+    if !project_registered(&root) {
+        init_project(&root, &InitOptions::default())?;
+    } else {
+        prepare_project(&root);
     }
     let name = name.map(str::trim).filter(|n| !n.is_empty());
     with_lock("projects", || {
@@ -90,7 +94,7 @@ pub fn add_project(dir: &Path, name: Option<&str>) -> Result<Value> {
     })
 }
 
-/// 依 id、路徑或名稱移除；只移出清單，不刪任何檔案。
+/// 依 id、路徑或名稱移除；只移出清單，不刪任何檔案（<home>/projects/<id>/ 也保留）。
 pub fn remove_project(reference: &str) -> Result<Value> {
     with_lock("projects", || {
         let mut projects = load();
@@ -120,8 +124,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_id_與_node_版相同() {
-        // 數值由 legacy/src/projects.js 的 projectId 算出
+    fn project_id_與舊版相同() {
         assert_eq!(project_id(Path::new("C:/codebase-win/ai-workflow")), "717d44b62a");
         assert_eq!(project_id(Path::new("C:/Users/x/My Proj/")), "9c415ea475");
     }
@@ -138,8 +141,8 @@ pub fn project_summary(project: &Value) -> Value {
             out[k] = v.clone();
         }
     };
-    if !root.join(CONFIG_FILE).exists() {
-        set(json!({ "status": "missing", "attention": false, "reason": "找不到資料夾或 .aipipe.json" }));
+    if !root.is_dir() || !project_registered(&root) {
+        set(json!({ "status": "missing", "attention": false, "reason": "找不到專案資料夾或專案資料" }));
         return out;
     }
     let cfg = match load_config(&root) {

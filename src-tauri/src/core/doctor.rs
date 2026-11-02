@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn doctor_另一環境缺_cli_不會阻擋目前專案的單_ai_模式() {
-        let root = temp_dir("aipipe-doctor-");
+        let root = temp_dir("doctor-");
         let runtime = project_environment(&root).runtime;
         let report = doctor_report_with(&root, &|_, cfg, provider| json!({
             "installed": provider == "codex",

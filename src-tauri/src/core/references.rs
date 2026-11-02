@@ -1,6 +1,6 @@
-//! Immutable, project-local reference snapshots shared by all workflow stages.
+//! Immutable reference snapshots (stored in the project data dir) shared by all workflow stages.
 use super::{
-    state::aipipe_dir,
+    state::data_dir,
     util::{now_iso, write_json},
     AppError, Result,
 };
@@ -15,7 +15,7 @@ use std::{
 const MAX_FILE: u64 = 20 * 1024 * 1024;
 const MAX_TOTAL: u64 = 64 * 1024 * 1024;
 fn directory(root: &Path) -> PathBuf {
-    aipipe_dir(root).join("references")
+    data_dir(root).join("references")
 }
 fn reference_dir(root: &Path, id: &str) -> Result<PathBuf> {
     if uuid::Uuid::parse_str(id).is_err() || id.len() != 36 {
@@ -99,6 +99,7 @@ fn skip(name: &str) -> bool {
         name.to_lowercase().as_str(),
         ".git"
             | ".aipipe"
+            | ".ai-workflow"
             | "node_modules"
             | "target"
             | "dist"

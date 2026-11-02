@@ -1,8 +1,8 @@
-//! 測試用的假 claude / codex CLI（取代 legacy 測試裡的 .cjs）。整合測試把這個 exe 複製成 claude.exe、codex.exe，
+//! 測試用的假 claude / codex CLI。整合測試把這個 exe 複製成 claude.exe、codex.exe，
 //! 用檔名判斷扮演哪一個；行為由 cwd 裡的 .fake-cli.json 決定：
 //! { "<provider>": { "rules": [{ "contains": "...", "text": "..." }], "text": "預設回覆", "fail": "失敗訊息",
 //!                  "events": ["原始 stdout 行", ...], "write": { "path": "相對路徑", "content": "..." } } }
-//! 每次執行都把 { provider, pid, args, prompt } 附加到 cwd/.aipipe/calls.jsonl。
+//! 每次執行都把 { provider, pid, args, prompt } 附加到 cwd/.fake-cli-calls.jsonl。
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::Path;
@@ -44,9 +44,8 @@ fn app_server() {
 fn run(provider: &str, me: &Value, args: &[String]) {
     let mut prompt = String::new();
     std::io::stdin().read_to_string(&mut prompt).unwrap();
-    fs::create_dir_all(".aipipe").unwrap();
     let record = json!({ "provider": provider, "pid": std::process::id(), "args": args, "prompt": prompt });
-    let mut log = fs::OpenOptions::new().create(true).append(true).open(Path::new(".aipipe").join("calls.jsonl")).unwrap();
+    let mut log = fs::OpenOptions::new().create(true).append(true).open(".fake-cli-calls.jsonl").unwrap();
     writeln!(log, "{record}").unwrap();
     if let Some(ms) = me["delay_ms"].as_u64() { std::thread::sleep(std::time::Duration::from_millis(ms)); }
 

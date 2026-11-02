@@ -1,10 +1,10 @@
 mod common;
-use aipipe::core::{
+use ai_workflow::core::{
     agents::claude_input,
     backlog,
     config::default_config,
     references,
-    state::{read_state, update_state},
+    state::{data_dir, read_state, update_state},
     tasks,
 };
 use serde_json::{json, Value};
@@ -15,7 +15,7 @@ fn text(root: &std::path::Path, name: &str, value: &str) -> Value {
     references::import(root, &json!({"path":root.join(name)})).unwrap()
 }
 #[test]
-fn 快照持久保存且不依賴原始檔案_內容變更會被偵測() {
+fn 快照持久保存在資料目錄且不依賴原始檔案_內容變更會被偵測() {
     let root = common::project();
     let item = text(&root, "外部 設計.md", "驗收：必須支援登入");
     let id = item["id"].as_str().unwrap();
@@ -25,8 +25,9 @@ fn 快照持久保存且不依賴原始檔案_內容變更會被偵測() {
         references::prepare(&root, &cfg, None, "chat", &|p| p.display().to_string()).unwrap();
     assert!(prepared.text.contains("驗收：必須支援登入"));
     assert_eq!(references::list(&root).len(), 1);
-    let cache = root
-        .join(".aipipe/references")
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "快照不放在專案資料夾");
+    let cache = data_dir(&root)
+        .join("references")
         .join(id)
         .join("files/外部 設計.md");
     fs::write(cache, "改過的快照").unwrap();
@@ -39,7 +40,7 @@ fn 快照持久保存且不依賴原始檔案_內容變更會被偵測() {
     );
 }
 #[test]
-fn 資料夾保留樹狀結構且排除套件金鑰與自身資料() {
+fn 資料夾保留樹狀結構且排除套件金鑰與舊版資料() {
     let root = common::project();
     for name in [
         "docs/規格.md",
@@ -48,6 +49,7 @@ fn 資料夾保留樹狀結構且排除套件金鑰與自身資料() {
         ".env",
         "secret.pem",
         "src/app.rs",
+        ".aipipe/state.json",
     ] {
         let p = root.join(name);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -55,7 +57,7 @@ fn 資料夾保留樹狀結構且排除套件金鑰與自身資料() {
     }
     let item = references::import(&root, &json!({"path":root})).unwrap();
     assert_eq!(item["fileCount"], 2);
-    assert!(item["excludedCount"].as_u64().unwrap() >= 4);
+    assert!(item["excludedCount"].as_u64().unwrap() >= 5);
     let names: Vec<_> = item["files"]
         .as_array()
         .unwrap()
@@ -108,7 +110,7 @@ fn 參考跟隨功能與父子任務且不洩漏到其他功能() {
 #[test]
 fn 需求附件原子保存_錯誤附件不會留下半筆需求() {
     let root = common::project();
-    aipipe::core::config::save_config(&root, &default_config()).unwrap();
+    ai_workflow::core::config::save_config(&root, &default_config()).unwrap();
     let a = text(&root, "spec.md", "spec");
     let item =
         backlog::add_item_with_references(&root, Some(&json!("需求")), None, &json!([a["id"]]))
@@ -162,8 +164,8 @@ fn 貼上與上傳驗證名稱與大小_無文字_pdf_保留警告() {
     assert!(references::import(&root, &json!({"name":"hi.txt","data":"not base64"})).is_err());
     let pdf = references::import(&root, &json!({"name":"scan.pdf","data":"JVBERi0xLjc="})).unwrap();
     assert!(!pdf["warnings"].as_array().unwrap().is_empty());
-    assert!(root
-        .join(".aipipe/references")
+    assert!(data_dir(&root)
+        .join("references")
         .join(pdf["id"].as_str().unwrap())
         .join("files/scan.pdf")
         .exists());
@@ -228,8 +230,8 @@ fn pdf_擷取文字可交給兩種_cli_閱讀() {
     fs::write(root.join("spec.pdf"), pdf).unwrap();
     let item = references::import(&root, &json!({"path":root.join("spec.pdf")})).unwrap();
     assert_eq!(item["text"].as_array().unwrap().len(), 1, "{item}");
-    let sidecar = root
-        .join(".aipipe/references")
+    let sidecar = data_dir(&root)
+        .join("references")
         .join(item["id"].as_str().unwrap())
         .join("text/spec.pdf.extracted.txt");
     assert!(fs::read_to_string(sidecar)

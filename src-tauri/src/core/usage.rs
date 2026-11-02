@@ -1,4 +1,4 @@
-//! 用量與訂閱額度（對應 legacy/src/usage.js）。存在 .aipipe/usage.json。
+//! 用量與訂閱額度。每個專案的用量存在資料目錄的 usage.json；訂閱額度屬於帳號，存在 <home>/limits.json。
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -8,14 +8,14 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::home::{aipipe_home, with_lock};
+use super::home::{app_home, with_lock};
 use super::proc::{query_codex_rpc, resolve_cli_for, run, CliSpec, RunOpts};
 use super::runtime::cli_environment;
 use super::util::{now_iso, read_json, resolve, write_json};
 use super::Result;
 
 pub fn usage_file(root: &Path) -> PathBuf {
-    root.join(".aipipe").join("usage.json")
+    super::state::data_dir(root).join("usage.json")
 }
 
 fn number(v: &Value) -> Option<f64> {
@@ -248,9 +248,9 @@ pub fn record_telemetry(root: &Path, session: &Value, telemetry: &Value) -> Resu
     Ok(())
 }
 
-/// 訂閱額度屬於帳號而不是專案：存在 ~/.aipipe/limits.json，所有專案共用。鍵是 provider|runtime|distro。
+/// 訂閱額度屬於帳號而不是專案：存在 <home>/limits.json，所有專案共用。鍵是 provider|runtime|distro。
 fn limits_file() -> PathBuf {
-    aipipe_home().join("limits.json")
+    app_home().join("limits.json")
 }
 
 /// 寫入一組額度視窗。replace=true 時整組取代（主動查詢的完整結果）；false 時依名稱合併（執行中 CLI 回報的單一視窗）。
@@ -466,8 +466,7 @@ mod tests {
 
     #[test]
     fn 專案用量按_session_id_更新_跨環境帳號額度分開() {
-        std::env::set_var("AIPIPE_HOME", temp_dir("aipipe-usage-home-"));
-        let root = temp_dir("aipipe-usage-");
+        let root = temp_dir("usage-");
         let mut cfg = default_config();
         cfg["runtime"] = json!({ "claude": "windows", "codex": "windows" });
         cfg["cli"]["codex"] = json!(std::env::current_exe().unwrap().to_string_lossy());
@@ -493,7 +492,7 @@ mod tests {
         assert_eq!(limits["windows"][0]["remainingPercent"], 70);
         assert_eq!(limits["windows"][0]["expired"], true);
         // 額度存在全域，另一個專案也看得到；CLI 執行中回報的同名視窗會合併而不是整組覆蓋。
-        let other = temp_dir("aipipe-usage-other-");
+        let other = temp_dir("usage-other-");
         let claude = |s: &Value| s["providers"].as_array().unwrap().iter().find(|r| r["provider"] == "claude").unwrap().clone();
         assert_eq!(claude(&usage_snapshot(&other, &cfg))["limits"]["windows"][0]["remainingPercent"], 48);
         let mut t = Telemetry::new("claude");

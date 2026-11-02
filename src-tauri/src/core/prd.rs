@@ -1,4 +1,4 @@
-//! PRD 起草、交叉審查、修訂與核准（對應 legacy/src/prd.js）。
+//! PRD 起草、交叉審查、修訂與核准。各版 PRD 與審查意見放在專案資料目錄的 prd/。
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,14 +8,14 @@ use super::agents::{combine_reviews, run_agent, run_reviews, AgentOpts};
 use super::archive::{archive_prd, archive_tasks};
 use super::config::cfg_str;
 use super::prompts::{prd_draft_prompt, prd_review_prompt, prd_revise_prompt, strip_outer_fence};
-use super::state::{aipipe_dir, append_log, is_pid_alive, pid_of, read_state, update_state};
+use super::state::{append_log, data_dir, is_pid_alive, pid_of, prd_file, read_state, update_state};
 use super::util::{now_iso, read_text};
 use super::Result;
 
 const SCOPE: &str = "prd";
 
 fn prd_dir(root: &Path) -> PathBuf {
-    aipipe_dir(root).join("prd")
+    data_dir(root).join("prd")
 }
 
 pub fn current_prd(root: &Path) -> String {
@@ -86,7 +86,7 @@ fn review_loop(root: &Path, cfg: &Value) -> Result<()> {
         add_round(root, json!({ "kind": "revise", "round": round, "provider": provider, "version": v, "file": format!("v{v}.md") }))?;
     }
     set_prd_status(root, "awaiting_approval")?;
-    append_log(root, SCOPE, "等待使用者在 UI 核准 PRD（或執行 aipipe prd --approve）");
+    append_log(root, SCOPE, "等待使用者在 UI 核准 PRD（或執行 ai-workflow prd --approve）");
     Ok(())
 }
 
@@ -155,7 +155,7 @@ pub fn draft_prd(root: &Path, cfg: &Value, idea: &str, backlog_id: Option<&str>)
 pub fn revise_prd(root: &Path, cfg: &Value, feedback: &str) -> Result<()> {
     let prd = current_prd(root);
     if prd.is_empty() {
-        crate::bail!("還沒有 PRD，請先執行 aipipe prd \"<想法>\"");
+        crate::bail!("還沒有 PRD，請先執行 ai-workflow prd \"<想法>\"");
     }
     guard(root)?;
     with_error_state(root, || {
@@ -185,7 +185,7 @@ pub fn approve_prd(root: &Path, cfg: &Value) -> Result<PathBuf> {
     if status != "awaiting_approval" && status != "approved" {
         crate::bail!("PRD 目前狀態是 {status}，不能核准");
     }
-    let target = root.join(cfg_str(cfg, "prd_path"));
+    let target = prd_file(root);
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -194,7 +194,7 @@ pub fn approve_prd(root: &Path, cfg: &Value) -> Result<PathBuf> {
         s["prd"]["status"] = json!("approved");
         s["prd"]["approved_at"] = json!(now_iso());
     })?;
-    append_log(root, SCOPE, &format!("PRD 已核准，寫入 {}", cfg_str(cfg, "prd_path")));
+    append_log(root, SCOPE, &format!("PRD 已核准，寫入 {}", target.display()));
     match archive_prd(root, cfg) {
         Ok(dir) => append_log(root, SCOPE, &format!("PRD 與每輪紀錄已封存到 {dir}")),
         Err(err) => append_log(root, SCOPE, &format!("⚠ 封存 PRD 失敗：{}", err.message)),

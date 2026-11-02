@@ -17,8 +17,6 @@ const COLUMNS = [
 // 需要人回應的流程狀態：「我測完了，繼續」在這些狀態下變成主要按鈕。
 const NEEDS_HUMAN = ['waiting', 'feature_test', 'stuck', 'error'];
 
-const SETTINGS_ONLY = new URLSearchParams(location.search).has('settings');
-if (SETTINGS_ONLY) document.body.classList.add('settings-only');
 let quotaDismissed = '';
 let snap = null;
 let selected = null;
@@ -27,13 +25,13 @@ let detail = null;
 const logs = {};
 let prdView = (() => {
   try {
-    return localStorage.getItem('aipipe-prd-view') === 'raw' ? 'raw' : 'preview';
+    return localStorage.getItem('ai-workflow-prd-view') === 'raw' ? 'raw' : 'preview';
   } catch {
     return 'preview';
   }
 })();
 let rounds = [];
-let boardView = (() => { try { return localStorage.getItem('aipipe-board-view') === 'roadmap' ? 'roadmap' : 'kanban'; } catch { return 'kanban'; } })();
+let boardView = (() => { try { return localStorage.getItem('ai-workflow-board-view') === 'roadmap' ? 'roadmap' : 'kanban'; } catch { return 'kanban'; } })();
 const COLUMN_LABELS = Object.fromEntries(COLUMNS);
 
 function childTasks(task) {
@@ -124,7 +122,7 @@ function renderBoardView(facts) {
 
 function column(task, ts) {
   const phase = ts?.phase;
-  // aipipe 自己的階段優先；沒跑過的任務才看 任務引擎的狀態。
+  // 流程自己記錄的階段優先；沒跑過的任務才看任務引擎的狀態。
   if (phase === 'awaiting_test') return 'test';
   if (phase === 'reviewing') return 'review';
   if (phase === 'implementing' || phase === 'stuck') return 'doing';
@@ -138,7 +136,7 @@ function renderTop() {
   const { state, config, root } = snap;
   $('#project').textContent = root;
   $('#project').title = root;
-  if (snap.project) document.title = `${snap.project.name} — aipipe`;
+  if (snap.project) document.title = `${snap.project.name} — ai-workflow`;
   const st = state.pipeline.status;
   const pill = $('#pipeline-status');
   pill.querySelector('.pill-text').textContent = STATUS_TEXT[st] || st;
@@ -146,11 +144,7 @@ function renderTop() {
   pill.setAttribute('aria-label', `流程狀態：${STATUS_TEXT[st] || st}`);
   $('#pipeline-reason').textContent = state.pipeline.reason || '';
   $('#pipeline-reason').title = state.pipeline.reason || '';
-  for (const b of $$('[data-mode]')) {
-    const on = b.dataset.mode === config.mode;
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-checked', String(on));
-  }
+  $('#runner-info').title = config.mode === 'auto' ? '自動模式（全域設定）' : '手動模式（全域設定）';
 }
 
 const tokenNumber = value => typeof value === 'number' ? value.toLocaleString('zh-TW') : '未知';
@@ -269,7 +263,7 @@ function renderPrd() {
 }
 
 // PRD 與每輪紀錄都是 Markdown：預覽用 markdown.js 安全渲染（不允許原始 HTML），原始模式顯示原文。
-// 舊版 aipipe ui 程序還沒提供 /markdown.js 時，退回只顯示原文。
+// 沒有載入 markdown.js 時，退回只顯示原文。
 const canRender = () => typeof window.renderMarkdown === 'function';
 
 function renderPrdBody() {
@@ -610,13 +604,28 @@ function renderLog() {
   renderLogTree($('#rec-body'), logs[$('#log-scope').value]);
 }
 
-let settingsDirty = false;
-function renderSettings() {
+// ---------- 這個專案自己的欄位：build/test/lint、功能名稱、context 檔（其他設定都是全域的，在總覽的設定頁） ----------
+let projectSettingsDirty = false;
+function renderProjectSettings() {
+  if (!snap || projectSettingsDirty) return; // 不覆蓋使用者還沒儲存的輸入
   const { config } = snap;
-  $('#config-json').textContent = JSON.stringify(config, null, 2);
-  if (settingsDirty) return; // 不覆蓋使用者還沒儲存的選擇
-  for (const s of $$('[data-runtime]')) s.value = config.runtime?.[s.dataset.runtime] || 'auto';
-  renderModels();
+  for (const input of $$('[data-command]')) input.value = config.commands?.[input.dataset.command] || '';
+  $('#pc-feature').value = config.feature || '';
+  $('#pc-context').value = (config.context_files || []).join('\n');
+  $('#pc-data-dir').textContent = snap.dataDir ? `流程資料：${snap.dataDir}` : '';
+}
+async function saveProjectSettings() {
+  const commands = Object.fromEntries($$('[data-command]').map(input => [input.dataset.command, input.value]));
+  const context_files = $('#pc-context').value.split('\n').map(line => line.trim()).filter(Boolean);
+  try {
+    const { config } = await api('/api/config/project', { commands, feature: $('#pc-feature').value, context_files });
+    if (snap) snap.config = config;
+    projectSettingsDirty = false;
+    renderProjectSettings();
+    toast('已儲存專案設定');
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 let detailTimer = null;
@@ -632,7 +641,7 @@ function onState(data) {
   $('#quota-message').textContent = blocked ? `${blocked.message}。可確認後改用另一個 AI 繼續；實作與審查會分開建立 session。` : '';
   if (skillChanged) loadSkillRuns().catch(err => toast(err.message, true));
   $('#skill-run').disabled = !!(data.skillBusy || data.runnerAlive || data.prdBusy || data.taskGenBusy);
-  renderSettings();
+  renderProjectSettings();
   renderTop();
   renderUsage();
   renderPrd();
@@ -1038,26 +1047,20 @@ function renderRecords() {
   body.scrollTop = keep;
 }
 
-// ---------- 設定：AI 角色與模型 ----------
-const ROLE_LABELS = { author: 'PRD 作者', reviewer: 'PRD 審查', task_planner: '拆任務', implementer: '實作', fixer: '修正', code_reviewer: '程式碼審查', handover: 'Handover（交接紀錄）', chat: '專案對話', interviewer: '需求釐清（Grill Me）' };
+// ---------- 模型清單（聊天的模型選單用；角色設定在總覽的全域設定頁） ----------
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 let modelOptions = null;
-let modelDraft = null;
-let modelsDirty = false;
 
 async function loadModels() {
   if (modelOptions) return;
-  $('#models-status').textContent = '正在從 CLI 讀取可用的模型…';
   try {
     modelOptions = await api('/api/models');
     for (const p of ['claude', 'codex']) {
       $(`#models-${p}`).replaceChildren(...modelOptions[p].models.map((m) => Object.assign(document.createElement('option'), { value: m.id, label: m.name })));
     }
-    $('#models-status').textContent = modelOptions.codex.error || '';
-    renderModels();
     if (typeof renderChatOptions === 'function') renderChatOptions();
   } catch (err) {
-    $('#models-status').textContent = err.message;
+    toast(err.message, true);
   }
 }
 
@@ -1068,95 +1071,16 @@ function effortsFor(provider, model) {
   return found?.efforts?.length ? found.efforts : [...new Set(list.flatMap((m) => m.efforts || []))];
 }
 
-function renderModels(force = false) {
-  if (!snap) return;
-  if (!force && $('#role-models').contains(document.activeElement)) return;
-  if (!modelsDirty) {
-    modelDraft = { roles: structuredClone(snap.config.roles), models: structuredClone(snap.config.models || {}) };
-    for (const [role, parent] of [['interviewer', 'author'], ['task_planner', 'author'], ['fixer', 'implementer'], ['handover', 'implementer'], ['chat', 'author']]) {
-      modelDraft.roles[role] ??= modelDraft.roles[parent];
-      modelDraft.models[role] ??= structuredClone(modelDraft.models[parent] || {});
-    }
-  }
-  const box = $('#role-models');
-  box.replaceChildren();
-  for (const [role, label] of Object.entries(ROLE_LABELS)) {
-    const row = document.createElement('fieldset');
-    row.className = 'role-row';
-    const legend = document.createElement('legend');
-    legend.textContent = label;
-    const pick = document.createElement('select');
-    pick.setAttribute('aria-label', `${label} 使用的 AI`);
-    const choices = [['claude', 'Claude Code'], ['codex', 'Codex']];
-    if (role === 'reviewer' || role === 'code_reviewer') choices.push(['both', '雙人審查（Claude ＋ Codex）']);
-    for (const [v, text] of choices) pick.append(new Option(text, v, false, modelDraft.roles[role] === v));
-    pick.onchange = () => {
-      modelDraft.roles[role] = pick.value;
-      modelsDirty = true;
-      renderModels(true);
-    };
-    row.append(legend, pick);
-    const providers = modelDraft.roles[role] === 'both' ? ['claude', 'codex'] : [modelDraft.roles[role]];
-    for (const p of providers) {
-      const cur = modelDraft.models?.[role]?.[p] || { model: '', effort: '' };
-      const line = document.createElement('div');
-      line.className = 'model-line';
-      const who = document.createElement('span');
-      who.className = `lg-who ${p}`;
-      who.textContent = PROVIDER_LABEL[p];
-      const model = document.createElement('input');
-      model.type = 'text';
-      model.setAttribute('list', `models-${p}`);
-      model.placeholder = `預設（${snap.config[p]?.model || 'CLI 預設'}）`;
-      model.placeholder = '沿用預設';
-      model.title = '可選擇完整版本或直接輸入模型 ID';
-      model.value = cur.model || '';
-      model.setAttribute('aria-label', `${label}：${PROVIDER_LABEL[p]} 模型`);
-      const effort = document.createElement('select');
-      effort.setAttribute('aria-label', `${label}：${PROVIDER_LABEL[p]} 推理強度`);
-      const fillEfforts = () => {
-        const options = effortsFor(p, model.value);
-        effort.replaceChildren(new Option('推理強度：預設', ''), ...options.map((e) => new Option(e, e)));
-        if (cur.effort && !options.includes(cur.effort)) effort.append(new Option(cur.effort, cur.effort));
-        effort.value = cur.effort || '';
-      };
-      fillEfforts();
-      const save = () => {
-        modelDraft.models[role] ??= {};
-        modelDraft.models[role][p] = { model: model.value.trim(), effort: effort.value };
-        cur.model = model.value.trim();
-        cur.effort = effort.value;
-        modelsDirty = true;
-      };
-      model.addEventListener('input', save);
-      model.addEventListener('change', () => { save(); fillEfforts(); });
-      effort.addEventListener('change', save);
-      const defaults = document.createElement('p');
-      defaults.className = 'hint model-defaults';
-      const providerInfo = modelOptions?.[p];
-      const defaultEntry = providerInfo?.models.find(m => m.default);
-      const defaultModel = snap.config[p]?.model || providerInfo?.defaultModel || defaultEntry?.id;
-      const defaultEffort = snap.config[p]?.effort || providerInfo?.defaultEffort || defaultEntry?.defaultEffort;
-      defaults.textContent = `預設模型：${defaultModel || 'CLI 依帳號決定（未回報）'}；預設推理強度：${defaultEffort || 'CLI 依模型決定（未回報）'}。來源：${snap.config[p]?.model || snap.config[p]?.effort ? '.aipipe.json' : providerInfo?.defaultSource || 'CLI 模型清單'}。`;
-      line.append(who, model, effort);
-      row.append(line);
-      row.append(defaults);
-    }
-    box.append(row);
-  }
-}
-// b 可以是分頁按鈕，或直接給分頁名稱（設定頁沒有按鈕，只在 settings=1 的內嵌頁顯示）。
+// b 可以是分頁按鈕，或直接給分頁名稱。設定是全域的，在總覽（overview.html#settings）。
 function showTab(b) {
   if (!b) return;
   if (typeof b === 'string') b = { dataset: { tab: b } };
-  if (b.dataset.tab === 'settings' && !SETTINGS_ONLY) { location.href = `overview.html#settings=${PROJECT_ID}`; return; }
+  if (b.dataset.tab === 'settings') { location.href = 'overview.html#settings'; return; }
   if (b.dataset.tab === 'chat' && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }
-  if (b.dataset.tab === 'settings') loadQueue();
   if (b.dataset.tab === 'usage' && Date.now() - lastUsageRefresh > 60000) refreshUsage();
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
   if (b.dataset.tab === 'backlog') loadBacklog();
   if (b.dataset.tab === 'records') loadHistory();
-  if (b.dataset.tab === 'settings') loadModels();
   for (const x of $$('.tabs button')) {
     const on = x === b;
     x.classList.toggle('active', on);
@@ -1168,14 +1092,6 @@ function showTab(b) {
     s.classList.toggle('active', on);
     s.hidden = !on;
   }
-}
-
-async function loadQueue() {
-  try {
-    const { queue } = await api('/api/projects');
-    $('#max-runs').value = String(queue.max);
-    $('#queue-line').textContent = `執行中 ${queue.running.length} 個，排隊 ${queue.waiting.length} 個`;
-  } catch (err) { toast(err.message, true); }
 }
 
 let skillLibrary = [], skillRuns = [], skillEditingName = null;
@@ -1295,7 +1211,7 @@ function bind() {
   });
   for (const button of $$('[data-board-view]')) button.onclick = () => {
     boardView = button.dataset.boardView;
-    try { localStorage.setItem('aipipe-board-view', boardView); } catch { /* 僅保留本次選擇 */ }
+    try { localStorage.setItem('ai-workflow-board-view', boardView); } catch { /* 僅保留本次選擇 */ }
     if (snap) renderBoard();
   };
   $('#board-search').oninput = $('#board-filter').onchange = () => { if (snap) renderBoard(); };
@@ -1303,19 +1219,14 @@ function bind() {
   $('#detail').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); $('#d-close').click(); } });
   $('#quota-cancel').onclick = () => { quotaDismissed = JSON.stringify(snap?.state.usage_blocked); $('#quota-notice').hidden = true; };
   $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
-  $('#max-runs').onchange = async (event) => {
-    await act('/api/queue/config', { max: Number(event.target.value) }, '已更新全域執行佇列');
-    loadQueue();
-  };
+  for (const el of [...$$('[data-command]'), $('#pc-feature'), $('#pc-context')]) el.addEventListener('input', () => { projectSettingsDirty = true; });
+  $('#pc-save').onclick = saveProjectSettings;
   $('#usage-short').onclick = () => showTab($('#tabbtn-usage'));
   $('#btn-usage-refresh').onclick = refreshUsage;
   bindTheme();
   const tabButtons = $$('.tabs button');
   for (const b of tabButtons) b.onclick = () => showTab(b);
   tabKeys(tabButtons, showTab);
-  for (const b of $$('[data-mode]')) {
-    b.onclick = () => act('/api/config/mode', { mode: b.dataset.mode }, `已切換為${b.textContent}模式`);
-  }
   const subButtons = $$('[data-sub]');
   const showSub = (b) => {
     subtab = b.dataset.sub;
@@ -1323,35 +1234,6 @@ function bind() {
   };
   for (const b of subButtons) b.onclick = () => showSub(b);
   tabKeys(subButtons, showSub);
-  for (const el of $$('[data-runtime]')) {
-    el.addEventListener('input', () => {
-      settingsDirty = true;
-    });
-  }
-  $('#btn-save-runtime').onclick = async () => {
-    const runtime = Object.fromEntries($$('[data-runtime]').map((s) => [s.dataset.runtime, s.value]));
-    try {
-      await api('/api/config/runtime', { runtime });
-      settingsDirty = false;
-      toast('已儲存執行環境');
-    } catch (err) {
-      toast(err.message, true);
-    }
-  };
-  $('#btn-doctor').onclick = async () => {
-    const out = $('#doctor-out');
-    out.classList.remove('hidden');
-    out.textContent = '檢查中…（每個 CLI 最多 60 秒）';
-    $('#btn-doctor').disabled = true;
-    try {
-      const { lines } = await api('/api/doctor', {});
-      out.textContent = lines.join('\n');
-    } catch (err) {
-      out.textContent = `失敗：${err.message}`;
-    } finally {
-      $('#btn-doctor').disabled = false;
-    }
-  };
   $('#btn-prd-approve').onclick = () => approveHumanPrd();
   $('#btn-prd-revise').onclick = () => act('/api/prd/revise', { feedback: $('#feedback').value }, '已送出修改意見');
   $('#btn-tasks').onclick = () => act('/api/tasks/generate', {}, '已開始產生任務');
@@ -1384,20 +1266,11 @@ function bind() {
   };
   for (const b of recButtons) b.onclick = () => showRec(b);
   tabKeys(recButtons, showRec);
-  $('#btn-save-models').onclick = async () => {
-    try {
-      await api('/api/config/models', modelDraft);
-      modelsDirty = false;
-      toast('已儲存角色與模型');
-    } catch (err) {
-      toast(err.message, true);
-    }
-  };
   for (const b of $$('[data-view]')) {
     b.onclick = () => {
       prdView = b.dataset.view;
       try {
-        localStorage.setItem('aipipe-prd-view', prdView);
+        localStorage.setItem('ai-workflow-prd-view', prdView);
       } catch {
         // 無法儲存時只在這次頁面生效
       }
@@ -1421,7 +1294,7 @@ function bind() {
 bind();
 bindSkills();
 bindBacklog();
-if (SETTINGS_ONLY || location.hash === '#settings') showTab('settings');
+if (location.hash === '#settings') showTab('settings');
 api('/api/state').then(data => {
   onState(data);
   if (!$('#tab-chat').hidden && typeof loadChatHome === 'function') { loadChatHome(); loadModels(); }

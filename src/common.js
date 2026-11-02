@@ -1,6 +1,6 @@
 'use strict';
 
-// 首頁內嵌的專案設定沿用同源父視窗的桌面橋接。
+// 內嵌頁沿用同源父視窗的桌面橋接。
 if (!window.__TAURI__ && window.parent !== window) window.__TAURI__ = window.parent.__TAURI__;
 
 // 專案頁（app.js）與總覽（overview.js）共用的小工具。
@@ -15,9 +15,9 @@ const PROJECT_ID = new URLSearchParams(location.search).get('p')?.match(/^[0-9a-
 const API_BASE = `/api/p/${PROJECT_ID}`;
 const projectHref = (id) => `index.html?p=${id}`;
 
-/** path 一律寫成 /api/...；專案範圍的 API 會自動換成目前專案的前綴。 */
+/** path 一律寫成 /api/...；專案頁上專案範圍的 API 會自動換成目前專案的前綴，總覽（沒有專案）直接呼叫全域路由。 */
 function apiUrl(path) {
-  if (/^\/api\/(projects|queue)(\/|$)/.test(path)) return path;
+  if (!PROJECT_ID || /^\/api\/(projects|queue)(\/|$)/.test(path)) return path;
   return path.replace(/^\/api/, API_BASE);
 }
 
@@ -72,7 +72,7 @@ function escapeHtml(s) {
 const THEMES = [['system', '跟隨系統', 'monitor'], ['light', '淺色', 'sun'], ['dark', '深色', 'moon']];
 function getTheme() {
   try {
-    return localStorage.getItem('aipipe-theme') || 'system';
+    return localStorage.getItem('ai-workflow-theme') || 'system';
   } catch {
     return 'system';
   }
@@ -93,7 +93,7 @@ function bindTheme() {
     const keys = THEMES.map(([k]) => k);
     theme = keys[(keys.indexOf(theme) + 1) % keys.length];
     try {
-      localStorage.setItem('aipipe-theme', theme);
+      localStorage.setItem('ai-workflow-theme', theme);
     } catch {
       // 無法儲存時只在這次頁面生效
     }

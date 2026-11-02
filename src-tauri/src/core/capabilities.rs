@@ -80,7 +80,7 @@ pub fn select_provider_with(root: &Path, cfg: &Value, preferred: &str, probe: &d
     if second["available"] == true {
         return Ok(Selected { provider: other.into(), checks: vec![first, second] });
     }
-    crate::bail!("沒有可用的 AI CLI：{preferred}：{}；{other}：{}。請執行 aipipe doctor", first["error"].as_str().unwrap_or(""), second["error"].as_str().unwrap_or(""));
+    crate::bail!("沒有可用的 AI CLI：{preferred}：{}；{other}：{}。請執行 ai-workflow doctor", first["error"].as_str().unwrap_or(""), second["error"].as_str().unwrap_or(""));
 }
 
 pub fn select_provider(root: &Path, cfg: &Value, preferred: &str) -> Result<Selected> {

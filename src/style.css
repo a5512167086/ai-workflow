@@ -1,4 +1,4 @@
-/* aipipe UI — 設計依據見 docs/design-system.md（Minimalism & Swiss Style／Developer Tool 配色） */
+/* ai-workflow UI — 設計依據見 docs/design-system.md（Minimalism & Swiss Style／Developer Tool 配色） */
 
 :root {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
@@ -370,7 +370,7 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
 .workflow-grid h2 { margin-top: 0; }
 .workflow-grid .mode { margin-top: var(--s-3); }
 .workflow-grid select { width: auto; min-width: 96px; }
-/* 目前設定（.aipipe.json）可開合，收起時只剩標題列。 */
+/* 目前設定（config.json）可開合，收起時只剩標題列。 */
 .config-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
 .config-card > summary::-webkit-details-marker { display: none; }
 .config-card > summary h2 { margin: 0; display: inline-flex; align-items: center; gap: var(--s-2); }
@@ -580,18 +580,19 @@ details.lg.running .lg-icon { color: var(--info); animation: lg-pulse 1.4s ease-
 .review-col.FAIL, .review-col.REVISE { border-top-color: var(--warn); }
 .review-head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
 
-/* ---------- 設定：AI 角色與模型 ---------- */
+/* ---------- 設定：AI 角色與模型（九個角色排成 3×3 格子，每格一張小卡） ---------- */
 .settings-wide { grid-column: 1 / -1; }
-.role-models { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s-3); }
-.role-row { border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s-2) var(--s-3) var(--s-3); margin: 0; display: flex; flex-direction: column; gap: var(--s-2); }
-.role-row legend { font-weight: 600; padding: 0 4px; }
-.role-row > select { width: 100%; }
-.model-line { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(100px, 150px); gap: var(--s-2); align-items: center; }
+.role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-3); }
+.role-card { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); padding: var(--s-2) var(--s-3) var(--s-3); margin: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.role-card legend { font-weight: 600; padding: 0 4px; }
+.role-card .role-hint { margin: 0; font-size: 12px; }
+.role-card > select { width: 100%; }
+.model-line { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s-2); align-items: center; }
 .model-line input, .model-line select { width: 100%; min-width: 0; }
-.role-models { grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr)); }
-.model-line { grid-template-columns: auto minmax(140px, 1fr); }
 .model-line > select { grid-column: 2; }
-.model-defaults { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.model-defaults { margin: var(--s-3) 0 0; padding-left: 1.2em; overflow-wrap: anywhere; line-height: 1.6; }
+@media (max-width: 1100px) { .role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .role-grid { grid-template-columns: minmax(0, 1fr); } }
 .topbar .brand { flex: 1 1 100%; }
 .topbar .project { max-width: none; white-space: normal; overflow: visible; overflow-wrap: anywhere; min-width: 0; }
 .topbar .name, .topbar .logo, .topbar .back-link { flex: none; }
@@ -599,9 +600,8 @@ details.lg.running .lg-icon { color: var(--info); animation: lg-pulse 1.4s ease-
   #tab-board .col { max-height: 45vh; overflow-y: auto; }
 }
 @media (max-width: 420px) {
-  .role-models { grid-template-columns: minmax(0, 1fr); }
-  .model-line { grid-template-columns: auto minmax(0, 1fr); }
-  .model-line select { grid-column: 1 / -1; }
+  .model-line { grid-template-columns: minmax(0, 1fr); }
+  .model-line > select { grid-column: 1; }
 }
 
 /* ---------- 用量：最近 20 次執行預設收合 ---------- */
@@ -639,13 +639,19 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .overview-tools { flex: none; grid-template-columns: minmax(0, 1fr); }
 #projects-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #projects { min-height: 0; overflow: auto; align-content: start; }
-#overview-settings:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: var(--s-3); }
-.settings-toolbar { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); }
-.settings-toolbar h2 { margin: 0; }
-#project-settings { flex: 1; min-height: 0; width: 100%; border: 1px solid var(--border); border-radius: var(--r-sm); }
-.settings-only > .topbar, .settings-only > .tabs, .settings-only #quota-notice { display: none; }
-.settings-only > main { padding: var(--s-3); }
-.settings-only #tab-settings { overflow: auto; }
+/* 全域設定直接放在總覽裡，長內容在區塊內捲動。 */
+#overview-settings:not([hidden]) { flex: 1; min-height: 0; overflow: auto; padding-right: 2px; }
+#overview-settings .form-grid input[type="number"] { max-width: 120px; }
+/* 專案頁只剩這個專案自己的欄位（build/test/lint、功能、context 檔），放在任務看板裡可開合。 */
+.project-settings-card { flex: none; margin-bottom: var(--s-3); }
+.project-settings-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.project-settings-card > summary::-webkit-details-marker { display: none; }
+.project-settings-card > summary h2 { margin: 0; font-size: 15px; display: inline-flex; align-items: center; gap: var(--s-2); }
+.project-settings-card > summary h2::before { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); transition: transform var(--ease); flex: none; }
+.project-settings-card[open] > summary h2::before { transform: rotate(45deg); }
+.project-settings-card .form-grid { margin-top: var(--s-3); grid-template-columns: max-content minmax(0, 1fr); }
+.project-settings-card .form-grid textarea { width: 100%; font-family: var(--font-mono); font-size: 12.5px; }
+.project-settings-card .row { margin-top: var(--s-3); align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 #tab-board:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
 #tab-board .board-wrap { flex: 1; min-height: 100px; overflow: auto; }
 #tab-board .detail:not(.hidden) { flex: 0 1 50%; min-height: 160px; overflow: auto; }
@@ -657,7 +663,7 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
   .backlog-layout, .prd-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) minmax(0, 1fr); overflow: auto; }
 }
 
-/* 任務控制台：參考 Monstrare 的車道、卡片提示及階層藍圖，沿用 aipipe 主題。 */
+/* 任務控制台：參考 Monstrare 的車道、卡片提示及階層藍圖，沿用 ai-workflow 主題。 */
 .board-overview { flex: none; display: flex; align-items: center; gap: var(--s-5); padding: var(--s-3) var(--s-4); margin-bottom: var(--s-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); }
 .board-feature { flex: 1; min-width: 0; }
 .eyebrow { color: var(--text-muted); font-size: 11px; letter-spacing: .06em; }

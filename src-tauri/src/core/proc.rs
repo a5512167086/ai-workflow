@@ -89,7 +89,7 @@ fn has_ext(file: &str, exts: &[&str]) -> bool {
 pub fn resolve_cli(configured: &str, fallback: &str) -> Result<CliSpec> {
     let file = if configured.is_empty() { which(fallback).map(|p| p.to_string_lossy().into_owned()) } else { Some(configured.to_string()) };
     let Some(file) = file else {
-        crate::bail!("找不到 {fallback}，請安裝後確認在 PATH 中，或在 .aipipe.json 的 cli 欄位填完整路徑");
+        crate::bail!("找不到 {fallback}，請安裝後確認在 PATH 中，或在設定頁的 CLI 路徑填完整路徑");
     };
     let node = || which("node").map(|p| p.to_string_lossy().into_owned());
     let base = CliSpec { label: file.clone(), ..Default::default() };
@@ -113,7 +113,7 @@ pub fn resolve_cli(configured: &str, fallback: &str) -> Result<CliSpec> {
 /// 所以在 WSL 端再清一次（Windows 端的 clean_env 管不到 WSL 自己的設定檔，也擋不住 WSLENV 轉送）。
 pub const WSL_SCRUB_SCRIPT: &str = "for v in $(compgen -e); do   case \"$v\" in ANTHROPIC_*|CLAUDE_CODE_*|CLAUDE_AGENT_SDK_*|CLAUDECODE|OPENAI_API_KEY|OPENAI_BASE_URL|CODEX_API_KEY|OPENAI_CODEX_API_KEY) unset \"$v\";; esac; done; exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u OPENAI_API_KEY -u CODEX_API_KEY \"$@\"";
 
-/// 依 .aipipe.json 的 runtime 解析 CLI：windows 用 resolve_cli；wsl 透過 wsl.exe 執行。name 是 claude / codex。
+/// 依全域設定的 runtime 解析 CLI：windows 用 resolve_cli；wsl 透過 wsl.exe 執行。name 是 claude / codex。
 pub fn resolve_cli_for(cfg: &Value, name: &str, root: &Path) -> Result<CliSpec> {
     let environment = cli_environment(cfg, name, root);
     if environment.runtime == "wsl" {
@@ -223,7 +223,7 @@ pub fn wsl_args(spec: &CliSpec, cwd: Option<&Path>, args: &[String]) -> Result<V
     if let Some(dir) = location.map(|l| l.path).or_else(|| cwd.map(|c| c.to_string_lossy().into_owned())) {
         out.extend(["--cd".to_string(), dir]);
     }
-    out.extend(["-e", "bash", "-lc", WSL_SCRUB_SCRIPT, "aipipe"].map(String::from));
+    out.extend(["-e", "bash", "-lc", WSL_SCRUB_SCRIPT, "ai-workflow"].map(String::from));
     out.push(spec.bin.clone());
     out.extend(args.iter().cloned());
     Ok(out)
@@ -385,7 +385,7 @@ pub fn run_with(spec: Option<&CliSpec>, args: &[String], shell_line: Option<&str
     if let (Some(spec), Some(cancel)) = (owned_spec.as_mut().filter(|spec| spec.wsl), opts.cancel_file.as_ref()) {
         let pid_file = cancel.with_extension("pid"); let _ = std::fs::remove_file(&pid_file);
         let linux_path = spec.to_path(&pid_file)?;
-        let mut wrapped = vec!["--wait".into(), "/bin/sh".into(), "-c".into(), "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\"".into(), "aipipe-chat".into(), linux_path, spec.bin.clone()];
+        let mut wrapped = vec!["--wait".into(), "/bin/sh".into(), "-c".into(), "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\"".into(), "ai-workflow-chat".into(), linux_path, spec.bin.clone()];
         wrapped.extend(owned_args); owned_args = wrapped; spec.bin = "/usr/bin/setsid".into(); linux_pid_file = Some(pid_file);
     }
     let spec = owned_spec.as_ref();
@@ -528,7 +528,7 @@ pub fn query_codex_rpc_with(spec: &CliSpec, cwd: &Path, method: &str, params: Op
         let _ = child.wait();
         out
     };
-    if send(json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "aipipe", "version": env!("CARGO_PKG_VERSION") } } })).is_err() {
+    if send(json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "ai-workflow", "version": env!("CARGO_PKG_VERSION") } } })).is_err() {
         return finish(&mut child, Err(AppError::new("CLI 未提供額度查詢結果")));
     }
     let deadline = Instant::now() + Duration::from_secs(timeout_sec);

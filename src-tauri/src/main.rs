@@ -1,5 +1,5 @@
-// aipipe 桌面版。
-// - 後端邏輯在 aipipe 函式庫（src/core）；前端（../src）透過 `api` command 呼叫，路徑與舊版 HTTP API 相同。
+// ai-workflow 桌面版。
+// - 後端邏輯在 ai_workflow 函式庫（src/core）；前端（../src）透過 `api` command 呼叫，路徑與舊版 HTTP API 相同。
 // - 長時間的流程（PRD、拆任務、執行）以同一支 exe 的子指令在背景另開程序執行，關掉 app 不會中斷。
 // - 關閉視窗只是縮到系統匣；從系統匣選「結束」才會真的結束。
 // - 背景監看所有專案，停下來等使用者時發 Windows 通知。
@@ -9,14 +9,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use aipipe::core::api;
-use aipipe::core::watch::{ProjectWatcher, ProjectsWatcher};
+use ai_workflow::core::api;
+use ai_workflow::core::watch::{ProjectWatcher, ProjectsWatcher};
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
+
+const APP_NAME: &str = "ai-workflow";
 
 /// 已在監看的專案 id（每個專案一條背景執行緒）。
 struct Watching(Mutex<HashSet<String>>);
@@ -32,10 +34,10 @@ fn run_cli_if_requested() {
     unsafe {
         windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS);
     }
-    let code = match aipipe::core::cli::main(&args) {
+    let code = match ai_workflow::core::cli::main(&args) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("aipipe: {}", err.message);
+            eprintln!("{APP_NAME}: {}", err.message);
             1
         }
     };
@@ -82,11 +84,11 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 
 #[tauri::command]
 async fn pick_reference_files(app: AppHandle) -> Vec<String> {
-    app.dialog().file().set_title("加入參考檔案").blocking_pick_files().unwrap_or_default().into_iter().filter_map(|p|p.into_path().ok()).map(|p|p.display().to_string()).collect()
+    app.dialog().file().set_title("加入參考檔案").blocking_pick_files().unwrap_or_default().into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect()
 }
 #[tauri::command]
 async fn pick_reference_folder(app: AppHandle) -> Option<String> {
-    app.dialog().file().set_title("加入參考資料夾（建立快照）").blocking_pick_folder().and_then(|p|p.into_path().ok()).map(|p|p.display().to_string())
+    app.dialog().file().set_title("加入參考資料夾（建立快照）").blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string())
 }
 
 fn show_main(app: &AppHandle) {
@@ -125,7 +127,7 @@ fn watch_projects(app: AppHandle) {
                             let name = p["name"].as_str().unwrap_or("專案");
                             let reason = p["reason"].as_str().unwrap_or_default();
                             let body = if reason.is_empty() { label.to_string() } else { format!("{label}：{reason}") };
-                            let _ = app.notification().builder().title(format!("aipipe｜{name}")).body(body).show();
+                            let _ = app.notification().builder().title(format!("{APP_NAME}｜{name}")).body(body).show();
                         }
                     }
                     last.insert(id, status);
@@ -140,18 +142,20 @@ fn watch_projects(app: AppHandle) {
 
 fn main() {
     run_cli_if_requested();
+    // 啟動時就決定資料目錄（只有舊的 ~/.aipipe 時會搬成 ~/.ai-workflow）。
+    let _ = ai_workflow::core::home::app_home();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Watching(Mutex::new(HashSet::new())))
         .invoke_handler(tauri::generate_handler![api, watch_project, pick_folder, pick_reference_files, pick_reference_folder])
         .setup(|app| {
-            let open = MenuItem::with_id(app, "open", "開啟 aipipe", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "結束 aipipe", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", format!("開啟 {APP_NAME}"), true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", format!("結束 {APP_NAME}"), true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("缺少視窗圖示"))
-                .tooltip("aipipe")
+                .tooltip(APP_NAME)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -179,12 +183,12 @@ fn main() {
                         .app_handle()
                         .notification()
                         .builder()
-                        .title("aipipe 仍在系統匣執行")
-                        .body("流程需要你處理時會通知你。要完全結束，請在系統匣圖示按右鍵選「結束 aipipe」。")
+                        .title(format!("{APP_NAME} 仍在系統匣執行"))
+                        .body(format!("流程需要你處理時會通知你。要完全結束，請在系統匣圖示按右鍵選「結束 {APP_NAME}」。"))
                         .show();
                 });
             }
         })
         .run(tauri::generate_context!())
-        .expect("無法建立 aipipe 視窗");
+        .expect("無法建立 ai-workflow 視窗");
 }

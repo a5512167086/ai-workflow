@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde_json::{json, Value};
 
 use super::api::{projects_payload, snapshot};
-use super::state::aipipe_dir;
+use super::state::data_dir;
 use super::tasks::tasks_file;
 use super::usage::usage_file;
 
@@ -34,7 +34,7 @@ impl ProjectWatcher {
     }
 
     fn log_sizes(&self) -> Vec<(String, u64)> {
-        let dir = aipipe_dir(&self.root).join("logs");
+        let dir = data_dir(&self.root).join("logs");
         fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.metadata().ok()?.len()))).collect()).unwrap_or_default()
     }
 
@@ -42,8 +42,9 @@ impl ProjectWatcher {
     pub fn tick(&mut self) -> Vec<(&'static str, Value)> {
         let mut events = Vec::new();
         let sig = vec![
-            mtime(&aipipe_dir(&self.root).join("state.json")),
-            mtime(&self.root.join(".aipipe.json")),
+            mtime(&data_dir(&self.root).join("state.json")),
+            mtime(&super::config::project_config_path(&self.root)),
+            mtime(&super::config::global_config_path()),
             mtime(&usage_file(&self.root)),
             mtime(&tasks_file(&self.root)),
             mtime(&self.root.join(".taskmaster").join("state.json")),
@@ -59,7 +60,7 @@ impl ProjectWatcher {
             let prev = self.sizes.get(&name).copied().unwrap_or(0);
             if size > prev {
                 let len = (size - prev).min(500_000);
-                let path = aipipe_dir(&self.root).join("logs").join(&name);
+                let path = data_dir(&self.root).join("logs").join(&name);
                 let read = || -> std::io::Result<Vec<u8>> {
                     let mut f = fs::File::open(&path)?;
                     f.seek(SeekFrom::Start(size - len))?;
@@ -104,8 +105,8 @@ mod tests {
 
     #[test]
     fn state_變化推送_snapshot_log_只推送新增內容() {
-        let root = temp_dir("aipipe-watch-");
-        fs::write(root.join(".aipipe.json"), r#"{"mode":"manual"}"#).unwrap();
+        let root = temp_dir("watch-");
+        crate::core::config::save_project(&root, &json!({})).unwrap();
         ensure_dirs(&root).unwrap();
         append_log(&root, "runner", "舊的內容");
         let mut w = ProjectWatcher::new(&root);

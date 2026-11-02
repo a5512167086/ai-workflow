@@ -1,4 +1,4 @@
-//! aipipe 子指令（對應 legacy/src/cli.js）。桌面 app 帶參數啟動時走這裡；GUI 也用它在背景啟動獨立的流程程序。
+//! ai-workflow 子指令。桌面 app 帶參數啟動時走這裡；GUI 也用它在背景啟動獨立的流程程序。
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -9,35 +9,36 @@ use serde_json::{json, Value};
 use super::agents::{run_agent, AgentOpts};
 use super::archive::{archive_tasks, tag_slug};
 use super::backlog::{get_item, idea_for, update_item};
-use super::config::{cfg_str, find_project_root, load_config, patch_config, CONFIG_FILE, MODES, ROLES};
+use super::config::{cfg_str, find_project_root, load_config, project_registered, MODES, ROLES};
 use super::doctor::doctor_report;
 use super::git::is_git_repo;
-use super::init::{init_project, InitOptions};
+use super::init::{init_project, prepare_project, InitOptions};
 use super::prd::{approve_prd, draft_prd, revise_prd};
 use super::projects::{add_project, list_projects, project_summary, remove_project};
 use super::prompts::tasks_from_prd_prompt;
 use super::queue::{queue_snapshot, set_max_concurrent};
 use super::runner::{acknowledge, prepare_rerun, request_pause, run_pipeline_with_provider, Next};
 use super::skills::{import_skill, list_skills, load_skill, new_skill_run, save_skill_run};
-use super::state::{append_log, ensure_dirs, read_state, update_state};
+use super::state::{append_log, data_dir, ensure_dirs, prd_file, read_state, update_state};
 use super::tasks;
-use super::util::{js_string, now_iso, resolve};
+use super::util::{js_string, now_iso, read_text, resolve};
 use super::Result;
 
-pub const HELP: &str = "aipipe — 用本機已登入的 Claude Code / Codex CLI 跑 AI 開發流程
+pub const HELP: &str = "ai-workflow — 用本機已登入的 Claude Code / Codex CLI 跑 AI 開發流程
 
-用法：aipipe <指令> [選項]
+用法：ai-workflow <指令> [選項]
 
   init [--mode auto|manual] [--author claude|codex] [--reviewer ...]
        [--implementer ...] [--code-reviewer ...] [--feature 名稱] [--force] [--git-init]
-                          在目前專案建立 .aipipe.json；不是 git repo 時 --git-init 會先 git init
-                          （互動終端機下沒加也會詢問）
+                          把目前專案加入 ai-workflow：偵測 build/test/lint 指令並登錄到總覽。
+                          流程資料放在 ~/.ai-workflow/projects/<id>/，專案資料夾裡不會新增任何檔案；
+                          不是 git repo 時 --git-init 會先 git init（互動終端機下沒加也會詢問）
   doctor                  檢查 Windows／WSL 的 Claude Code、Codex 安裝與訂閱登入
   prd \"<想法>\"            作者 AI 起草 PRD → 審查 AI 審 → 來回最多 max_prd_rounds 輪
   prd --backlog <id>      用需求待辦裡已完成需求釐清（Grill Me）並確認摘要的項目起草 PRD
   prd --revise \"<意見>\"   依你的意見修訂後再審一次
   prd --review            只請審查 AI 重新審查目前的 PRD（人工修改後保留原文）
-  prd --approve           核准目前的 PRD（寫入 prd_path）
+  prd --approve           核准目前的 PRD
   tasks --approve         人工檢視後核准目前的任務清單；run 之前必須核准
   tasks                   用 AI 拆解核准的 PRD，由內建任務引擎保存及排程
   skills list             列出共用 Skills
@@ -47,16 +48,17 @@ pub const HELP: &str = "aipipe — 用本機已登入的 Claude Code / Codex CLI
   pause                   目前任務結束後暫停
   continue                「我測完了，繼續」
   rerun <id> [--revert]   重跑任務；--revert 先還原該任務的變更
-  mode <auto|manual>      切換模式
+  mode <auto|manual>      切換模式（全域設定）
   status                  顯示目前狀態
-  projects list           列出總覽裡的專案（~/.aipipe/projects.json）
-  projects add [目錄]     加入專案（預設目前專案）
+  projects list           列出總覽裡的專案（~/.ai-workflow/projects.json）
+  projects add [目錄]     加入專案（預設目前目錄；同 init）
   projects remove <id|目錄|名稱>
                           從總覽移除（不刪任何檔案）
-  queue [--max <n>]       顯示全域執行佇列；--max 設定同時執行的 aipipe run 上限（預設 1）
+  queue [--max <n>]       顯示全域執行佇列；--max 設定同時執行的 run 上限（預設 1）
 
-全域選項：--cwd <目錄>  指定目標專案（預設從目前目錄往上找 .aipipe.json）
+全域選項：--cwd <目錄>  指定目標專案（預設從目前目錄往上找已加入總覽的專案）
 
+設定全部是全域的，放在 ~/.ai-workflow/config.json（可用環境變數 AI_WORKFLOW_HOME 換位置）。
 不帶參數執行時開啟桌面視窗。";
 
 /// 子指令（GUI 用的保留字以外的第一個參數）。
@@ -116,14 +118,17 @@ fn confirm_prompt(question: &str) -> bool {
     !line.trim().to_lowercase().starts_with('n')
 }
 
-/// 執行一個子指令；回傳 process 的結束碼。
+/// 執行一個子指令；回傳 process 的結束碙。
 pub fn main(argv: &[String]) -> Result<i32> {
     let args = parse_args(argv);
     let cmd = args.positional.first().map(String::as_str);
     let rest: Vec<String> = args.positional.iter().skip(1).cloned().collect();
     let start = args.get("cwd").map(resolve).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let root = if cmd == Some("init") { start.clone() } else { find_project_root(&start) };
+    let root = if cmd == Some("init") || (cmd == Some("projects") && rest.first().map(String::as_str) == Some("add")) { start.clone() } else { find_project_root(&start) };
     let root = root.as_path();
+    if project_registered(root) {
+        prepare_project(root);
+    }
 
     let forward_run = |mut forwarded: Vec<String>| {
         if let Some(p) = args.get("use_provider") { forwarded.extend(["--use-provider".into(), p.into()]); }
@@ -140,7 +145,7 @@ pub fn main(argv: &[String]) -> Result<i32> {
         Some("init") => {
             let mut git_init = args.flag("git_init");
             if !git_init && std::io::stdin().is_terminal() && !is_git_repo(root)? {
-                git_init = confirm_prompt(&format!("{} 不是 git repo（aipipe 用 git 追蹤、審查與還原 AI 的變更）。要幫你執行 git init 嗎？[Y/n] ", root.display()));
+                git_init = confirm_prompt(&format!("{} 不是 git repo（ai-workflow 用 git 追蹤、審查與還原 AI 的變更）。要幫你執行 git init 嗎？[Y/n] ", root.display()));
             }
             let roles = ROLES.iter().filter_map(|r| args.get(r).map(|v| (r.to_string(), v.to_string()))).collect();
             let r = init_project(root, &InitOptions {
@@ -149,13 +154,14 @@ pub fn main(argv: &[String]) -> Result<i32> {
             if r.git_initialized {
                 println!("已在 {} 執行 git init", root.display());
             }
-            println!("已建立 {}（模式：{}）", root.join(CONFIG_FILE).display(), cfg_str(&r.cfg, "mode"));
+            let p = add_project(root, None)?;
+            println!("已加入 {}（id {}，模式：{}）；流程資料放在 {}，專案資料夾不會新增檔案", root.display(), p["id"].as_str().unwrap_or(""), cfg_str(&r.cfg, "mode"), r.data_dir.display());
             let c = |k: &str| r.cfg["commands"][k].as_str().filter(|s| !s.is_empty()).unwrap_or("-").to_string();
             println!("偵測到的指令：build={} test={} lint={}", c("build"), c("test"), c("lint"));
-            if !r.created.is_empty() {
-                println!("已建立範本：{}", r.created.join(", "));
+            for item in &r.migrated {
+                println!("已搬移舊資料：{item}");
             }
-            println!("下一步：aipipe doctor 確認 CLI 登入狀態，然後 aipipe prd \"<想法>\" 或開啟桌面 app");
+            println!("下一步：ai-workflow doctor 確認 CLI 登入狀態，然後 ai-workflow prd \"<想法>\" 或開啟桌面 app");
         }
         Some("doctor") => {
             let report = doctor_report(root)?;
@@ -169,11 +175,11 @@ pub fn main(argv: &[String]) -> Result<i32> {
             ensure_dirs(root)?;
             if args.flag("approve") {
                 let file = approve_prd(root, &cfg)?;
-                println!("PRD 已核准：{}\n下一步：aipipe tasks", file.display());
+                println!("PRD 已核准：{}\n下一步：ai-workflow tasks", file.display());
                 return Ok(0);
             }
             if args.flag("review") {
-                super::prd::review_current(root,&cfg)?;
+                super::prd::review_current(root, &cfg)?;
             } else if let Some(feedback) = args.get("revise") {
                 revise_prd(root, &cfg, feedback)?;
             } else if let Some(id) = args.get("backlog") {
@@ -185,16 +191,16 @@ pub fn main(argv: &[String]) -> Result<i32> {
             } else {
                 let idea = rest.join(" ").trim().to_string();
                 if idea.is_empty() {
-                    crate::bail!("請提供想法，例如：aipipe prd \"加入匯出 CSV 功能\"");
+                    crate::bail!("請提供想法，例如：ai-workflow prd \"加入匯出 CSV 功能\"");
                 }
                 draft_prd(root, &cfg, &idea, None)?;
             }
-            println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 aipipe prd --approve");
+            println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 ai-workflow prd --approve");
         }
         Some("tasks") => {
-            if args.flag("approve") { super::human::approve_tasks(root,&tasks::revision(root)?)?; println!("任務已人工核准，可執行 aipipe run"); return Ok(0); }
+            if args.flag("approve") { super::human::approve_tasks(root, &tasks::revision(root)?)?; println!("任務已人工核准，可執行 ai-workflow run"); return Ok(0); }
             let count = generate_tasks(root)?;
-            println!("已產生 {count} 個任務，下一步：aipipe run 或在 UI 按「開始」");
+            println!("已產生 {count} 個任務，下一步：ai-workflow run 或在 UI 按「開始」");
         }
         Some("skills") => match rest.first().map(String::as_str) {
             None | Some("list") => {
@@ -242,8 +248,8 @@ pub fn main(argv: &[String]) -> Result<i32> {
             if !MODES.contains(&mode) {
                 crate::bail!("模式必須是 {}", MODES.join(" / "));
             }
-            patch_config(root, &json!({ "mode": mode }))?;
-            println!("已切換為 {mode} 模式");
+            super::config::patch_global(&json!({ "mode": mode }))?;
+            println!("已切換為 {mode} 模式（全域設定）");
         }
         Some("status") => print_status(root)?,
         Some("projects") => projects_command(&rest, root)?,
@@ -279,7 +285,10 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
     let scope = "tasks";
     update_state(root, |s| s["task_gen"] = json!({ "status": "running", "pid": std::process::id(), "error": "" }))?;
     let result = (|| -> Result<usize> {
-        let prd = fs::read_to_string(root.join(cfg_str(&cfg, "prd_path")))?;
+        let prd = read_text(prd_file(root));
+        if prd.trim().is_empty() {
+            crate::bail!("找不到核准的 PRD（{}）", prd_file(root).display());
+        }
         let res = run_agent(AgentOpts {
             root, cfg: &cfg, provider: cfg_str(&cfg["roles"], "task_planner"), prompt: tasks_from_prd_prompt(root, &cfg, &prd),
             write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("task_planner"),
@@ -300,7 +309,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         let count = tasks::read_tasks(root)?.len();
         update_state(root, |s| {
             s["task_gen"] = json!({ "status": "done", "pid": null, "error": "", "count": count, "via": "builtin", "tag": tag });
-            s["tasks"] = json!({}); s["task_approval"]=Value::Null;
+            s["tasks"] = json!({}); s["task_approval"] = Value::Null;
         })?;
         archive_tasks(root, json!({}))?;
         append_log(root, scope, &format!("產生 {count} 個任務（AI 拆解，內建任務引擎管理）"));
@@ -360,6 +369,7 @@ fn print_status(root: &Path) -> Result<()> {
     let s = read_state(root);
     let reason = s["pipeline"]["reason"].as_str().filter(|r| !r.is_empty()).map(|r| format!("（{r}）")).unwrap_or_default();
     println!("模式：{}　流程：{}{reason}", cfg_str(&cfg, "mode"), s["pipeline"]["status"].as_str().unwrap_or(""));
+    println!("資料目錄：{}", data_dir(root).display());
     let round = s["prd"]["round"].as_u64().filter(|r| *r > 0).map(|r| format!("，審查 {r} 輪")).unwrap_or_default();
     println!("PRD：{}{round}", s["prd"]["status"].as_str().unwrap_or(""));
     for t in tasks::read_tasks(root)? {
@@ -381,7 +391,7 @@ fn projects_command(args: &[String], root: &Path) -> Result<()> {
         Some("add") => {
             let dir = args.get(1).map(resolve).unwrap_or_else(|| root.to_path_buf());
             let p = add_project(&dir, None)?;
-            println!("已加入：{}（{}，id {}）", p["name"].as_str().unwrap_or(""), p["path"].as_str().unwrap_or(""), p["id"].as_str().unwrap_or(""));
+            println!("已加入：{}（{}，id {}）；流程資料放在 {}", p["name"].as_str().unwrap_or(""), p["path"].as_str().unwrap_or(""), p["id"].as_str().unwrap_or(""), data_dir(&dir).display());
         }
         Some("remove") | Some("rm") => {
             let Some(r) = args.get(1) else { crate::bail!("請指定要移除的專案 id、路徑或名稱") };
@@ -391,7 +401,7 @@ fn projects_command(args: &[String], root: &Path) -> Result<()> {
         None | Some("list") | Some("ls") => {
             let list = list_projects();
             if list.is_empty() {
-                println!("總覽裡還沒有專案：在專案目錄執行 aipipe projects add");
+                println!("總覽裡還沒有專案：在專案目錄執行 ai-workflow projects add");
             }
             for p in list {
                 let s = project_summary(&p);
@@ -402,21 +412,21 @@ fn projects_command(args: &[String], root: &Path) -> Result<()> {
                 println!("{}  {}  [{}{prog}]{feature}\n            {}", p["id"].as_str().unwrap_or(""), p["name"].as_str().unwrap_or(""), s["status"].as_str().unwrap_or(""), p["path"].as_str().unwrap_or(""));
             }
         }
-        _ => crate::bail!("用法：aipipe projects list|add [目錄]|remove <id|目錄|名稱>"),
+        _ => crate::bail!("用法：ai-workflow projects list|add [目錄]|remove <id|目錄|名稱>"),
     }
     Ok(())
 }
 
-/// 在背景以獨立程序執行子指令（關掉 app 也不會中斷），輸出寫到 .aipipe/logs/process.log。回傳 pid。
+/// 在背景以獨立程序執行子指令（關掉 app 也不會中斷），輸出寫到專案資料目錄的 logs/process.log。回傳 pid。
 pub fn spawn_detached_cli(root: &Path, args: &[String]) -> Result<u32> {
     spawn_detached_with(&std::env::current_exe()?, root, args)
 }
 
 pub fn spawn_detached_with(exe: &PathBuf, root: &Path, args: &[String]) -> Result<u32> {
     ensure_dirs(root)?;
-    let log_file = root.join(".aipipe").join("logs").join("process.log");
+    let log_file = data_dir(root).join("logs").join("process.log");
     let mut out = fs::OpenOptions::new().create(true).append(true).open(&log_file)?;
-    writeln!(out, "\n[{}] aipipe {}", now_iso(), args.join(" "))?;
+    writeln!(out, "\n[{}] ai-workflow {}", now_iso(), args.join(" "))?;
     let mut cmd = Command::new(exe);
     cmd.args(args).arg("--cwd").arg(root).current_dir(root).stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out);
     #[cfg(windows)]

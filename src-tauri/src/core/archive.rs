@@ -1,17 +1,18 @@
-//! 功能封存（對應 legacy/src/archive.js）：每個功能一個資料夾 <archive_dir>/<日期>-<功能>/（預設 docs/prd/），可以 commit。
+//! 功能封存：每個功能一個資料夾 <home>/projects/<id>/archive/<日期>-<功能>/。
 //!   prd.md            核准的 PRD
 //!   rounds/NN-*.md    每一輪的初稿、審查、修訂、使用者意見
 //!   tasks.json        最後的任務清單（含狀態）
 //!   meta.json         功能名稱、想法、核准時間、任務群組、待辦項目 id
 //! 資料夾名稱不會重複；同一個功能重新核准時更新同一個資料夾，開始下一個功能時一定建新的。
+//! state.prd.archive_dir 記的是相對於專案資料目錄的路徑（archive/<名稱>）。
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 use unicode_normalization::UnicodeNormalization;
 
-use super::config::{cfg_str, load_config};
-use super::state::{aipipe_dir, read_state, update_state};
+use super::config::cfg_str;
+use super::state::{data_dir, read_state, update_state};
 use super::tasks::{current_tag, read_tasks, tasks_in};
 use super::util::{now_iso, pretty, read_json, read_text, rel_slash, today, truthy};
 use super::Result;
@@ -54,8 +55,13 @@ pub fn tag_slug(text: &str) -> String {
     if out.is_empty() { "feature".into() } else { out }
 }
 
-fn archive_root(root: &Path, cfg: &Value) -> PathBuf {
-    root.join(cfg_str(cfg, "archive_dir"))
+pub fn archive_root(root: &Path) -> PathBuf {
+    data_dir(root).join("archive")
+}
+
+/// state 裡記的封存路徑對應到實際資料夾。
+pub fn archive_path(root: &Path, rel: &str) -> PathBuf {
+    data_dir(root).join(rel)
 }
 
 fn unique_dir(base: &Path, name: &str) -> PathBuf {
@@ -79,19 +85,20 @@ fn write_meta(dir: &Path, patch: Value) -> Result<()> {
     Ok(())
 }
 
-/// 核准 PRD 時呼叫：建立（或更新）這個功能的封存資料夾，回傳相對於專案的路徑。
+/// 核准 PRD 時呼叫：建立（或更新）這個功能的封存資料夾，回傳相對於專案資料目錄的路徑。
 pub fn archive_prd(root: &Path, cfg: &Value) -> Result<String> {
     let state = read_state(root);
-    let base = archive_root(root, cfg);
+    let base = archive_root(root);
     let feature = cfg_str(cfg, "feature");
     let idea = state["prd"]["idea"].as_str().unwrap_or("");
     let dir = match state["prd"]["archive_dir"].as_str().filter(|d| !d.is_empty()) {
-        Some(rel) => root.join(rel),
+        Some(rel) => archive_path(root, rel),
         None => unique_dir(&base, &format!("{}-{}", today(), feature_slug(if feature.is_empty() { idea } else { feature }))),
     };
     let rounds_dir = dir.join("rounds");
     fs::create_dir_all(&rounds_dir)?;
-    fs::write(dir.join("prd.md"), read_text(aipipe_dir(root).join("prd").join("current.md")))?;
+    let prd_dir = data_dir(root).join("prd");
+    fs::write(dir.join("prd.md"), read_text(prd_dir.join("current.md")))?;
     for entry in fs::read_dir(&rounds_dir)? {
         fs::remove_file(entry?.path())?;
     }
@@ -109,9 +116,9 @@ pub fn archive_prd(root: &Path, cfg: &Value) -> Result<String> {
         if truthy(r.get("version")) {
             parts.push(format!("v{}", super::util::js_string(&r["version"])));
         }
-        fs::write(rounds_dir.join(format!("{}.md", parts.join("-"))), read_text(aipipe_dir(root).join("prd").join(file)))?;
+        fs::write(rounds_dir.join(format!("{}.md", parts.join("-"))), read_text(prd_dir.join(file)))?;
     }
-    let rel = rel_slash(root, &dir);
+    let rel = rel_slash(&data_dir(root), &dir);
     let summary: Vec<Value> = rounds.iter().map(|r| {
         let mut o = json!({});
         for k in ["kind", "round", "provider", "verdict", "version", "at"] {
@@ -138,7 +145,7 @@ pub fn archive_prd(root: &Path, cfg: &Value) -> Result<String> {
 pub fn archive_tasks(root: &Path, extra: Value) -> Result<Option<String>> {
     let state = read_state(root);
     let Some(rel) = state["prd"]["archive_dir"].as_str().filter(|d| !d.is_empty()).map(String::from) else { return Ok(None) };
-    let dir = root.join(&rel);
+    let dir = archive_path(root, &rel);
     if !dir.exists() {
         return Ok(None);
     }
@@ -163,8 +170,8 @@ fn safe_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.chars().any(|c| matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
 }
 
-pub fn list_archives(root: &Path, cfg: &Value) -> Result<Vec<Value>> {
-    let base = archive_root(root, cfg);
+pub fn list_archives(root: &Path) -> Result<Vec<Value>> {
+    let base = archive_root(root);
     if !base.exists() {
         return Ok(vec![]);
     }
@@ -188,11 +195,11 @@ pub fn list_archives(root: &Path, cfg: &Value) -> Result<Vec<Value>> {
     Ok(list)
 }
 
-pub fn read_archive(root: &Path, name: &str, cfg: &Value) -> Result<Value> {
+pub fn read_archive(root: &Path, name: &str) -> Result<Value> {
     if !safe_name(name) {
         crate::bail!(400; "封存名稱不正確");
     }
-    let dir = archive_root(root, cfg).join(name);
+    let dir = archive_root(root).join(name);
     if !dir.join("prd.md").exists() {
         crate::bail!(404; "找不到這個封存");
     }
@@ -206,15 +213,10 @@ pub fn read_archive(root: &Path, name: &str, cfg: &Value) -> Result<Value> {
     let rounds: Vec<Value> = names.iter().map(|f| json!({ "name": f, "text": read_text(rounds_dir.join(f)) })).collect();
     Ok(json!({
         "name": name,
-        "path": rel_slash(root, &dir),
+        "path": dir.to_string_lossy(),
         "meta": read_json(dir.join("meta.json")).unwrap_or(json!({})),
         "prd": read_text(dir.join("prd.md")),
         "rounds": rounds,
         "tasks": tasks_in(&dir.join("tasks.json")),
     }))
-}
-
-/// 預設設定的捷徑。
-pub fn list_archives_for(root: &Path) -> Result<Vec<Value>> {
-    list_archives(root, &load_config(root)?)
 }

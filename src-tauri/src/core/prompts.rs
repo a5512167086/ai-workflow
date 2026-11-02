@@ -1,11 +1,12 @@
-//! 給 AI 的提示詞（對應 legacy/src/prompts.js），文字與 Node 版相同。
+//! 給 AI 的提示詞。流程資料（handover、PRD、任務）不在專案資料夾裡，所以一律把內容直接貼進 prompt，
+//! 需要路徑時給絕對路徑。
 use std::path::Path;
 
 use serde_json::Value;
 
-use super::config::cfg_str;
+use super::state::{handover_file, prd_file};
 use super::skills::list_skills;
-use super::util::pretty;
+use super::util::{pretty, read_text};
 
 const MAX_FILE_CHARS: usize = 40000;
 const MAX_DIFF_CHARS: usize = 120000;
@@ -24,12 +25,13 @@ fn read_if_exists(root: &Path, rel: &str) -> Option<String> {
 }
 
 /// handover 與 context 檔：存在就附上內容，不存在就註明，讓新對話不必重新摸索專案。
+/// context_files 是使用者在設定填的專案內既有檔案（相對於專案根目錄，也可以是絕對路徑）。
 pub fn context_block(root: &Path, cfg: &Value, include_handover: bool) -> String {
     let mut parts = Vec::new();
-    let handover_path = cfg_str(cfg, "handover_path");
     if include_handover {
-        let h = read_if_exists(root, handover_path);
-        parts.push(format!("### Handover（{handover_path}）\n{}", h.map(|h| clip(&h, MAX_FILE_CHARS)).unwrap_or_else(|| "（尚不存在，這是第一個任務）".into())));
+        let file = handover_file(root);
+        let h = std::fs::read_to_string(&file).ok().filter(|t| !t.trim().is_empty());
+        parts.push(format!("### Handover（{}）\n{}", file.display(), h.map(|h| clip(&h, MAX_FILE_CHARS)).unwrap_or_else(|| "（尚不存在，這是第一個任務）".into())));
     }
     for rel in cfg["context_files"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         if let Some(t) = read_if_exists(root, rel) {
@@ -138,9 +140,11 @@ fn id_of(task: &Value) -> String {
     super::util::js_string(&task["id"])
 }
 
-const NO_TOUCH: &str = "- 不要執行 git commit、git push、切換分支，也不要修改 .aipipe/、.taskmaster/ 與";
+const NO_TOUCH: &str = "- 不要執行 git commit、git push、切換分支，也不要修改 .taskmaster/ 或 ai-workflow 的流程資料與 handover（handover 由獨立的一步更新）。";
 
 pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> String {
+    let prd = read_text(prd_file(root));
+    let prd = if prd.trim().is_empty() { "（沒有核准的 PRD）".to_string() } else { clip(&prd, MAX_FILE_CHARS) };
     format!("你正在一個全新的對話中實作 開發任務 {}。先閱讀 handover 與 context 了解目前進度，再動手。
 
 ## Handover 與專案 context
@@ -149,17 +153,18 @@ pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> String {
 ## 任務
 {}
 
-完整 PRD 在 `{}`，需要時自行閱讀。
+## 完整 PRD
+{prd}
 
-## 驗證指令（完成後 aipipe 會自動執行）
+## 驗證指令（完成後 ai-workflow 會自動執行）
 {}
 
 ## 規則
 - 只做這個任務範圍內的事，不要順手實作其他任務。
 - 需要時新增或更新測試，讓上面的驗證指令能通過。
-{NO_TOUCH} {}。
+{NO_TOUCH}
 - 完成後簡短回報：改了哪些檔案、怎麼驗證、還有什麼風險。",
-        id_of(task), context_block(root, cfg, true), task_block(task), cfg_str(cfg, "prd_path"), commands_block(cfg), cfg_str(cfg, "handover_path"))
+        id_of(task), context_block(root, cfg, true), task_block(task), commands_block(cfg))
 }
 
 pub fn fix_checks_prompt(cfg: &Value, task: &Value, failures: &str, round: u64) -> String {
@@ -176,9 +181,9 @@ pub fn fix_checks_prompt(cfg: &Value, task: &Value, failures: &str, round: u64) 
 
 ## 規則
 - 找出根本原因再修，不要為了讓測試通過而刪除或弱化測試。
-{NO_TOUCH} {}。
+{NO_TOUCH}
 - 完成後簡短說明修了什麼。",
-        id_of(task), task_block(task), clip(failures, MAX_FILE_CHARS), commands_block(cfg), cfg_str(cfg, "handover_path"))
+        id_of(task), task_block(task), clip(failures, MAX_FILE_CHARS), commands_block(cfg))
 }
 
 pub fn fix_review_prompt(cfg: &Value, task: &Value, review: &str, round: u64) -> String {
@@ -195,9 +200,9 @@ pub fn fix_review_prompt(cfg: &Value, task: &Value, review: &str, round: u64) ->
 
 ## 規則
 - 處理合理的意見；不同意的意見在回覆中說明理由。
-{NO_TOUCH} {}。
+{NO_TOUCH}
 - 完成後簡短說明改了什麼。",
-        id_of(task), task_block(task), clip(review, MAX_FILE_CHARS), commands_block(cfg), cfg_str(cfg, "handover_path"))
+        id_of(task), task_block(task), clip(review, MAX_FILE_CHARS), commands_block(cfg))
 }
 
 pub fn code_review_prompt(task: &Value, diff: &str, check_summary: &str) -> String {
@@ -222,13 +227,15 @@ VERDICT: PASS
 VERDICT: FAIL", id_of(task), task_block(task), clip(diff, MAX_DIFF_CHARS))
 }
 
-pub fn handover_prompt(root: &Path, cfg: &Value, task: &Value, implement_notes: &str, diff_stat: &str) -> String {
-    let path = cfg_str(cfg, "handover_path");
+/// handover 檔不在專案裡，AI 不直接改檔：請它輸出完整的新版內容，由 runner 寫入。
+pub fn handover_prompt(root: &Path, task: &Value, implement_notes: &str, diff_stat: &str) -> String {
     let notes = if implement_notes.is_empty() { "（無）" } else { implement_notes };
-    format!("請更新 handover 文件 `{path}`，讓下一個全新對話能直接接手。任務 {}「{}」剛完成並通過驗證與審查。
+    let current = read_text(handover_file(root));
+    let current = if current.trim().is_empty() { "（尚不存在，請建立）".to_string() } else { clip(&current, MAX_FILE_CHARS) };
+    format!("請更新 handover 文件，讓下一個全新對話能直接接手。任務 {}「{}」剛完成並通過驗證與審查。
 
 ## 目前的 handover
-{}
+{current}
 
 ## 這個任務的實作說明
 {}
@@ -237,12 +244,10 @@ pub fn handover_prompt(root: &Path, cfg: &Value, task: &Value, implement_notes: 
 {}
 
 ## 要求
-- 只編輯 `{path}` 這一個檔案（不存在就建立，包含上層資料夾）。
 - 內容包含：目前進度（已完成的任務）、這次改了什麼與原因、重要決策與注意事項、下一步建議、已知問題。
 - 保持精簡，刪掉過時內容，不要貼大段程式碼。
-- 不要修改其他檔案，不要執行 git 指令。",
-        id_of(task), task["title"].as_str().unwrap_or(""), read_if_exists(root, path).unwrap_or_else(|| "（尚不存在，請建立）".into()),
-        clip(notes, 8000), clip(diff_stat, 8000))
+- 不要修改任何檔案，不要執行 git 指令。最後的回覆只輸出更新後 handover 的完整 Markdown 本文，不要前言或結語；ai-workflow 會替你存檔。",
+        id_of(task), task["title"].as_str().unwrap_or(""), clip(notes, 8000), clip(diff_stat, 8000))
 }
 
 /// 對應 regex 片段 `\s*\n([\s\S]*?)\n```$`：s 是語言標記之後的文字，回傳區塊內容。
@@ -306,5 +311,19 @@ mod tests {
     fn clip_以字元計算並註明原長度() {
         assert_eq!(clip("abc", 5), "abc");
         assert_eq!(clip("中文字串", 2), "中文\n\n…（已截斷，原長度 4 字元）");
+    }
+
+    #[test]
+    fn 實作與_handover_提示詞直接帶內容_不要求_ai_改專案外的檔案() {
+        let root = crate::core::util::temp_dir("prompt-");
+        std::fs::create_dir_all(handover_file(&root).parent().unwrap()).unwrap();
+        std::fs::write(prd_file(&root), "# PRD 內容").unwrap();
+        std::fs::write(handover_file(&root), "上次進度").unwrap();
+        let task = serde_json::json!({ "id": 1, "title": "t" });
+        let prompt = implement_prompt(&root, &crate::core::config::default_config(), &task);
+        assert!(prompt.contains("# PRD 內容") && prompt.contains("上次進度"));
+        assert!(!prompt.contains(".aipipe"));
+        let handover = handover_prompt(&root, &task, "", "");
+        assert!(handover.contains("上次進度") && handover.contains("不要修改任何檔案"));
     }
 }

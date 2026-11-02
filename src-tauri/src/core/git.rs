@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use super::proc::{hide_window, to_wsl_path};
 use super::runtime::wsl_location;
-use super::state::aipipe_dir;
+use super::state::data_dir;
 use super::{AppError, Result};
 
 pub struct GitOut {
@@ -55,7 +55,7 @@ fn git_ok(root: &Path, args: &[&str], extra_env: &[(&str, String)]) -> Result<St
     Ok(r.out)
 }
 
-/// git add -A，但永遠不把 .aipipe/ 放進 index（不論使用者有沒有把它加進 .gitignore）。
+/// git add -A，但永遠不把舊版留下的 .aipipe/ 放進 index（不論使用者有沒有把它加進 .gitignore）。
 fn stage_all(root: &Path, env: &[(&str, String)]) -> Result<()> {
     git_ok(root, &["add", "-A"], env)?;
     git_ok(root, &["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--", ".aipipe"], env)?;
@@ -92,7 +92,7 @@ pub fn head_sha(root: &Path) -> Result<Option<String>> {
 
 /// 用暫存 index 把目前工作目錄（含未追蹤、排除 .gitignore）存成 tree 物件，不動使用者的 index 或檔案。
 pub fn snapshot_tree(root: &Path) -> Result<String> {
-    let dir = aipipe_dir(root).join("tmp");
+    let dir = data_dir(root).join("tmp");
     fs::create_dir_all(&dir)?;
     let index = dir.join(format!("snapshot-{}.index", std::process::id()));
     let _ = fs::remove_file(&index);
@@ -108,7 +108,7 @@ pub fn snapshot_tree(root: &Path) -> Result<String> {
     result
 }
 
-// 流程資料不屬於實作變更；保留舊 Task Master 資料以支援歷史版本。
+// 舊版留在專案裡的流程資料不屬於實作變更；保留舊 Task Master 資料以支援歷史版本。
 const TASK_PATHSPEC: [&str; 4] = ["--", ".", ":(exclude).aipipe", ":(exclude).taskmaster"];
 
 pub fn diff_trees(root: &Path, from: &str, to: &str) -> Result<String> {
@@ -121,7 +121,7 @@ pub fn has_changes(root: &Path) -> Result<bool> {
     Ok(!git(root, &["status", "--porcelain"], &[])?.out.is_empty())
 }
 
-/// 自動模式：切到 aipipe/<feature> 分支（不存在就從目前 HEAD 建立），絕不在 main/master 上 commit。
+/// 自動模式：切到 <branch_prefix><feature> 分支（不存在就從目前 HEAD 建立），絕不在 main/master 上 commit。
 pub fn ensure_feature_branch(root: &Path, branch: &str) -> Result<String> {
     if current_branch(root)?.as_deref() == Some(branch) {
         return Ok(branch.to_string());
@@ -145,7 +145,7 @@ pub fn commit_all(root: &Path, message: &str) -> Result<Option<String>> {
     head_sha(root)
 }
 
-/// git revert 任務的 commit。keep 裡的檔案（舊 Task Master 的 tasks.json、功能封存的 meta.json／tasks.json）
+/// git revert 任務的 commit。keep 裡的檔案（舊 Task Master 的 tasks.json）
 /// 代表目前的狀態，不跟著歷史倒回：revert 前先存下內容並還原成 HEAD 版本（否則未 commit 的變更會擋住 revert），
 /// revert 後再寫回。
 pub fn revert_commit(root: &Path, sha: &str, keep: &[String]) -> Result<Option<String>> {

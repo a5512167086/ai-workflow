@@ -1,13 +1,23 @@
-//! .aipipe.json（對應 legacy/src/config.js）。設定以 serde_json::Value 保存，保留使用者手寫的其他欄位。
+//! 設定分兩層，都放在 <home>（~/.ai-workflow）底下，專案資料夾裡沒有設定檔：
+//! - 全域設定 <home>/config.json：角色、模型、執行環境、輪數、分支前綴、Skills 綁定、同時執行上限…所有專案共用。
+//! - 專案欄位 <home>/projects/<id>/project.json：只有真正屬於專案的 build/test/lint 指令、feature、context_files。
+//!
+//! `load_config(root)` 回傳兩者合併後的結果，其餘程式碼照舊讀同一份 Value。
+//! 設定以 serde_json::Value 保存，保留使用者手寫的其他欄位。
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::util::{pretty, resolve, valid_skill_name};
+use super::home::{app_home, with_lock};
+use super::state::data_dir;
+use super::util::{pretty, resolve, valid_skill_name, write_json};
 use super::{AppError, Result};
 
-pub const CONFIG_FILE: &str = ".aipipe.json";
+pub const GLOBAL_FILE: &str = "config.json";
+pub const PROJECT_FILE: &str = "project.json";
+/// 真正屬於專案的欄位；其他欄位都是全域設定。
+pub const PROJECT_KEYS: [&str; 3] = ["commands", "feature", "context_files"];
 pub const ROLES: [&str; 9] = ["interviewer", "author", "reviewer", "task_planner", "implementer", "fixer", "code_reviewer", "handover", "chat"];
 pub const PROVIDERS: [&str; 2] = ["claude", "codex"];
 pub const MODES: [&str; 2] = ["auto", "manual"];
@@ -15,29 +25,31 @@ pub const CLI_NAMES: [&str; 2] = ["claude", "codex"];
 pub const RUNTIMES: [&str; 3] = ["auto", "windows", "wsl"];
 pub const SKILL_STAGES: [&str; 7] = ["prd", "prd_review", "tasks", "implement", "code_review", "fix", "handover"];
 
-pub fn default_config() -> Value {
+/// 專案欄位的預設值。context_files 預設為空：使用者可以填專案裡既有檔案的路徑（相對於專案或絕對路徑）。
+pub fn default_project() -> Value {
     json!({
-        "mode": "manual",
         "feature": "",
         "commands": { "build": "", "test": "", "lint": "" },
-        "context_files": ["docs/ai-context.md", "docs/index.md"],
-        "handover_path": "docs/handovers/current_handover.md",
-        "prd_path": "docs/aipipe/prd.md",
+        "context_files": [],
+    })
+}
+
+pub fn default_global() -> Value {
+    json!({
+        "mode": "manual",
         "skills": { "prd": [], "prd_review": [], "tasks": [], "implement": [], "code_review": [], "fix": [], "handover": [] },
-        // 需求待辦清單與功能封存，都放在專案裡可以 commit。
-        "backlog_path": "docs/aipipe/backlog.json",
-        "archive_dir": "docs/prd",
         // reviewer／code_reviewer 可以是 both：Claude 與 Codex 各審一次，兩份都通過才算通過。
         "roles": { "interviewer": "claude", "author": "claude", "reviewer": "codex", "task_planner": "claude", "implementer": "claude", "fixer": "claude", "code_reviewer": "codex", "handover": "claude", "chat": "claude" },
         // 每個角色、每個 AI 的模型與推理強度；空字串＝沿用 claude.model／codex.model（再空就是 CLI 預設）。
-        // 依實際執行的 AI 取用，所以單 AI 模式或額度切換時也會套用對應的設定。
         "models": default_models(),
         "max_fix_rounds": 3,
         "max_prd_rounds": 2,
         "num_tasks": 0,
         "command_timeout_sec": 900,
         "agent_timeout_sec": 1800,
-        "branch_prefix": "aipipe/",
+        "branch_prefix": "ai-workflow/",
+        // 所有專案的 run 同時最多幾個在跑。
+        "max_concurrent_runs": 1,
         // 每個 CLI 在 Windows 原生（windows）或 WSL（wsl）執行；auto 依專案路徑判斷。
         "runtime": { "claude": "auto", "codex": "auto" },
         // 空字串＝WSL 預設發行版。
@@ -59,6 +71,11 @@ pub fn default_config() -> Value {
             "windows_sandbox": if cfg!(windows) { "elevated" } else { "" }
         }
     })
+}
+
+/// 全域＋專案欄位的完整預設值（測試與沒有專案時使用）。
+pub fn default_config() -> Value {
+    deep_merge(&default_global(), &default_project())
 }
 
 fn default_models() -> Value {
@@ -107,19 +124,24 @@ pub fn deep_merge(base: &Value, extra: &Value) -> Value {
     if extra.is_object() { extra.clone() } else { out }
 }
 
-pub fn config_path(root: &Path) -> PathBuf {
-    root.join(CONFIG_FILE)
+pub fn global_config_path() -> PathBuf {
+    app_home().join(GLOBAL_FILE)
 }
 
-fn is_relative_inside(v: &str) -> bool {
-    !v.is_empty() && !Path::new(v).is_absolute() && !v.starts_with('/') && !v.starts_with('\\') && !v.split(['/', '\\']).any(|p| p == "..")
-        && !(v.len() > 1 && v.as_bytes()[1] == b':')
+pub fn project_config_path(root: &Path) -> PathBuf {
+    data_dir(root).join(PROJECT_FILE)
+}
+
+/// 專案是否已登錄（有 project.json）。
+pub fn project_registered(root: &Path) -> bool {
+    project_config_path(root).exists()
 }
 
 fn int_in(value: Option<&Value>, lo: i64, hi: i64) -> bool {
     value.and_then(Value::as_i64).is_some_and(|n| (lo..=hi).contains(&n)) && value.is_some_and(|v| v.is_i64() || v.is_u64())
 }
 
+/// 檢查合併後的設定。
 pub fn validate_config(cfg: &Value) -> Vec<String> {
     let mut errors = Vec::new();
     let s = |k: &str| cfg.get(k).and_then(Value::as_str);
@@ -152,6 +174,9 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
             errors.push(format!("{key} 必須是 1–10 的整數"));
         }
     }
+    if cfg.get("max_concurrent_runs").is_some_and(|v| !int_in(Some(v), 1, 8)) {
+        errors.push("max_concurrent_runs 必須是 1–8 的整數".into());
+    }
     match cfg.get("skills").and_then(Value::as_object) {
         None => errors.push("skills 必須是階段與技能名稱陣列的物件".into()),
         Some(map) => {
@@ -172,71 +197,122 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
     if !s("wsl_distro").is_some_and(|d| d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))) {
         errors.push("wsl_distro 只能包含英數字、底線、點與連字號".into());
     }
-    for key in ["backlog_path", "archive_dir"] {
-        if !s(key).is_some_and(is_relative_inside) {
-            errors.push(format!("{key} 必須是專案內的相對路徑"));
-        }
+    if cfg.get("context_files").is_some_and(|v| !v.as_array().is_some_and(|a| a.iter().all(|f| f.as_str().is_some_and(|s| !s.trim().is_empty())))) {
+        errors.push("context_files 必須是檔案路徑陣列".into());
     }
     errors
 }
 
 fn read_raw(file: &Path) -> Result<Value> {
     let text = fs::read_to_string(file)?;
-    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| AppError::new(format!("{CONFIG_FILE} 不是合法的 JSON：{e}")))
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| AppError::new(format!("{} 不是合法的 JSON：{e}", file.display())))
 }
 
-pub fn load_config(root: &Path) -> Result<Value> {
-    let file = config_path(root);
-    if !file.exists() {
-        crate::bail!("找不到 {CONFIG_FILE}，請先在專案根目錄執行 aipipe init");
-    }
-    let raw = read_raw(&file)?;
-    let mut cfg = deep_merge(&default_config(), &raw);
-    // 舊版共用作者／實作者設定；拆開後先沿用，避免升級改掉使用者選擇。
+fn read_raw_or_empty(file: &Path) -> Result<Value> {
+    if file.exists() { read_raw(file) } else { Ok(json!({})) }
+}
+
+/// 舊版共用作者／實作者設定；拆開後先沿用，避免升級改掉使用者選擇。
+fn apply_role_fallbacks(cfg: &mut Value, raw: &Value) {
     for (role, previous) in [("interviewer", "author"), ("task_planner", "author"), ("fixer", "implementer"), ("handover", "implementer"), ("chat", "author")] {
         if raw["roles"][role].is_null() { cfg["roles"][role] = cfg["roles"][previous].clone(); }
         if raw["models"][role].is_null() { cfg["models"][role] = cfg["models"][previous].clone(); }
     }
-    let errors = validate_config(&cfg);
+}
+
+/// 全域設定（預設值＋ config.json）。
+pub fn load_global() -> Result<Value> {
+    let raw = read_raw_or_empty(&global_config_path())?;
+    let mut cfg = deep_merge(&default_global(), &raw);
+    apply_role_fallbacks(&mut cfg, &raw);
+    let errors = validate_config(&deep_merge(&cfg, &default_project()));
     if !errors.is_empty() {
-        crate::bail!("{CONFIG_FILE} 設定錯誤：\n- {}", errors.join("\n- "));
+        crate::bail!("{} 設定錯誤：\n- {}", global_config_path().display(), errors.join("\n- "));
     }
     Ok(cfg)
 }
 
-/// loadConfig(root, { required: false })。
+/// 只改全域設定裡的幾個欄位，保留其餘內容；回傳更新後的全域設定。
+pub fn patch_global(patch: &Value) -> Result<Value> {
+    with_lock("config", || {
+        let file = global_config_path();
+        let raw = read_raw_or_empty(&file)?;
+        let next = deep_merge(&raw, patch);
+        let errors = validate_config(&deep_merge(&default_config(), &next));
+        if !errors.is_empty() {
+            crate::bail!("{}", errors.join("; "));
+        }
+        write_json(&file, &next)?;
+        load_global()
+    })
+}
+
+/// 專案欄位（project.json 原始內容；測試可以放全域欄位的覆寫）。
+pub fn load_project(root: &Path) -> Result<Value> {
+    read_raw_or_empty(&project_config_path(root))
+}
+
+/// 寫入 project.json（整份覆蓋）。
+pub fn save_project(root: &Path, fields: &Value) -> Result<()> {
+    let errors = validate_config(&deep_merge(&default_config(), fields));
+    if !errors.is_empty() {
+        crate::bail!("{}", errors.join("; "));
+    }
+    write_json(&project_config_path(root), fields)
+}
+
+/// 全域設定 ＋ 該專案的欄位。專案沒登錄時報錯。
+pub fn load_config(root: &Path) -> Result<Value> {
+    if !project_registered(root) {
+        crate::bail!("{} 還沒加入 ai-workflow，請先執行 ai-workflow projects add，或在總覽加入專案", root.display());
+    }
+    let project = load_project(root)?;
+    let cfg = deep_merge(&deep_merge(&load_global()?, &default_project()), &project);
+    let errors = validate_config(&cfg);
+    if !errors.is_empty() {
+        crate::bail!("{} 設定錯誤：\n- {}", project_config_path(root).display(), errors.join("\n- "));
+    }
+    Ok(cfg)
+}
+
+/// 專案沒登錄時用全域設定＋專案欄位預設值（doctor 等不需要專案的場合）。
 pub fn load_config_or_default(root: &Path) -> Result<Value> {
-    if config_path(root).exists() { load_config(root) } else { Ok(default_config()) }
+    if project_registered(root) { load_config(root) } else { Ok(deep_merge(&load_global()?, &default_project())) }
 }
 
+/// 把整份設定存成這個專案的 project.json。只有測試會這樣用：讓每個測試專案有自己獨立的角色與 CLI 設定；
+/// 正式流程的 UI／CLI 透過 patch_config 把全域欄位寫進 config.json。
 pub fn save_config(root: &Path, cfg: &Value) -> Result<()> {
-    let errors = validate_config(cfg);
-    if !errors.is_empty() {
-        crate::bail!("{}", errors.join("; "));
+    let mut fields = cfg.clone();
+    for key in ["_run_provider", "_reference_ids", "_visual_reference_ids"] {
+        if let Some(map) = fields.as_object_mut() { map.remove(key); }
     }
-    fs::write(config_path(root), pretty(cfg) + "\n")?;
-    Ok(())
+    save_project(root, &fields)
 }
 
-/// 只改單一欄位（例如 UI 切換模式），保留使用者手寫的其餘內容。
+/// 只改單一欄位（例如 UI 切換模式）：專案欄位寫進 project.json，其餘寫進全域 config.json。
 pub fn patch_config(root: &Path, patch: &Value) -> Result<Value> {
-    let file = config_path(root);
-    let raw = if file.exists() { read_raw(&file)? } else { json!({}) };
-    let next = deep_merge(&raw, patch);
-    let errors = validate_config(&deep_merge(&default_config(), &next));
-    if !errors.is_empty() {
-        crate::bail!("{}", errors.join("; "));
+    let mut global = json!({});
+    let mut project = json!({});
+    for (k, v) in patch.as_object().into_iter().flatten() {
+        if PROJECT_KEYS.contains(&k.as_str()) { project[k] = v.clone(); } else { global[k] = v.clone(); }
     }
-    fs::write(&file, pretty(&next) + "\n")?;
+    if global.as_object().is_some_and(|m| !m.is_empty()) {
+        patch_global(&global)?;
+    }
+    if project.as_object().is_some_and(|m| !m.is_empty()) {
+        let next = deep_merge(&load_project(root)?, &project);
+        save_project(root, &next)?;
+    }
     load_config(root)
 }
 
-/// 從目前目錄往上找含 .aipipe.json 的目錄，找不到就回傳起點。
+/// 從目前目錄往上找已登錄在 projects.json 的專案，找不到就回傳起點（之後 load_config 會提示先加入專案）。
 pub fn find_project_root(start: &Path) -> PathBuf {
     let start = resolve(start);
     let mut dir = start.as_path();
     loop {
-        if dir.join(CONFIG_FILE).exists() {
+        if super::projects::find_project_by_path(dir).is_some() {
             return dir.to_path_buf();
         }
         match dir.parent() {
@@ -251,6 +327,11 @@ pub fn cfg_str<'a>(cfg: &'a Value, key: &str) -> &'a str {
     cfg.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// 給 UI 看的全域設定原文。
+pub fn global_config_text() -> String {
+    read_raw_or_empty(&global_config_path()).map(|v| pretty(&v)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,17 +343,9 @@ mod tests {
         bad["mode"] = json!("x");
         bad["max_fix_rounds"] = json!(0);
         bad["roles"] = json!({ "author": "gpt" });
-        assert!(validate_config(&bad).len() >= 4);
-    }
-
-    #[test]
-    fn backlog_path_與_archive_dir_必須是專案內相對路徑() {
-        let mut c = default_config();
-        c["archive_dir"] = json!("../out");
-        assert!(!validate_config(&c).is_empty());
-        let mut c = default_config();
-        c["backlog_path"] = json!("C:\\abs\\b.json");
-        assert!(!validate_config(&c).is_empty());
+        bad["max_concurrent_runs"] = json!(9);
+        bad["context_files"] = json!(["ok", 3]);
+        assert!(validate_config(&bad).len() >= 6);
     }
 
     #[test]
@@ -300,17 +373,51 @@ mod tests {
     }
 
     #[test]
+    fn 全域設定與專案欄位分開存_合併後給其餘程式使用() {
+        let root = super::super::util::temp_dir("config-split-");
+        assert!(load_config(&root).unwrap_err().message.contains("projects add"));
+        save_project(&root, &json!({ "commands": { "test": "npm test" }, "feature": "csv" })).unwrap();
+        patch_config(&root, &json!({ "mode": "auto", "feature": "export", "roles": { "author": "codex" } })).unwrap();
+        let cfg = load_config(&root).unwrap();
+        assert_eq!(cfg["mode"], "auto");
+        assert_eq!(cfg["feature"], "export");
+        assert_eq!(cfg["commands"]["test"], "npm test");
+        assert_eq!(cfg["roles"]["author"], "codex");
+        // 全域欄位不會寫進 project.json；專案欄位不會寫進全域設定。
+        let project = load_project(&root).unwrap();
+        assert!(project.get("mode").is_none() && project.get("roles").is_none());
+        let global = read_raw(&global_config_path()).unwrap();
+        assert!(global.get("feature").is_none() && global.get("commands").is_none());
+        assert_eq!(global["mode"], "auto");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "專案資料夾不能有設定檔");
+        // 另一個專案看到同一份全域設定。
+        let other = super::super::util::temp_dir("config-split-other-");
+        save_project(&other, &json!({})).unwrap();
+        assert_eq!(load_config(&other).unwrap()["roles"]["author"], "codex");
+        assert_eq!(load_config(&other).unwrap()["feature"], "");
+        patch_global(&json!({ "mode": "manual", "roles": { "author": "claude" } })).unwrap();
+    }
+
+    #[test]
     fn 舊角色設定拆開後沿用_新角色可各自覆寫() {
         let root = super::super::util::temp_dir("role-upgrade-");
-        fs::write(config_path(&root), json!({ "roles": { "interviewer": "claude", "author": "codex", "implementer": "codex" }, "models": { "author": { "codex": { "model": "a", "effort": "high" } }, "implementer": { "codex": { "model": "b", "effort": "low" } } } }).to_string()).unwrap();
+        save_config(&root, &json!({ "roles": { "interviewer": "claude", "author": "codex", "implementer": "codex" }, "models": { "author": { "codex": { "model": "a", "effort": "high" } }, "implementer": { "codex": { "model": "b", "effort": "low" } } } })).unwrap();
         let cfg = load_config(&root).unwrap();
-        assert_eq!(cfg["roles"]["task_planner"], "codex");
-        assert_eq!(model_for(&cfg, Some("task_planner"), "codex").0, "a");
-        assert_eq!(model_for(&cfg, Some("fixer"), "codex").0, "b");
-        assert_eq!(model_for(&cfg, Some("handover"), "codex").1, "low");
-        let cfg = patch_config(&root, &json!({ "roles": { "fixer": "claude" }, "models": { "handover": { "codex": { "model": "c" } } } })).unwrap();
-        assert_eq!(cfg["roles"]["fixer"], "claude");
-        assert_eq!(model_for(&cfg, Some("handover"), "codex").0, "c");
-        assert_eq!(model_for(&cfg, Some("implementer"), "codex").0, "b");
+        // project.json 的覆寫只套用寫到的角色；沒寫到的角色沿用全域預設（這裡是預設值）。
+        assert_eq!(cfg["roles"]["author"], "codex");
+        assert_eq!(model_for(&cfg, Some("author"), "codex").0, "a");
+        assert_eq!(model_for(&cfg, Some("fixer"), "codex").0, "");
+        // 全域 config.json 裡只有舊角色時，新角色沿用舊設定。
+        let mut raw = json!({ "roles": { "author": "codex", "implementer": "codex" }, "models": { "author": { "codex": { "model": "ga" } }, "implementer": { "codex": { "model": "gb", "effort": "low" } } } });
+        let mut global = deep_merge(&default_global(), &raw);
+        apply_role_fallbacks(&mut global, &raw);
+        assert_eq!(global["roles"]["task_planner"], "codex");
+        assert_eq!(model_for(&global, Some("task_planner"), "codex").0, "ga");
+        assert_eq!(model_for(&global, Some("handover"), "codex").1, "low");
+        raw["roles"]["fixer"] = json!("claude");
+        let mut global = deep_merge(&default_global(), &raw);
+        apply_role_fallbacks(&mut global, &raw);
+        assert_eq!(global["roles"]["fixer"], "claude");
+        assert_eq!(model_for(&global, Some("fixer"), "codex").0, "gb");
     }
 }

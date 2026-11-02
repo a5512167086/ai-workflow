@@ -14,7 +14,7 @@ use super::config::model_for;
 use super::proc::{last_lines, resolve_cli_for, run, RunOpts};
 use super::runtime::cli_environment;
 use super::skills::prepare_skills;
-use super::state::{aipipe_dir, append_log};
+use super::state::{append_log, data_dir};
 use super::usage::{record_telemetry, Telemetry};
 use super::util::{now_iso, write_json};
 use super::Result;
@@ -117,7 +117,7 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     let references = super::references::prepare(root,cfg,opts.stage,scope,&to_path)?;
     let prompt = [opts.prompt.as_str(), prepared.text.as_str(), references.text.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
     let session_id = uuid::Uuid::new_v4().to_string();
-    let session_file = aipipe_dir(root).join("sessions").join(format!("{session_id}.json"));
+    let session_file = data_dir(root).join("sessions").join(format!("{session_id}.json"));
     let session = json!({
         "id": session_id, "provider": provider, "runtime": spec.runtime, "distro": cli_environment(cfg, provider, root).distro,
         "stage": opts.stage.unwrap_or("skill"), "label": label, "skills": prepared.snapshots, "references": references.snapshots, "started_at": now_iso(), "status": "running",
@@ -135,7 +135,7 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     };
     on_event(&json!({}));
     append_log(root, scope, &format!("── {label}：{provider}（{}）開始，session {session_id} ──", if opts.write { "可編輯" } else { "唯讀" }));
-    let prompt_file = aipipe_dir(root).join("tmp").join(format!("{session_id}.prompt.md"));
+    let prompt_file = data_dir(root).join("tmp").join(format!("{session_id}.prompt.md"));
     fs::create_dir_all(prompt_file.parent().unwrap())?;
     fs::write(&prompt_file, &prompt)?;
     let started = Instant::now();
@@ -205,6 +205,8 @@ fn run_claude(opts: &AgentOpts, prompt: &str, references: &super::references::Pr
     // -p + stream-json 需要 --verbose 才會輸出逐步事件。
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].map(String::from).to_vec();
     if !references.images.is_empty() { args.extend(["--input-format", "stream-json"].map(String::from)); }
+    // Skill 快照、參考資料與 handover 都在專案資料目錄（不在專案裡），讓 Claude 把它當成額外的工作目錄。
+    args.extend(["--add-dir".into(), spec.to_path(&data_dir(root))?]);
     if write {
         args.extend(["--permission-mode", "acceptEdits"].map(String::from));
         let tools: Vec<&str> = cfg["claude"]["allowed_tools"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
@@ -289,7 +291,7 @@ static READ_ONLY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^sandbox:\
 fn run_codex(opts: &AgentOpts, prompt: &str, references: &super::references::Prepared, on_event: &mut dyn FnMut(&Value)) -> Result<CliOutcome> {
     let (root,cfg,role,write,scope)=(opts.root,opts.cfg,opts.role,opts.write,opts.scope);
     let spec = resolve_cli_for(cfg, "codex", root)?;
-    let tmp = aipipe_dir(root).join("tmp");
+    let tmp = data_dir(root).join("tmp");
     fs::create_dir_all(&tmp)?;
     let out_file = tmp.join(format!("{}.codex-last.md", uuid::Uuid::new_v4()));
     let mut args: Vec<String> = vec![
@@ -351,7 +353,7 @@ fn run_codex(opts: &AgentOpts, prompt: &str, references: &super::references::Pre
         return Ok(CliOutcome {
             ok: false,
             text,
-            error: Some("Codex 把 workspace-write 降成了 read-only，無法修改檔案。Windows 請在 .aipipe.json 設定 codex.windows_sandbox（elevated 或 unelevated）".into()),
+            error: Some("Codex 把 workspace-write 降成了 read-only，無法修改檔案。Windows 請在設定頁或全域設定 config.json 的 codex.windows_sandbox 填 elevated 或 unelevated".into()),
         });
     }
     Ok(CliOutcome { ok: true, text, error: None })

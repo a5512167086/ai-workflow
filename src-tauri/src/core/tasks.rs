@@ -1,4 +1,4 @@
-//! 內建任務引擎（對應 legacy/src/tasks.js）。資料存在 .aipipe/tasks.json，格式與 Node 版相同。
+//! 內建任務引擎。資料存在專案資料目錄的 tasks.json（每個功能一個群組）。
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -15,7 +15,7 @@ pub const TASK_STATUSES: [&str; 7] = ["pending", "in-progress", "review", "done"
 const OPEN: [&str; 3] = ["pending", "in-progress", "review"];
 
 pub fn tasks_file(root: &Path) -> PathBuf {
-    root.join(".aipipe").join("tasks.json")
+    super::state::data_dir(root).join("tasks.json")
 }
 
 fn legacy_file(root: &Path) -> PathBuf {

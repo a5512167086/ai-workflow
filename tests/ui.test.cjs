@@ -5,7 +5,7 @@ const { JSDOM } = require('jsdom');
 
 function page() {
   const dom = new JSDOM(fs.readFileSync('src/index.html', 'utf8'), {
-    url: 'https://aipipe.test/index.html', runScripts: 'outside-only',
+    url: 'https://ai-workflow.test/index.html?p=0123456789', runScripts: 'outside-only',
   });
   const w = dom.window;
   w.structuredClone = structuredClone;
@@ -17,10 +17,9 @@ function page() {
     bindReferences, bindReferenceInput, renderReferenceWidgets, openReferenceDialog, referenceDraft, saveReferenceSelection,
     setReferenceDraft(key, ids) { referenceDrafts.set(key, ids); },
     catalog(items) { referenceCatalog = new Map(items.map(item => [item.id, item])); },
-    bind, parseLog, renderLogTree, setLogTreeOpen, renderModels, renderSettings,
+    bind, parseLog, renderLogTree, setLogTreeOpen, renderProjectSettings, saveProjectSettings,
     openArchive, openCurrent, renderRecords, reviewsView,
     setSnap(value) { snap = value; },
-    draft() { return modelDraft; },
     setApi(fn) { api = fn; },
     setArchive(value) { recArchive = value; },
     archive() { return recArchive; }, renderUsage, runAction, renderPrd,
@@ -33,27 +32,112 @@ function page() {
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
 }
+/** 總覽頁（含全域設定）。 */
+function settingsPage() {
+  const dom = new JSDOM(fs.readFileSync('src/overview.html', 'utf8'), {
+    url: 'https://ai-workflow.test/overview.html', runScripts: 'outside-only',
+  });
+  const w = dom.window;
+  w.structuredClone = structuredClone;
+  w.__TAURI__ = { core: { invoke: async () => ({}) } };
+  const common = fs.readFileSync('src/common.js', 'utf8');
+  const settings = fs.readFileSync('src/settings.js', 'utf8');
+  w.eval(`${common}\n${settings}\nwindow.ui = {
+    renderSettings, renderModels, bindSettings, loadSettings, effortsFor,
+    setConfig(value) { globalConfig = value; },
+    draft() { return modelDraft; },
+    setApi(fn) { api = fn; },
+  };`);
+  return { dom, w, ui: w.ui, doc: w.document };
+}
 const snapshot = () => ({ config: {
   feature: '測試功能', roles: { author: 'claude', reviewer: 'both', implementer: 'claude', code_reviewer: 'both' },
-  models: {}, runtime: {},
+  models: {}, runtime: {}, commands: { build: '', test: 'npm test', lint: '' }, context_files: ['docs/a.md'],
 }, state: { prd: { status: 'approved' }, pipeline: { status: 'idle' }, control: {}, tasks: {} }, tasks: [] });
+const globalConfig = () => ({
+  mode: 'manual', max_concurrent_runs: 1, max_fix_rounds: 3, max_prd_rounds: 2, num_tasks: 0, branch_prefix: 'ai-workflow/',
+  roles: { interviewer: 'claude', author: 'claude', reviewer: 'both', task_planner: 'claude', implementer: 'claude', fixer: 'claude', code_reviewer: 'both', handover: 'claude', chat: 'claude' },
+  models: {}, runtime: { claude: 'auto', codex: 'wsl' }, claude: {}, codex: {},
+});
 
-test('模型輸入在狀態更新後保留焦點、內容與待儲存值', () => {
-  const { dom, ui, doc, w } = page();
-  doc.querySelector('#tab-settings').hidden = false;
-  ui.setSnap(snapshot()); ui.renderSettings();
-  const input = doc.querySelector('#role-models input');
+test('全域設定頁：九個角色排成 3×3 小卡，模型輸入在重畫後保留焦點、內容與待儲存值', () => {
+  const { dom, ui, doc, w } = settingsPage();
+  doc.querySelector('#overview-settings').hidden = false;
+  ui.setConfig(globalConfig()); ui.renderSettings();
+  const cards = doc.querySelectorAll('#role-models .role-card');
+  assert.equal(cards.length, 9);
+  assert.deepEqual([...cards].map(card => card.dataset.role), ['interviewer', 'author', 'reviewer', 'task_planner', 'implementer', 'fixer', 'code_reviewer', 'handover', 'chat']);
+  assert.ok(doc.querySelector('#role-models').classList.contains('role-grid'));
+  for (const card of cards) {
+    assert.ok(card.querySelector('legend').textContent);
+    assert.ok(card.querySelector('select.role-provider'));
+    assert.ok(card.querySelector('.model-line input[list]'));
+    assert.ok(card.querySelector('.model-line select'));
+  }
+  // 只有兩個審查角色可以選雙人審查；雙人時顯示兩行模型。
+  const both = [...cards].filter(card => [...card.querySelector('select.role-provider').options].some(option => option.value === 'both'));
+  assert.deepEqual(both.map(card => card.dataset.role), ['reviewer', 'code_reviewer']);
+  assert.equal(cards[2].querySelectorAll('.model-line').length, 2);
+  assert.equal(cards[1].querySelectorAll('.model-line').length, 1);
+  const input = cards[1].querySelector('.model-line input');
   input.focus(); input.value = 'custom-model';
   input.dispatchEvent(new w.Event('input'));
   ui.renderSettings();
   assert.equal(doc.activeElement, input);
   assert.equal(input.value, 'custom-model');
   assert.equal(ui.draft().models.author.claude.model, 'custom-model');
-  const reviewer = doc.querySelectorAll('.role-row > select')[1];
+  const reviewer = cards[2].querySelector('select.role-provider');
   reviewer.focus(); reviewer.value = 'codex';
   reviewer.dispatchEvent(new w.Event('change'));
-  assert.equal(doc.querySelectorAll('.role-row')[1].querySelectorAll('.model-line').length, 1);
+  assert.equal(doc.querySelectorAll('#role-models .role-card')[2].querySelectorAll('.model-line').length, 1);
+  // 模式、執行環境與流程參數都來自全域設定；頁面上沒有專案選單。
+  assert.equal(doc.querySelector('[data-mode="manual"]').getAttribute('aria-checked'), 'true');
+  assert.equal(doc.querySelector('#rt-codex').value, 'wsl');
+  assert.equal(doc.querySelector('#limit-prefix').value, 'ai-workflow/');
+  assert.equal(doc.querySelector('#settings-project'), null);
   assert.equal(doc.querySelector('#wsl-distro'), null);
+  dom.window.close();
+});
+
+test('全域設定從 /api/config 讀取、儲存時只呼叫全域路由', async () => {
+  const { dom, ui, doc } = settingsPage();
+  const requests = [];
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body });
+    if (path === '/api/config') return { config: globalConfig(), text: '{}', home: 'C:\\Users\\me\\.ai-workflow', queue: { max: 2, running: [], waiting: [] } };
+    if (path === '/api/models') return { claude: { models: [] }, codex: { models: [], error: '' } };
+    return { config: { ...globalConfig(), roles: { ...globalConfig().roles, author: 'codex' } } };
+  });
+  ui.bindSettings();
+  await ui.loadSettings();
+  assert.equal(requests[0].path, '/api/config');
+  assert.equal(doc.querySelector('#max-runs').value, '2');
+  assert.match(doc.querySelector('#config-path').textContent, /\.ai-workflow\\config\.json$/);
+  const author = doc.querySelectorAll('#role-models .role-card')[1].querySelector('select.role-provider');
+  author.value = 'codex'; author.dispatchEvent(new dom.window.Event('change'));
+  await doc.querySelector('#btn-save-models').onclick();
+  const save = requests.find(r => r.path === '/api/config/models');
+  assert.equal(save.body.roles.author, 'codex');
+  assert.equal(requests.some(r => /\/api\/p\//.test(r.path)), false);
+  dom.window.close();
+});
+
+test('專案頁只剩這個專案的指令與 context 欄位，儲存只送專案欄位', async () => {
+  const { dom, ui, doc } = page();
+  assert.equal(doc.querySelector('#tab-settings'), null);
+  assert.equal(doc.querySelector('#role-models'), null);
+  const state = snapshot(); state.dataDir = 'C:\\Users\\me\\.ai-workflow\\projects\\0123456789';
+  ui.setSnap(state); ui.bind(); ui.renderProjectSettings();
+  assert.equal(doc.querySelector('#pc-test').value, 'npm test');
+  assert.equal(doc.querySelector('#pc-context').value, 'docs/a.md');
+  assert.match(doc.querySelector('#pc-data-dir').textContent, /\.ai-workflow/);
+  let request;
+  ui.setApi(async (path, body) => { request = { path, body }; return { config: { ...state.config, commands: body.commands } }; });
+  doc.querySelector('#pc-lint').value = 'npm run lint';
+  doc.querySelector('#pc-context').value = 'docs/a.md\n\nREADME.md';
+  await ui.saveProjectSettings();
+  assert.equal(request.path, '/api/config/project');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.body)), { commands: { build: '', test: 'npm test', lint: 'npm run lint' }, feature: '測試功能', context_files: ['docs/a.md', 'README.md'] });
   dom.window.close();
 });
 
@@ -194,6 +278,7 @@ test('藍圖可從鍵盤切換，子任務可開啟詳情並在關閉後恢復�
 test('自動完成與未設定驗證指令不會顯示成已人工驗收或驗證通過', () => {
   const { dom, ui, doc } = page();
   const state = snapshot(); state.state.pipeline.status = 'feature_test';
+  state.config.commands = { build: '', test: '', lint: '' };
   ui.setSnap(state);
   ui.renderTaskGates({ id: 1, status: 'done' }, { phase: 'done', last_check_ok: true, review_verdict: 'PASS' });
   assert.match(doc.querySelector('#d-gates').textContent, /未設定驗證指令/);

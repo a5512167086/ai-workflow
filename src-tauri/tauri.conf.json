@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "aipipe",
+  "productName": "ai-workflow",
   "version": "0.4.0",
-  "identifier": "dev.aipipe.desktop",
+  "identifier": "dev.ai-workflow.desktop",
   "build": {
     "frontendDist": "../src"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "aipipe",
+        "title": "ai-workflow",
         "url": "overview.html",
         "width": 1320,
         "height": 880,

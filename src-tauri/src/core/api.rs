@@ -1,5 +1,5 @@
-//! 前端呼叫的 API（對應 legacy/src/server.js 的路由）。路徑與回傳格式和 Node 版 HTTP API 相同，
-//! 只是改由 Tauri command 呼叫：GET /api/projects、POST /api/projects/add、GET /api/p/<id>/state …
+//! 前端呼叫的 API。路徑與回傳格式沿用舊版 HTTP API，改由 Tauri command 呼叫：
+//! GET /api/projects、POST /api/projects/add、GET /api/config、GET /api/p/<id>/state …
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -7,19 +7,20 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::archive::{list_archives, read_archive};
-use super::backlog::{delete_item, get_item, read_backlog_with, reorder_items, update_item};
+use super::backlog::{delete_item, get_item, read_backlog, reorder_items, update_item};
 use super::cli::spawn_detached_cli;
-use super::config::{load_config, patch_config, CLI_NAMES, CONFIG_FILE, MODES, RUNTIMES, SKILL_STAGES};
+use super::config::{global_config_text, load_config, load_global, patch_config, patch_global, project_registered, CLI_NAMES, MODES, RUNTIMES, SKILL_STAGES};
 use super::doctor::doctor_report;
 use super::git::is_git_repo;
-use super::init::{init_project, InitOptions};
+use super::home::{app_home, home_dir};
+use super::init::prepare_project;
 use super::prd::{approve_prd, current_prd};
 use super::proc::{query_codex_rpc_with, resolve_cli_for};
 use super::projects::{add_project, get_project, list_projects, project_id, project_summary, remove_project, touch_project};
 use super::queue::{queue_entry_for, queue_snapshot, set_max_concurrent};
 use super::runner::request_pause;
 use super::skills::{import_skill, list_skill_runs, list_skills, load_skill, save_skill};
-use super::state::{aipipe_dir, ensure_dirs, is_pid_alive_value, log_path, read_state};
+use super::state::{data_dir, is_pid_alive_value, log_path, read_state};
 use super::tasks::read_tasks;
 use super::usage::{refresh_usage_limits, usage_snapshot};
 use super::util::{read_text, resolve, str_of, truthy};
@@ -49,13 +50,14 @@ fn project_name(root: &Path) -> String {
         .unwrap_or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
 }
 
-/// 專案頁的完整狀態（對應 server.js 的 snapshot）。
+/// 專案頁的完整狀態。
 pub fn snapshot(root: &Path) -> Result<Value> {
     let cfg = load_config(root)?;
     let state = read_state(root);
     let runner_alive = is_pid_alive_value(&state["runner"]["pid"]);
     Ok(json!({
         "root": root.to_string_lossy(),
+        "dataDir": data_dir(root).to_string_lossy(),
         "project": { "id": project_id(root), "name": project_name(root) },
         "config": cfg,
         "runnerAlive": runner_alive,
@@ -76,14 +78,14 @@ pub fn snapshot(root: &Path) -> Result<Value> {
 fn prd_rounds(root: &Path, state: &Value) -> Vec<Value> {
     state["prd"]["rounds"].as_array().into_iter().flatten().map(|r| {
         let mut r = r.clone();
-        let text = r["file"].as_str().filter(|f| !f.is_empty()).map(|f| read_text(aipipe_dir(root).join("prd").join(f))).unwrap_or_default();
+        let text = r["file"].as_str().filter(|f| !f.is_empty()).map(|f| read_text(data_dir(root).join("prd").join(f))).unwrap_or_default();
         r["text"] = json!(text);
         r
     }).collect()
 }
 
 fn task_detail(root: &Path, id: &str) -> Result<Value> {
-    let dir = aipipe_dir(root).join("tasks").join(id);
+    let dir = data_dir(root).join("tasks").join(id);
     // review-<n>.md，或雙人審查的 review-<n>-<claude|codex>.md
     let mut reviews: Vec<(u64, String, String)> = fs::read_dir(&dir).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_else(|_| vec![])
         .into_iter()
@@ -97,7 +99,7 @@ fn task_detail(root: &Path, id: &str) -> Result<Value> {
     let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
     let task = super::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
     Ok(json!({
-        "id": id, "revision": super::tasks::revision(root)?, "tag":super::tasks::current_tag(root)?,
+        "id": id, "revision": super::tasks::revision(root)?, "tag": super::tasks::current_tag(root)?,
         "state": read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null),
         "task": task,
         "checks": read_text(dir.join("checks.txt")),
@@ -162,28 +164,102 @@ fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
     spawn(root, &args)
 }
 
+/// 全域設定的修改：runtime／models／mode／skills 綁定。root 給 skills 綁定檢查技能存在用（總覽沒有專案時用 None）。
+fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Value> {
+    let patch = match action {
+        "config/runtime" => {
+            let mut runtime = json!({});
+            for name in CLI_NAMES {
+                if let Some(v) = body["runtime"].get(name).filter(|v| !v.is_null()) {
+                    if !v.as_str().is_some_and(|r| RUNTIMES.contains(&r)) {
+                        return Err(http(400, format!("{name} 的 runtime 不正確")));
+                    }
+                    runtime[name] = v.clone();
+                }
+            }
+            let mut patch = json!({ "runtime": runtime });
+            if !body["wsl_distro"].is_null() && body.get("wsl_distro").is_some() {
+                patch["wsl_distro"] = json!(text_field(body, "wsl_distro").trim());
+            }
+            patch
+        }
+        "config/models" => {
+            // roles 與 models 一起存；validate 會擋掉不合法的值。
+            let mut patch = json!({});
+            for key in ["roles", "models"] {
+                if body[key].is_object() {
+                    patch[key] = body[key].clone();
+                }
+            }
+            patch
+        }
+        "config/mode" => {
+            if !body["mode"].as_str().is_some_and(|m| MODES.contains(&m)) {
+                return Err(http(400, "模式不正確"));
+            }
+            json!({ "mode": body["mode"] })
+        }
+        "config/limits" => {
+            let mut patch = json!({});
+            for key in ["max_fix_rounds", "max_prd_rounds", "num_tasks", "command_timeout_sec", "agent_timeout_sec"] {
+                if let Some(v) = body.get(key).filter(|v| v.is_i64() || v.is_u64()) {
+                    patch[key] = v.clone();
+                }
+            }
+            if let Some(prefix) = body["branch_prefix"].as_str() {
+                let prefix = prefix.trim();
+                if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || "/_-.".contains(c)) {
+                    return Err(http(400, "分支前綴只能包含英數字、/、_、- 與 ."));
+                }
+                patch["branch_prefix"] = json!(prefix);
+            }
+            patch
+        }
+        "skills/config" => {
+            for (stage, names) in body["skills"].as_object().into_iter().flatten() {
+                let Some(names) = names.as_array().filter(|_| SKILL_STAGES.contains(&stage.as_str())) else {
+                    return Err(http(400, "Skill 階段設定不正確"));
+                };
+                for name in names {
+                    let skill = load_skill(root.unwrap_or(&app_home()), name.as_str().unwrap_or(""))?;
+                    if !skill.extensions.is_empty() {
+                        return Err(http(400, format!("{} 含執行器專屬設定", skill.name)));
+                    }
+                }
+            }
+            json!({ "skills": body["skills"] })
+        }
+        _ => return Err(http(404, "未知操作")),
+    };
+    let config = match root {
+        Some(root) => patch_config(root, &patch)?,
+        None => patch_global(&patch)?,
+    };
+    Ok(json!({ "config": config }))
+}
+
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
     match action {
-        "references/suggest" => super::references::suggest(root,&text_field(body,"query")),
-        "references/import" => super::references::import(root,body),
+        "references/suggest" => super::references::suggest(root, &text_field(body, "query")),
+        "references/import" => super::references::import(root, body),
         "references/assign" => {
-            let refs=json!(super::references::ids(root,&body["references"])?);
+            let refs = json!(super::references::ids(root, &body["references"])?);
             match body["target"].as_str().unwrap_or("") {
-                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409,"目前功能已變更，請重新選取參考資料")); } super::tasks::update_feature_references(root,&snap["state"]["prd"]["archive_dir"],&refs)?; super::state::update_state(root,|s|s["prd"]["references"]=refs)?; },
-                "group" => { busy_guard(&snap)?; super::tasks::assign_references(root,"",&text_field(body,"tag"),refs)?; },
-                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body,"id")) { return Err(http(400,"任務 id 不正確")); } super::tasks::assign_references(root,&text_field(body,"id"),&text_field(body,"tag"),refs)?; },
-                "backlog" => { super::backlog::update_item(root,&text_field(body,"id"),&json!({"references":refs}))?; },
-                _ => return Err(http(400,"參考資料目標不正確")),
+                "feature" => { busy_guard(&snap)?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } super::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; super::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
+                "group" => { busy_guard(&snap)?; super::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
+                "task" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } super::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
+                "backlog" => { super::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
+                _ => return Err(http(400, "參考資料目標不正確")),
             }
-            Ok(json!({"ok":true}))
+            Ok(json!({ "ok": true }))
         }
-        "backlog/interview" => super::requirements::start(root,body,&|id,turn|spawn_detached_cli(root,&["chat".into(),"--id".into(),id.into(),"--turn".into(),turn.into()])),
-        "backlog/confirm" => super::requirements::confirm(root,body),
-        "prd/save" => { busy_guard(&snap)?; super::prd::save_manual(root,&text_field(body,"text"),&body["version"],&body["scope"]) },
-        "prd/review" => { busy_guard(&snap)?; spawn(root,&["prd","--review"]) },
-        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body,"id")) { return Err(http(400,"任務 id 不正確")); } let result=super::tasks::edit_task(root,&text_field(body,"id"),&text_field(body,"tag"),&text_field(body,"revision"),&body["task"])?; let _=super::archive::archive_tasks(root,json!({})); Ok(result) },
-        "tasks/approve" => { busy_guard(&snap)?; super::human::approve_tasks(root,&text_field(body,"revision")) },
+        "backlog/interview" => super::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
+        "backlog/confirm" => super::requirements::confirm(root, body),
+        "prd/save" => { busy_guard(&snap)?; super::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
+        "prd/review" => { busy_guard(&snap)?; spawn(root, &["prd", "--review"]) },
+        "task/save" => { busy_guard(&snap)?; if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } let result = super::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = super::archive::archive_tasks(root, json!({})); Ok(result) },
+        "tasks/approve" => { busy_guard(&snap)?; super::human::approve_tasks(root, &text_field(body, "revision")) },
         "chat/send" => super::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
         "chat/cancel" => super::chat::cancel_turn(root, &text_field(body, "chatId")),
         "chat/rename" => super::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
@@ -198,7 +274,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "prd/approve" => {
             busy_guard(&snap)?;
-            if body.get("version").is_some() && (body["version"]!=snap["state"]["prd"]["version"] || body["scope"]!=snap["state"]["prd"]["reference_scope"]) { return Err(http(409,"PRD 已更新，請重新閱讀後核准")); }
+            if body.get("version").is_some() && (body["version"] != snap["state"]["prd"]["version"] || body["scope"] != snap["state"]["prd"]["reference_scope"]) { return Err(http(409, "PRD 已更新，請重新閱讀後核准")); }
             approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
         }
         "prd/revise" => {
@@ -233,19 +309,24 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
         }
-        "config/runtime" => {
-            let mut runtime = json!({});
-            for name in CLI_NAMES {
-                if let Some(v) = body["runtime"].get(name).filter(|v| !v.is_null()) {
-                    if !v.as_str().is_some_and(|r| RUNTIMES.contains(&r)) {
-                        return Err(http(400, format!("{name} 的 runtime 不正確")));
+        "config/runtime" | "config/models" | "config/mode" | "config/limits" => config_action(action, body, Some(root)),
+        "config/project" => {
+            // 只有 build/test/lint、feature、context_files 屬於專案。
+            let mut patch = json!({});
+            if let Some(commands) = body["commands"].as_object() {
+                let mut cmds = json!({});
+                for key in ["build", "test", "lint"] {
+                    if let Some(v) = commands.get(key) {
+                        cmds[key] = json!(v.as_str().unwrap_or("").trim());
                     }
-                    runtime[name] = v.clone();
                 }
+                patch["commands"] = cmds;
             }
-            let mut patch = json!({ "runtime": runtime });
-            if !body["wsl_distro"].is_null() && body.get("wsl_distro").is_some() {
-                patch["wsl_distro"] = json!(text_field(body, "wsl_distro").trim());
+            if let Some(feature) = body["feature"].as_str() {
+                patch["feature"] = json!(feature.trim());
+            }
+            if let Some(files) = body["context_files"].as_array() {
+                patch["context_files"] = json!(files.iter().filter_map(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>());
             }
             Ok(json!({ "config": patch_config(root, &patch)? }))
         }
@@ -262,18 +343,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "skills/config" => {
             busy_guard(&snap)?;
-            for (stage, names) in body["skills"].as_object().into_iter().flatten() {
-                let Some(names) = names.as_array().filter(|_| SKILL_STAGES.contains(&stage.as_str())) else {
-                    return Err(http(400, "Skill 階段設定不正確"));
-                };
-                for name in names {
-                    let skill = load_skill(root, name.as_str().unwrap_or(""))?;
-                    if !skill.extensions.is_empty() {
-                        return Err(http(400, format!("{} 含執行器專屬設定", skill.name)));
-                    }
-                }
-            }
-            Ok(json!({ "config": patch_config(root, &json!({ "skills": body["skills"] }))? }))
+            config_action(action, body, Some(root))
         }
         "skills/run" => {
             busy_guard(&snap)?;
@@ -296,22 +366,6 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             }
             Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
         }
-        "config/models" => {
-            // roles 與 models 一起存；validate 會擋掉不合法的值。
-            let mut patch = json!({});
-            for key in ["roles", "models"] {
-                if body[key].is_object() {
-                    patch[key] = body[key].clone();
-                }
-            }
-            Ok(json!({ "config": patch_config(root, &patch)? }))
-        }
-        "config/mode" => {
-            if !body["mode"].as_str().is_some_and(|m| MODES.contains(&m)) {
-                return Err(http(400, "模式不正確"));
-            }
-            Ok(json!({ "config": patch_config(root, &json!({ "mode": body["mode"] }))? }))
-        }
         "backlog/add" => Ok(json!({ "item": super::backlog::add_item_with_references(root, body.get("title"), body.get("detail"), &body["references"])? })),
         "backlog/update" => {
             let mut patch = json!({});
@@ -327,7 +381,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "backlog/draft" => {
             busy_guard(&snap)?;
             let item = get_item(root, &text_field(body, "id"))?;
-            super::requirements::prd_input(root,&item)?;
+            super::requirements::prd_input(root, &item)?;
             spawn(root, &["prd", "--backlog", item["id"].as_str().unwrap_or("")])
         }
         _ => Err(http(404, "未知操作")),
@@ -357,7 +411,7 @@ fn percent_decode(s: &str) -> String {
 fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<Value> {
     if method == "GET" {
         match rest {
-            "chats" => return Ok(json!({ "items": super::chat::list_chats(root).into_iter().filter(|chat|chat["kind"]!="requirements").collect::<Vec<_>>() })),
+            "chats" => return Ok(json!({ "items": super::chat::list_chats(root).into_iter().filter(|chat| chat["kind"] != "requirements").collect::<Vec<_>>() })),
             "state" => return snapshot(root),
             "usage" => return Ok(usage_snapshot(root, &load_config(root)?)),
             "skills" => return Ok(json!({ "skills": list_skills(root), "stages": SKILL_STAGES, "config": load_config(root)?["skills"] })),
@@ -367,21 +421,15 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
                 let state = read_state(root);
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
             }
-            "references" => return Ok(json!({"items":super::references::list(root)})),
-            "backlog" => {
-                let cfg = load_config(root)?;
-                return Ok(json!({ "items": read_backlog_with(root, &cfg)?, "path": cfg["backlog_path"] }));
-            }
-            "archive" => {
-                let cfg = load_config(root)?;
-                return Ok(json!({ "items": list_archives(root, &cfg)?, "dir": cfg["archive_dir"] }));
-            }
+            "references" => return Ok(json!({ "items": super::references::list(root) })),
+            "backlog" => return Ok(json!({ "items": read_backlog(root)?, "path": super::backlog::backlog_file(root).to_string_lossy() })),
+            "archive" => return Ok(json!({ "items": list_archives(root)?, "dir": super::archive::archive_root(root).to_string_lossy() })),
             _ => {}
         }
-        if let Some(id)=rest.strip_prefix("requirements/") { return super::requirements::get(root,id); }
+        if let Some(id) = rest.strip_prefix("requirements/") { return super::requirements::get(root, id); }
         if let Some(id) = rest.strip_prefix("chat/") { return super::chat::get_chat(root, id); }
         if let Some(name) = rest.strip_prefix("archive/") {
-            return read_archive(root, &percent_decode(name), &load_config(root)?);
+            return read_archive(root, &percent_decode(name));
         }
         if let Some(id) = rest.strip_prefix("task/").filter(|id| is_task_id(id)) {
             return task_detail(root, id);
@@ -408,7 +456,7 @@ fn available_models(root: &Path, cfg: &Value) -> Value {
     let mut settings = json!({});
     // WSL 使用另一份設定，不能誤拿 Windows 使用者設定充當預設值。
     if super::runtime::cli_environment(cfg, "claude", root).runtime == "windows" {
-        for file in [super::home::home_dir().join(".claude/settings.json"), root.join(".claude/settings.json"), root.join(".claude/settings.local.json")] {
+        for file in [home_dir().join(".claude/settings.json"), root.join(".claude/settings.json"), root.join(".claude/settings.local.json")] {
             if let Some(value) = super::util::read_json(file) { settings = super::config::deep_merge(&settings, &value); }
         }
     }
@@ -437,6 +485,11 @@ pub fn projects_payload() -> Value {
     json!({ "projects": projects, "queue": queue_snapshot(), "desktop": true })
 }
 
+/// 總覽設定頁用：全域設定、原文與資料目錄位置。
+pub fn global_config_payload() -> Result<Value> {
+    Ok(json!({ "config": load_global()?, "text": global_config_text(), "home": app_home().to_string_lossy(), "queue": queue_snapshot() }))
+}
+
 fn handle_global(action: &str, body: &Value) -> Result<Value> {
     match action {
         "projects/add" => {
@@ -448,12 +501,12 @@ fn handle_global(action: &str, body: &Value) -> Result<Value> {
             if !dir.is_dir() {
                 return Err(http(400, format!("資料夾不存在：{}", dir.display())));
             }
-            if !dir.join(CONFIG_FILE).exists() {
+            // 加入專案不會在專案資料夾建立任何檔案；只有不是 git repo 時要先問過使用者再 git init。
+            if !project_registered(&dir) && !is_git_repo(&dir)? {
                 if !truthy(body.get("init")) {
-                    return Ok(json!({ "needs_init": true, "needs_git": !is_git_repo(&dir)?, "path": dir.to_string_lossy() }));
+                    return Ok(json!({ "needs_init": true, "needs_git": true, "path": dir.to_string_lossy() }));
                 }
-                // 前端確認對話框已告知會 git init，所以這裡一併允許
-                init_project(&dir, &InitOptions { git_init: true, ..Default::default() })?;
+                super::init::init_project(&dir, &super::init::InitOptions { git_init: true, ..Default::default() })?;
             }
             let name = body["name"].as_str().map(str::trim).filter(|n| !n.is_empty());
             Ok(json!({ "project": add_project(&dir, name)? }))
@@ -468,6 +521,8 @@ fn handle_global(action: &str, body: &Value) -> Result<Value> {
             q["max"] = set_max_concurrent(&body["max"])?["max_concurrent_runs"].clone();
             Ok(json!({ "queue": q }))
         }
+        "config/runtime" | "config/models" | "config/mode" | "config/limits" | "skills/config" => config_action(action, body, None),
+        "doctor" => doctor_report(&home_dir()),
         _ => Err(http(404, "未知操作")),
     }
 }
@@ -476,21 +531,29 @@ fn handle_global(action: &str, body: &Value) -> Result<Value> {
 pub fn project_root(id: &str) -> Result<std::path::PathBuf> {
     let Some(project) = get_project(id) else { return Err(http(404, "總覽裡沒有這個專案")) };
     let root = std::path::PathBuf::from(str_of(&project, "path"));
-    if !root.join(CONFIG_FILE).exists() {
-        return Err(http(404, format!("找不到 {}{}{CONFIG_FILE}", root.display(), std::path::MAIN_SEPARATOR)));
+    if !root.is_dir() {
+        return Err(http(404, format!("找不到專案資料夾 {}", root.display())));
     }
-    ensure_dirs(&root)?;
+    if !project_registered(&root) {
+        return Err(http(404, format!("{} 的專案資料不存在，請重新加入專案", root.display())));
+    }
+    prepare_project(&root);
     Ok(root)
 }
 
-/// 路由入口。method 是 GET 或 POST；path 例如 /api/projects、/api/p/<id>/state。
+/// 路由入口。method 是 GET 或 POST；path 例如 /api/projects、/api/config、/api/p/<id>/state。
 pub fn handle(method: &str, path: &str, body: &Value) -> Result<Value> {
     let path = path.split('?').next().unwrap_or("");
-    if path == "/api/projects" && method == "GET" {
-        return Ok(projects_payload());
+    if method == "GET" {
+        match path {
+            "/api/projects" => return Ok(projects_payload()),
+            "/api/config" => return global_config_payload(),
+            "/api/models" => return Ok(available_models(&home_dir(), &super::config::load_config_or_default(&home_dir())?)),
+            _ => {}
+        }
     }
     if method == "POST" {
-        if let Some(action) = path.strip_prefix("/api/").filter(|a| a.starts_with("projects/") || a.starts_with("queue/")) {
+        if let Some(action) = path.strip_prefix("/api/").filter(|a| a.starts_with("projects/") || a.starts_with("queue/") || a.starts_with("config/") || *a == "skills/config" || *a == "doctor") {
             return handle_global(action, body);
         }
     }
@@ -501,7 +564,6 @@ pub fn handle(method: &str, path: &str, body: &Value) -> Result<Value> {
     }
     Err(http(404, "not found"))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -522,9 +584,8 @@ mod tests {
     fn 核准後自動拆任務_啟動失敗保留核准並提供重試狀態() {
         for fail in [false, true] {
             let root = super::super::util::temp_dir("auto-tasks-");
-            ensure_dirs(&root).unwrap();
-            fs::create_dir_all(root.join(".aipipe/prd")).unwrap();
-            fs::write(root.join(".aipipe/prd/current.md"), "# PRD").unwrap();
+            super::super::state::ensure_dirs(&root).unwrap();
+            fs::write(data_dir(&root).join("prd/current.md"), "# PRD").unwrap();
             super::super::state::update_state(&root, |s| s["prd"]["status"] = json!("awaiting_approval")).unwrap();
             let result = approve_and_generate(&root, &super::super::config::default_config(), &|_| {
                 if fail { Err(http(500, "無法啟動")) } else { Ok(json!({ "pid": 123 })) }
@@ -533,27 +594,29 @@ mod tests {
             assert_eq!(state["prd"]["status"], "approved");
             assert_eq!(state["task_gen"]["status"], if fail { "error" } else { "running" });
             assert_eq!(result["taskError"].is_string(), fail);
+            assert!(super::super::state::prd_file(&root).exists());
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "核准 PRD 不能在專案資料夾寫檔");
         }
     }
 
     #[test]
     fn 參考資料拒絕過期的功能與任務群組_更新共用參考不重設任務狀態() {
-        let root=super::super::util::temp_dir("reference-api-");
-        super::super::config::save_config(&root,&super::super::config::default_config()).unwrap();
-        let reference=super::super::references::import(&root,&json!({"name":"spec.md","data":"c3BlYw=="})).unwrap();
-        super::super::state::update_state(&root,|s| { s["prd"]["reference_scope"]=json!("new-feature"); s["prd"]["archive_dir"]=json!("docs/prd/feature"); }).unwrap();
-        super::super::tasks::write_tasks(&root,&[json!({"id":1,"title":"existing","status":"done"})],Some("master"),json!({"reference_feature":"docs/prd/feature"})).unwrap();
-        super::super::tasks::set_status(&root,"1","review").unwrap();
-        super::super::tasks::set_status(&root,"1","done").unwrap();
-        let refs=json!([reference["id"]]);
-        let error=handle_action(&root,"references/assign",&json!({"target":"feature","featureScope":"old-feature","references":refs})).unwrap_err();
-        assert_eq!(error.status,409);
+        let root = super::super::util::temp_dir("reference-api-");
+        super::super::config::save_config(&root, &super::super::config::default_config()).unwrap();
+        let reference = super::super::references::import(&root, &json!({ "name": "spec.md", "data": "c3BlYw==" })).unwrap();
+        super::super::state::update_state(&root, |s| { s["prd"]["reference_scope"] = json!("new-feature"); s["prd"]["archive_dir"] = json!("archive/feature"); }).unwrap();
+        super::super::tasks::write_tasks(&root, &[json!({ "id": 1, "title": "existing", "status": "done" })], Some("master"), json!({ "reference_feature": "archive/feature" })).unwrap();
+        super::super::tasks::set_status(&root, "1", "review").unwrap();
+        super::super::tasks::set_status(&root, "1", "done").unwrap();
+        let refs = json!([reference["id"]]);
+        let error = handle_action(&root, "references/assign", &json!({ "target": "feature", "featureScope": "old-feature", "references": refs })).unwrap_err();
+        assert_eq!(error.status, 409);
         assert!(read_state(&root)["prd"]["references"].is_null());
-        handle_action(&root,"references/assign",&json!({"target":"feature","featureScope":"new-feature","references":refs})).unwrap();
-        assert_eq!(super::super::tasks::group_metadata(&root).unwrap()["references"],refs);
-        assert_eq!(read_tasks(&root).unwrap()[0]["status"],"done");
-        assert_eq!(handle_action(&root,"references/assign",&json!({"target":"task","tag":"old-tag","id":"1","references":refs})).unwrap_err().status,409);
-        assert_eq!(handle_action(&root,"references/assign",&json!({"target":"task","tag":"master","id":"1.1.1","references":refs})).unwrap_err().status,400);
+        handle_action(&root, "references/assign", &json!({ "target": "feature", "featureScope": "new-feature", "references": refs })).unwrap();
+        assert_eq!(super::super::tasks::group_metadata(&root).unwrap()["references"], refs);
+        assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
+        assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "old-tag", "id": "1", "references": refs })).unwrap_err().status, 409);
+        assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "master", "id": "1.1.1", "references": refs })).unwrap_err().status, 400);
     }
 
     #[test]

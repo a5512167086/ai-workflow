@@ -1,22 +1,22 @@
-//! 需求待辦清單（對應 legacy/src/backlog.js）：每個專案一份 JSON（預設 docs/aipipe/backlog.json），可以 commit。
+//! 需求待辦清單：每個專案一份 JSON，放在 <home>/projects/<id>/backlog.json。
 //! 陣列順序就是優先順序。status：open（待辦）、in_progress（已用它起草 PRD）、done（功能完成）。
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::config::{cfg_str, load_config};
+use super::state::data_dir;
 use super::util::{now_iso, write_atomic, write_json};
 use super::{AppError, Result};
 
 pub const BACKLOG_STATUSES: [&str; 3] = ["open", "in_progress", "done"];
 
-fn file(root: &Path, cfg: &Value) -> PathBuf {
-    root.join(cfg_str(cfg, "backlog_path"))
+pub fn backlog_file(root: &Path) -> PathBuf {
+    data_dir(root).join("backlog.json")
 }
 
-pub fn read_backlog_with(root: &Path, cfg: &Value) -> Result<Vec<Value>> {
-    let path = file(root, cfg);
+pub fn read_backlog(root: &Path) -> Result<Vec<Value>> {
+    let path = backlog_file(root);
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -28,12 +28,8 @@ pub fn read_backlog_with(root: &Path, cfg: &Value) -> Result<Vec<Value>> {
         .ok_or_else(|| AppError::new(format!("需求待辦 {} 缺少 items 陣列；原始資料不會被覆寫", path.display())))
 }
 
-pub fn read_backlog(root: &Path) -> Result<Vec<Value>> {
-    read_backlog_with(root, &load_config(root)?)
-}
-
-fn write_backlog(root: &Path, cfg: &Value, items: &[Value]) -> Result<()> {
-    let f = file(root, cfg);
+fn write_backlog(root: &Path, items: &[Value]) -> Result<()> {
+    let f = backlog_file(root);
     if let Some(dir) = f.parent() {
         fs::create_dir_all(dir)?;
     }
@@ -56,10 +52,9 @@ fn clean(text: Option<&Value>, max: usize) -> String {
 
 fn mutate<T>(root: &Path, f: impl FnOnce(&mut Vec<Value>) -> Result<T>) -> Result<T> {
     super::home::with_project_lock(root, "backlog", || {
-        let cfg = load_config(root)?;
-        let mut items = read_backlog_with(root, &cfg)?;
+        let mut items = read_backlog(root)?;
         let out = f(&mut items)?;
-        write_backlog(root, &cfg, &items)?;
+        write_backlog(root, &items)?;
         Ok(out)
     })
 }
@@ -73,10 +68,11 @@ fn random_id() -> String {
 }
 
 pub fn add_item(root: &Path, title: Option<&Value>, detail: Option<&Value>) -> Result<Value> {
-    add_item_with_references(root,title,detail,&json!([]))
+    add_item_with_references(root, title, detail, &json!([]))
 }
+
 pub fn add_item_with_references(root: &Path, title: Option<&Value>, detail: Option<&Value>, references: &Value) -> Result<Value> {
-    let references=super::references::ids(root,references)?;
+    let references = super::references::ids(root, references)?;
     let t = clean(title, 200);
     if t.is_empty() {
         crate::bail!(400; "請輸入需求標題");
@@ -91,11 +87,11 @@ pub fn add_item_with_references(root: &Path, title: Option<&Value>, detail: Opti
 
 /// patch 裡沒有的欄位不改（對應 JS 的 undefined）。
 pub fn update_item(root: &Path, id: &str, patch: &Value) -> Result<Value> {
-    let references=patch.get("references").map(|v|super::references::ids(root,v)).transpose()?;
+    let references = patch.get("references").map(|v| super::references::ids(root, v)).transpose()?;
     mutate(root, |items| {
         let i = position(items, id)?;
         let item = &mut items[i];
-        if let Some(refs)=references { item["references"]=json!(refs); }
+        if let Some(refs) = references { item["references"] = json!(refs); }
         if let Some(title) = patch.get("title").filter(|v| !v.is_null()) {
             let t = clean(Some(title), 200);
             if t.is_empty() {
@@ -112,7 +108,7 @@ pub fn update_item(root: &Path, id: &str, patch: &Value) -> Result<Value> {
             }
             item["status"] = status.clone();
         }
-        if let Some(id)=patch.get("interviewId") { item["interviewId"]=id.clone(); }
+        if let Some(id) = patch.get("interviewId") { item["interviewId"] = id.clone(); }
         if let Some(feature) = patch.get("feature") {
             item["feature"] = feature.clone();
         }

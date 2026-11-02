@@ -1,6 +1,6 @@
 'use strict';
 
-// 所有專案總覽。共用工具在 common.js。
+// 所有專案總覽與全域設定。共用工具在 common.js，設定頁的邏輯在 settings.js。
 
 const PROJECT_STATUS = {
   missing: ['找不到專案', 'error'],
@@ -28,7 +28,7 @@ function render() {
   grid.innerHTML = '';
   $('#count').textContent = projects.length || '';
   if (!projects.length) {
-    grid.innerHTML = '<div class="card empty-state"><p>還沒有專案。在上面輸入專案資料夾加入，或在專案目錄執行 <code>aipipe projects add</code>。</p></div>';
+    grid.innerHTML = '<div class="card empty-state"><p>還沒有專案。在上面輸入專案資料夾加入，或在專案目錄執行 <code>ai-workflow projects add</code>。</p></div>';
   }
   for (const p of projects) {
     const [label, cls] = PROJECT_STATUS[p.status] || [p.status, 'idle'];
@@ -85,32 +85,23 @@ function render() {
   const waiting = names(queue.waiting);
   $('#queue-line').textContent = `執行中 ${running.length}/${queue.max}${running.length ? `：${running.join('、')}` : ''}${waiting.length ? `・排隊：${waiting.join('、')}` : ''}`;
   $('#btn-pick').classList.toggle('hidden', !desktop);
-  renderSettingsProjects();
+  if (!$('#overview-settings').hidden && typeof renderQueue === 'function') renderQueue(queue);
 }
 
-let settingsProject = location.hash.match(/^#settings=([0-9a-f]{10})$/)?.[1] || '';
-function showSettings(id = settingsProject) {
-  settingsProject = id;
+/** 設定是全域的，不用選專案；從專案頁連回來時帶 #settings。 */
+function showSettings() {
   $('#overview-settings').hidden = false;
   $('#projects-panel').hidden = true;
   $('.overview-tools').hidden = true;
-  if (id) history.replaceState(null, '', `#settings=${id}`);
-  renderSettingsProjects();
+  history.replaceState(null, '', '#settings');
+  if (typeof loadSettings === 'function') loadSettings();
 }
-function renderSettingsProjects() {
-  if (!data) return;
-  const available = data.projects.filter(p => p.status !== 'missing');
-  if (!available.some(p => p.id === settingsProject)) settingsProject = available[0]?.id || '';
-  const select = $('#settings-project');
-  select.replaceChildren(...available.map(p => new Option(p.name, p.id)));
-  select.value = settingsProject;
-  $('#settings-empty').hidden = !!settingsProject;
-  const frame = $('#project-settings');
-  frame.hidden = !settingsProject;
-  if (settingsProject && frame.dataset.project !== settingsProject) {
-    frame.dataset.project = settingsProject;
-    frame.src = `${projectHref(settingsProject)}&settings=1`;
-  }
+
+function showProjects() {
+  $('#overview-settings').hidden = true;
+  $('#projects-panel').hidden = false;
+  $('.overview-tools').hidden = false;
+  history.replaceState(null, '', location.pathname);
 }
 
 async function refresh() {
@@ -132,8 +123,7 @@ async function addProject(init = false) {
   const res = await act('/api/projects/add', { path, init });
   if (!res) return;
   if (res.needs_init) {
-    const gitNote = res.needs_git ? '\n這個資料夾也還不是 git repo，會一併執行 git init（aipipe 用 git 追蹤、審查與還原 AI 的變更）。' : '';
-    if (confirm(`${res.path}\n還沒有 .aipipe.json。要用預設設定初始化（aipipe init）並加入嗎？${gitNote}`)) await addProject(true);
+    if (confirm(`${res.path}\n還不是 git repo。ai-workflow 用 git 追蹤、審查與還原 AI 的變更，要在這個資料夾執行 git init 並加入嗎？\n（除了 .git 以外，不會在專案裡新增任何檔案；流程資料放在 ~/.ai-workflow/projects/）`)) await addProject(true);
     return;
   }
   toast(`已加入 ${res.project.name}`);
@@ -152,14 +142,9 @@ function connect() {
 
 function bind() {
   bindTheme();
+  if (typeof bindSettings === 'function') bindSettings();
   $('#show-settings').onclick = () => showSettings();
-  $('#settings-project').onchange = (event) => showSettings(event.target.value);
-  $('#show-projects').onclick = () => {
-    $('#overview-settings').hidden = true;
-    $('#projects-panel').hidden = false;
-    $('.overview-tools').hidden = false;
-    history.replaceState(null, '', location.pathname);
-  };
+  $('#show-projects').onclick = () => showProjects();
   $('#btn-add').onclick = () => addProject();
   $('#add-path').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) addProject();

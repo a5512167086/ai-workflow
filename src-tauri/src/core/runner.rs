@@ -1,4 +1,4 @@
-//! 逐任務執行（對應 legacy/src/runner.js）：實作 → 驗證 → 審查 → 修正 → handover → commit／等待人工測試。
+//! 逐任務執行：實作 → 驗證 → 審查 → 修正 → handover → commit／等待人工測試。
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -13,10 +13,10 @@ use super::backlog::update_item;
 use super::config::{cfg_str, load_config};
 use super::git;
 use super::home::with_lock;
-use super::prompts::{code_review_prompt, fix_checks_prompt, fix_review_prompt, handover_prompt, implement_prompt};
+use super::prompts::{code_review_prompt, fix_checks_prompt, fix_review_prompt, handover_prompt, implement_prompt, strip_outer_fence};
 use super::proc::{run_shell, RunOpts};
 use super::queue::{acquire_slot, release};
-use super::state::{append_log, is_pid_alive_value, pid_of, read_state, task_dir, task_state, update_state};
+use super::state::{append_log, handover_file, is_pid_alive_value, pid_of, read_state, task_dir, task_state, update_state};
 use super::tasks;
 use super::util::{js_string, now_iso, resolve};
 use super::{AppError, Result};
@@ -224,19 +224,22 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
     set_task(root, id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;
     let full = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
     let stat: Vec<&str> = full.lines().filter(|l| (l.starts_with(' ') && l.len() > 1 && !l[1..].starts_with(char::is_whitespace) && l.contains('|')) || l.contains("file changed") || l.contains("files changed")).collect();
-    let ho = agent(root, cfg, "handover", handover_prompt(root, cfg, &task, &notes, &stat.join("\n")), true, scope, "更新 handover", "handover", None)?;
-    if !ho.ok {
-        append_log(root, scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", ho.error_text()));
+    // handover 不在專案裡：AI 以唯讀方式輸出新版內容，由這裡寫進專案資料目錄。
+    let ho = agent(root, cfg, "handover", handover_prompt(root, &task, &notes, &stat.join("\n")), false, scope, "更新 handover", "handover", None)?;
+    let handover_text = strip_outer_fence(&ho.text);
+    if !ho.ok || handover_text.trim().is_empty() {
+        append_log(root, scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", if ho.ok { "AI 沒有輸出內容".to_string() } else { ho.error_text() }));
+    } else {
+        fs::write(handover_file(root), &handover_text).map_err(AppError::from)?;
+        append_log(root, scope, &format!("handover 已更新：{}", handover_file(root).display()));
     }
-    // 最終 diff（含 handover）供 UI 顯示。
-    fs::write(dir.join("diff.patch"), git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?).map_err(AppError::from)?;
 
     let fresh = load_config(root)?;
     if cfg_str(&fresh, "mode") == "auto" {
         set_task(root, id, json!({ "step": "git commit" }))?;
         // commit 失敗時回到 review；任務狀態另存於本機引擎與功能封存。
         tasks::set_status(root, id, "done")?;
-        let sha = match git::commit_all(root, &format!("aipipe: task {id} {title}")) {
+        let sha = match git::commit_all(root, &format!("ai-workflow: task {id} {title}")) {
             Ok(sha) => sha,
             Err(err) => {
                 tasks::set_status(root, id, "review")?;
@@ -259,7 +262,7 @@ fn acquire_runner(root: &Path) -> Result<()> {
     with_lock(&format!("runner-{}", root_key(root)), || {
         let s = read_state(root);
         if is_pid_alive_value(&s["runner"]["pid"]) {
-            crate::bail!("已有 aipipe run 在執行（pid {}）", js_string(&s["runner"]["pid"]));
+            crate::bail!("已有 ai-workflow run 在執行（pid {}）", js_string(&s["runner"]["pid"]));
         }
         update_state(root, |st| {
             st["runner"] = json!({ "pid": std::process::id(), "started_at": now_iso() });
@@ -316,7 +319,7 @@ fn pipeline_loop(root: &Path, first_task: Option<&str>, verify_only: bool, provi
         crate::bail!("PRD 尚未核准");
     }
     if tasks::read_tasks(root)?.is_empty() {
-        crate::bail!("還沒有任務，請先執行 aipipe tasks");
+        crate::bail!("還沒有任務，請先執行 ai-workflow tasks");
     }
     if let Some(waiting) = state["tasks"].as_object().into_iter().flat_map(|m| m.values()).find(|t| t["phase"] == "awaiting_test") {
         set_pipeline(root, "waiting", &format!("任務 {} 等待人工測試，測完請按「我測完了，繼續」", js_string(&waiting["id"])), json!({}))?;
@@ -455,10 +458,8 @@ pub fn prepare_rerun(root: &Path, id: &str, revert: bool) -> Result<()> {
     tasks::set_status(root, id, "pending")?;
     if revert && t.is_object() {
         if let Some(commit) = t["commit"].as_str().filter(|c| !c.is_empty()) {
-            let mut keep = vec![".taskmaster/tasks/tasks.json".to_string()];
-            if let Some(dir) = state["prd"]["archive_dir"].as_str().filter(|d| !d.is_empty()) {
-                keep.extend([format!("{dir}/meta.json"), format!("{dir}/tasks.json")]);
-            }
+            // 流程資料都在專案資料目錄，不會被 revert 影響；只有舊 Task Master 的檔案要保留目前狀態。
+            let keep = vec![".taskmaster/tasks/tasks.json".to_string()];
             let sha = git::revert_commit(root, commit, &keep)?.unwrap_or_default();
             append_log(root, &format!("task-{id}"), &format!("已 revert {} → {}", &commit[..8.min(commit.len())], &sha[..8.min(sha.len())]));
         } else if let Some(base) = t["base_tree"].as_str().filter(|b| !b.is_empty()) {
@@ -486,7 +487,7 @@ mod tests {
     fn feature_branch_產生安全的分支名稱() {
         let mut cfg = default_config();
         cfg["feature"] = json!("CSV Export!");
-        assert_eq!(feature_branch(&cfg, &json!({ "prd": {} })), "aipipe/csv-export");
-        assert_eq!(feature_branch(&default_config(), &json!({ "prd": { "idea": "中文想法" } })), "aipipe/feature");
+        assert_eq!(feature_branch(&cfg, &json!({ "prd": {} })), "ai-workflow/csv-export");
+        assert_eq!(feature_branch(&default_config(), &json!({ "prd": { "idea": "中文想法" } })), "ai-workflow/feature");
     }
 }

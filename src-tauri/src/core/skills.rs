@@ -1,4 +1,4 @@
-//! 共用 Skills（對應 legacy/src/skills.js）。兩個 CLI 拿到相同的可攜指令；scripts、hooks、工具權限都不會自動執行。
+//! 共用 Skills。技能庫在專案資料目錄的 skills/；兩個 CLI 拿到相同的可攜指令；scripts、hooks、工具權限都不會自動執行。
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +13,7 @@ use super::Result;
 pub use super::config::SKILL_STAGES;
 
 fn library(root: &Path) -> PathBuf {
-    root.join(".aipipe").join("skills")
+    super::state::data_dir(root).join("skills")
 }
 
 #[derive(Clone, Debug)]
@@ -251,7 +251,7 @@ pub fn prepare_skills(root: &Path, cfg: &Value, stage: Option<&str>, names: Opti
             hash.update([0]);
         }
         let version = hex::encode(hash.finalize());
-        let snapshot = root.join(".aipipe").join("tmp").join("skills").join(&version).join(name);
+        let snapshot = super::state::data_dir(root).join("tmp").join("skills").join(&version).join(name);
         for file in &files {
             let target = snapshot.join(&file.rel);
             if let Some(parent) = target.parent() {
@@ -276,7 +276,7 @@ pub fn native_path(p: &Path) -> String {
 }
 
 fn runs_dir(root: &Path) -> PathBuf {
-    root.join(".aipipe").join("skill-runs")
+    super::state::data_dir(root).join("skill-runs")
 }
 
 fn valid_run_id(id: &str) -> bool {

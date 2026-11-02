@@ -1,4 +1,4 @@
-//! 專案的運行狀態（對應 legacy/src/state.js）。所有狀態都放在目標專案的 .aipipe/，讓 CLI 與 UI 程序透過檔案共用。
+//! 專案的運行狀態。所有狀態都放在 <home>/projects/<id>/（不在使用者的專案資料夾裡），讓 CLI 與 UI 程序透過檔案共用。
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -8,13 +8,24 @@ use serde_json::{json, Value};
 use super::util::{now_iso, pretty, write_atomic};
 use super::Result;
 
-pub fn aipipe_dir(root: &Path) -> PathBuf {
-    root.join(".aipipe")
+/// 這個專案的流程資料目錄（state.json、logs、prd、tasks、chats、references…）。
+pub fn data_dir(root: &Path) -> PathBuf {
+    super::home::project_data_dir(root)
+}
+
+/// 核准後的 PRD。
+pub fn prd_file(root: &Path) -> PathBuf {
+    data_dir(root).join("prd.md")
+}
+
+/// 給下一個 AI session 的交接紀錄。
+pub fn handover_file(root: &Path) -> PathBuf {
+    data_dir(root).join("handover.md")
 }
 
 pub fn ensure_dirs(root: &Path) -> Result<()> {
     for sub in ["logs", "prd", "tasks", "tmp"] {
-        fs::create_dir_all(aipipe_dir(root).join(sub))?;
+        fs::create_dir_all(data_dir(root).join(sub))?;
     }
     Ok(())
 }
@@ -32,8 +43,8 @@ pub fn empty_state() -> Value {
     })
 }
 
-fn state_path(root: &Path) -> PathBuf {
-    aipipe_dir(root).join("state.json")
+pub fn state_path(root: &Path) -> PathBuf {
+    data_dir(root).join("state.json")
 }
 
 /// `{ ...emptyState(), ...JSON.parse(file) }`：只在頂層補預設值。
@@ -80,13 +91,13 @@ pub fn task_state<'a>(state: &'a mut Value, id: &str) -> &'a mut Value {
 }
 
 pub fn task_dir(root: &Path, id: &str) -> Result<PathBuf> {
-    let dir = aipipe_dir(root).join("tasks").join(id);
+    let dir = data_dir(root).join("tasks").join(id);
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 pub fn log_path(root: &Path, scope: &str) -> PathBuf {
-    aipipe_dir(root).join("logs").join(format!("{scope}.log"))
+    data_dir(root).join("logs").join(format!("{scope}.log"))
 }
 
 pub fn append_log(root: &Path, scope: &str, text: &str) {
@@ -147,8 +158,8 @@ mod tests {
     use crate::core::util::temp_dir;
 
     #[test]
-    fn update_state_保留其他程序寫入的欄位() {
-        let root = temp_dir("aipipe-state-");
+    fn update_state_保留其他程序寫入的欄位_且不寫進專案資料夾() {
+        let root = temp_dir("ai-workflow-state-");
         update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
         update_state(&root, |s| s["pipeline"]["status"] = json!("running")).unwrap();
         let s = read_state(&root);
@@ -157,6 +168,8 @@ mod tests {
         assert!(s["pipeline"]["updated_at"].is_string());
         assert!(is_pid_alive(std::process::id()));
         assert!(!is_pid_alive_value(&Value::Null));
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "專案資料夾不能有任何檔案");
+        assert!(state_path(&root).starts_with(crate::core::home::app_home()));
     }
 
     #[test]

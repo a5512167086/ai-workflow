@@ -1,5 +1,5 @@
 {
-  "name": "aipipe",
+  "name": "ai-workflow",
   "private": true,
   "version": "0.4.0",
   "description": "用本機 Claude Code / Codex CLI 與共用 Skills 跑 PRD、內建任務管理、實作審查及人工驗收的桌面工作流工具",

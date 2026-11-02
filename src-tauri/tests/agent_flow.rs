@@ -1,19 +1,20 @@
-//! 移植 legacy/test 裡需要真的執行 CLI 的測試（agent-limits、skills、runtime 的單 AI PRD、usage 的事件串流），
-//! 以及整個 prd → tasks → run → continue → rerun 流程。CLI 由 examples/fake_cli.rs 扮演。
+//! 需要真的執行 CLI 的測試（額度切換、Skills、單 AI PRD、用量事件串流），以及整個 prd → tasks → run → continue → rerun 流程。
+//! CLI 由 examples/fake_cli.rs 扮演。所有流程資料都寫在資料目錄，專案裡只有測試自己放的檔案。
 mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aipipe::core::agents::{run_agent, AgentOpts};
-use aipipe::core::cli::{generate_tasks, run_skill};
-use aipipe::core::config::{default_config, save_config};
-use aipipe::core::prd::{approve_prd, draft_prd};
-use aipipe::core::runner::{acknowledge, prepare_rerun, run_pipeline, Next};
-use aipipe::core::skills::{list_skill_runs, load_skill, native_path, prepare_skills};
-use aipipe::core::state::{read_state, update_state};
-use aipipe::core::tasks::{next_task_id, read_tasks, tasks_file};
-use aipipe::core::usage::usage_snapshot;
+use ai_workflow::core::agents::{run_agent, AgentOpts};
+use ai_workflow::core::archive::archive_path;
+use ai_workflow::core::cli::{generate_tasks, run_skill};
+use ai_workflow::core::config::{default_config, save_config};
+use ai_workflow::core::prd::{approve_prd, draft_prd};
+use ai_workflow::core::runner::{acknowledge, prepare_rerun, run_pipeline, Next};
+use ai_workflow::core::skills::{list_skill_runs, load_skill, native_path, prepare_skills};
+use ai_workflow::core::state::{data_dir, handover_file, prd_file, read_state, update_state};
+use ai_workflow::core::tasks::{next_task_id, read_tasks, tasks_file};
+use ai_workflow::core::usage::usage_snapshot;
 use common::*;
 use serde_json::{json, Value};
 
@@ -32,12 +33,8 @@ fn fixture(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
     (root, cfg)
 }
 
-fn calls(root: &Path) -> Vec<Value> {
-    fs::read_to_string(root.join(".aipipe").join("calls.jsonl")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
-}
-
 fn sessions(root: &Path) -> Vec<Value> {
-    let dir = root.join(".aipipe").join("sessions");
+    let dir = data_dir(root).join("sessions");
     fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).map(|e| serde_json::from_str(&fs::read_to_string(e.path()).unwrap()).unwrap()).collect()).unwrap_or_default()
 }
 
@@ -52,6 +49,13 @@ fn mode(m: &str) -> Value {
         "mentions-limit" => json!({ "text": LIMIT }),
         _ => json!({ "text": "# PRD" }),
     }
+}
+
+/// 把核准的 PRD 直接放進資料目錄（略過起草流程）。
+fn approved_prd(root: &Path, text: &str) {
+    fs::create_dir_all(prd_file(root).parent().unwrap()).unwrap();
+    fs::write(prd_file(root), text).unwrap();
+    update_state(root, |s| s["prd"]["status"] = json!("approved")).unwrap();
 }
 
 // ---------- 額度用完時的切換 ----------
@@ -75,6 +79,7 @@ fn 唯讀作者遇到限額_改用另一_ai_原始_prompt_與技能只注入一�
     let mut statuses: Vec<String> = sessions(&root).iter().map(|s| s["status"].as_str().unwrap().to_string()).collect();
     statuses.sort();
     assert_eq!(statuses, ["done", "error"]);
+    assert_no_app_files(&root);
 }
 
 #[test]
@@ -130,7 +135,7 @@ fn codex_與_claude_接到相同_skill_指令_未綁定階段不帶入技能() {
         let result = run_agent(opts).unwrap();
         assert!(result.ok, "{:?}", result.error);
         assert_eq!(result.skills[0]["name"], "uiux-design");
-        let record: Value = serde_json::from_str(&fs::read_to_string(root.join(".aipipe/sessions").join(format!("{}.json", result.session_id))).unwrap()).unwrap();
+        let record: Value = serde_json::from_str(&fs::read_to_string(data_dir(&root).join("sessions").join(format!("{}.json", result.session_id))).unwrap()).unwrap();
         assert_eq!(record["status"], "done");
         assert_eq!(record["provider"], provider);
         prompts.push(calls(&root)[0]["prompt"].as_str().unwrap().to_string());
@@ -191,7 +196,7 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
         assert_eq!(result.text, "done");
         let expected = if provider == "claude" { 130 } else { 110 };
         assert_eq!(result.telemetry["tokens"]["totalTokens"], expected);
-        let session: Value = serde_json::from_str(&fs::read_to_string(root.join(".aipipe/sessions").join(format!("{}.json", result.session_id))).unwrap()).unwrap();
+        let session: Value = serde_json::from_str(&fs::read_to_string(data_dir(&root).join("sessions").join(format!("{}.json", result.session_id))).unwrap()).unwrap();
         assert_eq!(session["tokens"]["totalTokens"], expected);
         assert_eq!(usage_snapshot(&root, &cfg)["totalTokens"], expected);
         if provider == "codex" {
@@ -208,7 +213,7 @@ fn git_project(scenario: Value) -> (PathBuf, Value) {
 
 fn git_project_with(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
     let (root, mut cfg) = fixture(providers, scenario);
-    for role in aipipe::core::config::ROLES {
+    for role in ai_workflow::core::config::ROLES {
         cfg["roles"][role] = json!("codex");
     }
     cfg["skills"]["implement"] = json!(["uiux-design"]);
@@ -217,7 +222,7 @@ fn git_project_with(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
     git(&root, &["init", "-q", "-b", "main"]);
     git(&root, &["config", "user.name", "test"]);
     git(&root, &["config", "user.email", "test@example.com"]);
-    fs::write(root.join(".gitignore"), ".aipipe/\n*.exe\n.fake-cli.json\n").unwrap();
+    fs::write(root.join(".gitignore"), "*.exe\n.fake-cli*\n").unwrap();
     fs::write(root.join("file.txt"), "base").unwrap();
     git(&root, &["add", "."]);
     git(&root, &["commit", "-qm", "initial"]);
@@ -230,18 +235,19 @@ fn pipeline_scenario() -> Value {
         { "contains": "拆成可以逐一", "text": json!({ "tasks": [{ "title": "first", "skills": ["uiux-design"] }, { "title": "second", "dependencies": [1] }] }).to_string() },
         { "contains": "程式碼審查者", "text": "看起來沒問題\nVERDICT: PASS" },
         { "contains": "PRD 審查者", "text": "VERDICT: APPROVE" },
+        { "contains": "請更新 handover 文件", "text": "# Handover\n已完成任務 1" },
     ], "text": "# PRD\nR1: reports" } })
 }
 
 /// 拆完任務後由「使用者」檢視並核准，run 才會開始（對應 UI 的「檢視後核准任務」）。
 fn approve_tasks(root: &Path) {
-    aipipe::core::human::approve_tasks(root, &aipipe::core::tasks::revision(root).unwrap()).unwrap();
+    ai_workflow::core::human::approve_tasks(root, &ai_workflow::core::tasks::revision(root).unwrap()).unwrap();
 }
 
 /// 需求釐清會議：自動開場一輪、使用者回答一輪，AI 回報 ready 後由使用者確認摘要。
 fn confirm_requirements(root: &Path, id: &str) -> Value {
-    use aipipe::core::{chat, requirements};
-    let launch = |_: &str, _: &str| -> aipipe::core::Result<u32> { Ok(std::process::id()) };
+    use ai_workflow::core::{chat, requirements};
+    let launch = |_: &str, _: &str| -> ai_workflow::core::Result<u32> { Ok(std::process::id()) };
     let run = |session: &Value| chat::run_turn(root, session["id"].as_str().unwrap(), session["turn"].as_str().unwrap()).unwrap();
     let opened = requirements::start(root, &json!({ "id": id, "provider": "codex" }), &launch).unwrap();
     run(&opened["session"]);
@@ -253,12 +259,9 @@ fn confirm_requirements(root: &Path, id: &str) -> Value {
 
 #[test]
 fn 不安裝_task_master_即可拆任務_手動實作審查_人工確認並解鎖下一項() {
-    let (root, cfg) = git_project(pipeline_scenario());
-    let file = root.join(cfg["prd_path"].as_str().unwrap());
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "# PRD\nR1: reports").unwrap();
+    let (root, _cfg) = git_project(pipeline_scenario());
+    approved_prd(&root, "# PRD\nR1: reports");
     update_state(&root, |s| {
-        s["prd"]["status"] = json!("approved");
         s["prd"]["version"] = json!(1);
         s["prd"]["idea"] = json!("reports");
     }).unwrap();
@@ -270,6 +273,10 @@ fn 不安裝_task_master_即可拆任務_手動實作審查_人工確認並解�
     approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting", "{}", read_state(&root)["pipeline"]["reason"]);
     assert_eq!(read_tasks(&root).unwrap()[0]["status"], "review");
+    // 實作者拿到的是 PRD 內容，而不是專案裡的路徑；handover 由 runner 寫進資料目錄。
+    let implement = calls(&root).into_iter().find(|c| c["prompt"].as_str().unwrap().contains("你正在一個全新的對話中實作")).unwrap();
+    assert!(implement["prompt"].as_str().unwrap().contains("R1: reports"));
+    assert_eq!(fs::read_to_string(handover_file(&root)).unwrap(), "# Handover\n已完成任務 1");
     assert!(matches!(acknowledge(&root).unwrap(), Next::Run));
     assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
     assert_eq!(next_task_id(&root).unwrap().as_deref(), Some("2"));
@@ -279,6 +286,8 @@ fn 不安裝_task_master_即可拆任務_手動實作審查_人工確認並解�
     for stage in ["implement", "code_review"] {
         assert!(all.iter().any(|s| s["stage"] == stage && s["skills"][0]["name"] == "uiux-design"), "{stage}");
     }
+    assert_no_app_files(&root);
+    assert!(git(&root, &["status", "--porcelain"]).trim().is_empty(), "流程不能在專案裡留下任何檔案");
 }
 
 #[test]
@@ -287,8 +296,10 @@ fn 完整流程_prd_核准_拆任務_執行_重跑還原與功能完成() {
     draft_prd(&root, &cfg, "報表功能", None).unwrap();
     assert_eq!(read_state(&root)["prd"]["status"], "awaiting_approval");
     approve_prd(&root, &cfg).unwrap();
+    assert_eq!(fs::read_to_string(prd_file(&root)).unwrap(), "# PRD\nR1: reports");
     let archive = read_state(&root)["prd"]["archive_dir"].as_str().unwrap().to_string();
-    assert!(root.join(&archive).join("prd.md").exists());
+    assert!(archive.starts_with("archive/"), "{archive}");
+    assert!(archive_path(&root, &archive).join("prd.md").exists());
     generate_tasks(&root).unwrap();
     approve_tasks(&root);
 
@@ -298,7 +309,7 @@ fn 完整流程_prd_核准_拆任務_執行_重跑還原與功能完成() {
     fs::write(root.join(".fake-cli.json"), scenario.to_string()).unwrap();
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
     assert!(root.join("feature.txt").exists());
-    let diff = fs::read_to_string(root.join(".aipipe/tasks/1/diff.patch")).unwrap();
+    let diff = fs::read_to_string(data_dir(&root).join("tasks/1/diff.patch")).unwrap();
     assert!(diff.contains("feature.txt"), "{diff}");
 
     // 重跑並還原：任務改過的檔案回到開始前的狀態。
@@ -314,9 +325,10 @@ fn 完整流程_prd_核准_拆任務_執行_重跑還原與功能完成() {
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "feature_test");
     assert!(matches!(acknowledge(&root).unwrap(), Next::Done));
     assert_eq!(read_state(&root)["pipeline"]["status"], "complete");
-    let meta: Value = serde_json::from_str(&fs::read_to_string(root.join(&archive).join("meta.json")).unwrap()).unwrap();
+    let meta: Value = serde_json::from_str(&fs::read_to_string(archive_path(&root, &archive).join("meta.json")).unwrap()).unwrap();
     assert_eq!(meta["progress"], json!({ "done": 2, "total": 2 }));
     assert!(meta["completed_at"].is_string());
+    assert!(!root.join("docs").exists() && !root.join(".aipipe").exists(), "封存、PRD 與 handover 都不在專案裡");
 }
 
 #[test]
@@ -333,9 +345,9 @@ fn 自動模式在功能分支上逐任務_commit() {
     generate_tasks(&root).unwrap();
     approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "feature_test");
-    assert_eq!(git(&root, &["branch", "--show-current"]).trim(), "aipipe/reports");
+    assert_eq!(git(&root, &["branch", "--show-current"]).trim(), "ai-workflow/reports");
     let log = git(&root, &["log", "--format=%s"]);
-    assert!(log.contains("aipipe: task 1 first"), "{log}");
+    assert!(log.contains("ai-workflow: task 1 first"), "{log}");
     let t1 = &read_state(&root)["tasks"]["1"];
     assert!(t1["commit"].as_str().is_some_and(|c| c.len() == 40));
     // 任務 2 寫的內容和任務 1 相同，沒有變更可 commit。
@@ -345,13 +357,13 @@ fn 自動模式在功能分支上逐任務_commit() {
     assert!(prepare_rerun(&root, "1", true).unwrap_err().message.contains("先重設"));
     assert_eq!(git(&root, &["rev-parse", "HEAD"]), head);
     prepare_rerun(&root, "2", false).unwrap();
-    // 封存檔在 commit 之後又被更新過，revert 仍要成功，且封存內容保持最新。
+    // 封存在資料目錄裡，不受 revert 影響。
     let archive = read_state(&root)["prd"]["archive_dir"].as_str().unwrap().to_string();
-    let meta_before = fs::read_to_string(root.join(&archive).join("meta.json")).unwrap();
+    let meta_before = fs::read_to_string(archive_path(&root, &archive).join("meta.json")).unwrap();
     prepare_rerun(&root, "1", true).unwrap();
     assert!(git(&root, &["log", "-1", "--format=%s"]).starts_with("Revert"));
     assert!(!root.join("auto.txt").exists());
-    assert_eq!(fs::read_to_string(root.join(&archive).join("meta.json")).unwrap(), meta_before);
+    assert_eq!(fs::read_to_string(archive_path(&root, &archive).join("meta.json")).unwrap(), meta_before);
 }
 
 // ---------- 每個角色的模型、雙人審查 ----------
@@ -387,7 +399,8 @@ VERDICT: REVISE" }], "text": "# PRD" },
     let rounds = read_state(&root)["prd"]["rounds"].as_array().unwrap().clone();
     let reviews: Vec<(String, String)> = rounds.iter().filter(|r| r["kind"] == "review").map(|r| (r["provider"].as_str().unwrap().into(), r["verdict"].as_str().unwrap().into())).collect();
     assert_eq!(reviews, vec![("claude".to_string(), "APPROVE".to_string()), ("codex".to_string(), "REVISE".to_string())]);
-    assert!(root.join(".aipipe/prd/review-1-claude.md").exists() && root.join(".aipipe/prd/review-1-codex.md").exists());
+    let prd_dir = data_dir(&root).join("prd");
+    assert!(prd_dir.join("review-1-claude.md").exists() && prd_dir.join("review-1-codex.md").exists());
     // 有一份沒通過就修訂，修訂者看到兩份分開的意見。
     let revise = calls(&root).into_iter().find(|c| c["prompt"].as_str().unwrap().contains("請根據審查者的意見修訂")).unwrap();
     let prompt = revise["prompt"].as_str().unwrap();
@@ -402,14 +415,11 @@ VERDICT: PASS" }] });
     let (root, mut cfg) = git_project_with(&["claude", "codex"], scenario);
     cfg["roles"]["code_reviewer"] = json!("both");
     save_config(&root, &cfg).unwrap();
-    let file = root.join(cfg["prd_path"].as_str().unwrap());
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(&file, "# PRD").unwrap();
-    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    approved_prd(&root, "# PRD");
     generate_tasks(&root).unwrap();
     approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
-    let dir = root.join(".aipipe/tasks/1");
+    let dir = data_dir(&root).join("tasks/1");
     assert!(fs::read_to_string(dir.join("review-1-claude.md")).unwrap().contains("Claude 看過"));
     assert!(dir.join("review-1-codex.md").exists());
     let ts = &read_state(&root)["tasks"]["1"];
@@ -426,16 +436,13 @@ fn 確認後本次單_ai_不嘗試限額_ai_且保留角色設定() {
     let (root, mut cfg) = git_project_with(&["claude", "codex"], scenario);
     cfg["roles"]["code_reviewer"] = json!("both");
     save_config(&root, &cfg).unwrap();
-    let file = root.join(cfg["prd_path"].as_str().unwrap());
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, "# PRD").unwrap();
-    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    approved_prd(&root, "# PRD");
     generate_tasks(&root).unwrap();
     approve_tasks(&root);
     let before = calls(&root).len();
-    assert_eq!(aipipe::core::runner::run_pipeline_with_provider(&root, None, false, Some("codex")).unwrap(), "waiting");
+    assert_eq!(ai_workflow::core::runner::run_pipeline_with_provider(&root, None, false, Some("codex")).unwrap(), "waiting");
     assert!(calls(&root)[before..].iter().all(|c| c["provider"] == "codex"));
-    let saved = aipipe::core::config::load_config(&root).unwrap();
+    let saved = ai_workflow::core::config::load_config(&root).unwrap();
     assert_eq!(saved["roles"]["code_reviewer"], "both");
     assert!(saved["_run_provider"].is_null());
     assert_eq!(read_state(&root)["tasks"]["1"]["review_verdicts"], json!({ "codex": "PASS" }));
@@ -451,9 +458,7 @@ fn 拆任務_實作_修正_交接各自套用模型() {
         cfg["models"][role]["codex"] = json!({ "model": format!("model-{role}"), "effort": "low" });
     }
     save_config(&root, &cfg).unwrap();
-    let file = root.join(cfg["prd_path"].as_str().unwrap());
-    fs::create_dir_all(file.parent().unwrap()).unwrap(); fs::write(file, "# PRD").unwrap();
-    update_state(&root, |s| s["prd"]["status"] = json!("approved")).unwrap();
+    approved_prd(&root, "# PRD");
     generate_tasks(&root).unwrap();
     approve_tasks(&root);
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "stuck");
@@ -469,45 +474,45 @@ fn 拆任務_實作_修正_交接各自套用模型() {
 
 #[test]
 fn 需求參考傳到雙人審查_拆任務與各執行角色_新功能不繼承() {
-    let (root, mut cfg)=git_project(pipeline_scenario());
-    cfg["roles"]["reviewer"]=json!("both");
-    cfg["cli"]["claude"]=json!(install_fake(&root,"claude").to_string_lossy());
-    save_config(&root,&cfg).unwrap();
-    let mut scenario=pipeline_scenario(); scenario["claude"]=json!({"text":"VERDICT: APPROVE"});
-    fs::write(root.join(".fake-cli.json"),scenario.to_string()).unwrap();
-    fs::write(root.join("reference.md"),"UNIQUE_REFERENCE_SPEC").unwrap();
-    let reference=aipipe::core::references::import(&root,&json!({"path":root.join("reference.md")})).unwrap();
-    let item=aipipe::core::backlog::add_item_with_references(&root,Some(&json!("報表")),None,&json!([reference["id"]])).unwrap();
+    let (root, mut cfg) = git_project(pipeline_scenario());
+    cfg["roles"]["reviewer"] = json!("both");
+    cfg["cli"]["claude"] = json!(install_fake(&root, "claude").to_string_lossy());
+    save_config(&root, &cfg).unwrap();
+    let mut scenario = pipeline_scenario(); scenario["claude"] = json!({ "text": "VERDICT: APPROVE" });
+    fs::write(root.join(".fake-cli.json"), scenario.to_string()).unwrap();
+    fs::write(root.join("reference.md"), "UNIQUE_REFERENCE_SPEC").unwrap();
+    let reference = ai_workflow::core::references::import(&root, &json!({ "path": root.join("reference.md") })).unwrap();
+    let item = ai_workflow::core::backlog::add_item_with_references(&root, Some(&json!("報表")), None, &json!([reference["id"]])).unwrap();
     // 需求待辦的項目要先完成需求釐清並由使用者確認，才能起草 PRD；確認的摘要會帶進 PRD 作者的 prompt。
-    assert_eq!(draft_prd(&root,&cfg,"報表",item["id"].as_str()).unwrap_err().status,409);
-    confirm_requirements(&root,item["id"].as_str().unwrap());
-    draft_prd(&root,&cfg,"報表",item["id"].as_str()).unwrap();
+    assert_eq!(draft_prd(&root, &cfg, "報表", item["id"].as_str()).unwrap_err().status, 409);
+    confirm_requirements(&root, item["id"].as_str().unwrap());
+    draft_prd(&root, &cfg, "報表", item["id"].as_str()).unwrap();
     assert!(calls(&root).iter().any(|c| c["prompt"].as_str().unwrap().contains("使用者確認的需求摘要") && c["prompt"].as_str().unwrap().contains("財務人員")));
-    approve_prd(&root,&cfg).unwrap(); generate_tasks(&root).unwrap();
+    approve_prd(&root, &cfg).unwrap(); generate_tasks(&root).unwrap();
     approve_tasks(&root);
-    assert_eq!(run_pipeline(&root,None,false).unwrap(),"waiting");
-    let records=calls(&root);
-    assert!(records.len()>=8);
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
+    let records = calls(&root);
+    assert!(records.len() >= 8);
     for record in &records { assert!(record["prompt"].as_str().unwrap().contains("UNIQUE_REFERENCE_SPEC")); }
-    for stage in ["prd","prd_review","tasks","implement","code_review"] {
-        assert!(sessions(&root).iter().any(|s| s["stage"]==stage && s["references"][0]["id"]==reference["id"]),"{stage}");
+    for stage in ["prd", "prd_review", "tasks", "implement", "code_review"] {
+        assert!(sessions(&root).iter().any(|s| s["stage"] == stage && s["references"][0]["id"] == reference["id"]), "{stage}");
     }
-    draft_prd(&root,&cfg,"下一個功能",None).unwrap();
-    assert_eq!(read_state(&root)["prd"]["references"],json!([]));
+    draft_prd(&root, &cfg, "下一個功能", None).unwrap();
+    assert_eq!(read_state(&root)["prd"]["references"], json!([]));
     assert!(!calls(&root).last().unwrap()["prompt"].as_str().unwrap().contains("UNIQUE_REFERENCE_SPEC"));
 }
 #[test]
 fn 圖片附件使用_claude_結構化輸入與_codex_image_旗標() {
-    let (root,mut cfg)=fixture(&["claude","codex"],json!({"claude":{"text":"ok"},"codex":{"text":"ok"}}));
-    fs::write(root.join("diagram.png"),[137,80,78,71]).unwrap();
-    let image=aipipe::core::references::import(&root,&json!({"path":root.join("diagram.png")})).unwrap();
-    cfg["_reference_ids"]=json!([image["id"]]);
-    for provider in ["claude","codex"] { assert!(run_agent(agent(&root,&cfg,provider,false,Some("prd"))).unwrap().ok); }
-    let records=calls(&root);
+    let (root, mut cfg) = fixture(&["claude", "codex"], json!({ "claude": { "text": "ok" }, "codex": { "text": "ok" } }));
+    fs::write(root.join("diagram.png"), [137, 80, 78, 71]).unwrap();
+    let image = ai_workflow::core::references::import(&root, &json!({ "path": root.join("diagram.png") })).unwrap();
+    cfg["_reference_ids"] = json!([image["id"]]);
+    for provider in ["claude", "codex"] { assert!(run_agent(agent(&root, &cfg, provider, false, Some("prd"))).unwrap().ok); }
+    let records = calls(&root);
     assert!(records[0]["args"].as_array().unwrap().contains(&json!("--input-format")));
-    let message:Value=serde_json::from_str(records[0]["prompt"].as_str().unwrap()).unwrap();
-    assert_eq!(message["message"]["content"][1]["type"],"image");
-    let args=records[1]["args"].as_array().unwrap();
-    let index=args.iter().position(|a|a=="--image").unwrap();
-    assert!(Path::new(args[index+1].as_str().unwrap()).exists());
+    let message: Value = serde_json::from_str(records[0]["prompt"].as_str().unwrap()).unwrap();
+    assert_eq!(message["message"]["content"][1]["type"], "image");
+    let args = records[1]["args"].as_array().unwrap();
+    let index = args.iter().position(|a| a == "--image").unwrap();
+    assert!(Path::new(args[index + 1].as_str().unwrap()).exists());
 }

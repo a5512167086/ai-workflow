@@ -2,9 +2,9 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use aipipe::core::{chat, AppError};
-use aipipe::core::config::{default_config, save_config};
-use aipipe::core::state::{read_state, update_state};
+use ai_workflow::core::{chat, AppError};
+use ai_workflow::core::config::{default_config, project_config_path, save_config};
+use ai_workflow::core::state::{data_dir, prd_file, read_state, update_state};
 use serde_json::{json, Value};
 use common::*;
 
@@ -39,7 +39,7 @@ fn 專案對話可在流程執行中詢問_追問帶入前文及最新狀態_使
     let next = start(&root, json!({ "chatId": done["id"], "input": "請解釋剛剛的架構圖", "provider": "codex" }));
     let done = run(&root, &next);
     assert_eq!(done["messages"].as_array().unwrap().len(), 4);
-    let calls: Vec<Value> = fs::read_to_string(root.join(".aipipe/calls.jsonl")).unwrap().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
+    let calls = calls(&root);
     assert_eq!(calls.len(), 2);
     let prompt = calls[1]["prompt"].as_str().unwrap();
     for text in ["目前跑到哪裡", "目前正在驗證", "flowchart LR", "新的進度：等待人工測試", "請解釋剛剛的架構圖"] { assert!(prompt.contains(text), "{text}"); }
@@ -47,20 +47,21 @@ fn 專案對話可在流程執行中詢問_追問帶入前文及最新狀態_使
     assert!(args.windows(2).any(|a| a == [json!("--sandbox"), json!("read-only")]));
     assert!(args.windows(2).any(|a| a == [json!("-m"), json!("chat-model")]));
     assert_eq!(read_state(&root)["pipeline"]["status"], "running");
-    assert!(!root.join("docs/aipipe/prd.md").exists());
+    assert!(!prd_file(&root).exists());
     assert_eq!(chat::list_chats(&root).len(), 1);
+    assert_no_app_files(&root);
 }
 
 #[test]
 fn 啟動失敗保留問題_重試不重複加入訊息_不改專案模型設定() {
-    let root = fixture(); let config = fs::read(root.join(".aipipe.json")).unwrap();
+    let root = fixture(); let config = fs::read(project_config_path(&root)).unwrap();
     let failed = chat::start_turn(&root, &json!({ "input": "說明架構", "provider": "codex", "model": "one-turn-model" }), &|_, _| Err(AppError::new("啟動失敗"))).unwrap();
     assert_eq!(failed["status"], "error");
     assert_eq!(failed["messages"][0]["text"], "說明架構");
     let retry = start(&root, json!({ "chatId": failed["id"], "retry": true, "provider": "codex" }));
     assert_eq!(retry["messages"].as_array().unwrap().len(), 1);
     assert_eq!(run(&root, &retry)["status"], "done");
-    assert_eq!(fs::read(root.join(".aipipe.json")).unwrap(), config);
+    assert_eq!(fs::read(project_config_path(&root)).unwrap(), config);
 }
 
 #[test]
@@ -70,7 +71,7 @@ fn 停止待執行對話不啟動模型_原始問題仍可重試() {
     let stopped = run(&root, &pending);
     assert_eq!(stopped["status"], "cancelled");
     assert_eq!(stopped["messages"].as_array().unwrap().len(), 1);
-    assert!(!root.join(".aipipe/calls.jsonl").exists());
+    assert!(calls(&root).is_empty());
 }
 
 #[test]
@@ -89,8 +90,9 @@ fn 同時傳送只會啟動一個回合_執行中不允許刪除() {
 #[test]
 fn 損壞對話與路徑不會被當作新對話覆蓋() {
     let root = fixture(); let id = uuid::Uuid::new_v4().to_string();
-    fs::create_dir_all(root.join(".aipipe/chats")).unwrap();
-    let path = root.join(format!(".aipipe/chats/{id}.json")); fs::write(&path, "{broken").unwrap();
+    let chats = data_dir(&root).join("chats");
+    fs::create_dir_all(&chats).unwrap();
+    let path = chats.join(format!("{id}.json")); fs::write(&path, "{broken").unwrap();
     assert!(chat::get_chat(&root, &id).is_err());
     assert!(chat::start_turn(&root, &json!({ "chatId": id, "input": "question", "provider": "codex" }), &|_, _| Ok(0)).is_err());
     assert_eq!(fs::read_to_string(path).unwrap(), "{broken");
@@ -116,7 +118,7 @@ fn 執行中的對話可以停止_之後重開仍有原始訊息() {
     std::thread::scope(|scope| {
         let worker = scope.spawn(|| run(&root, &pending));
         let started = std::time::Instant::now();
-        while !root.join(".aipipe/calls.jsonl").exists() && started.elapsed() < std::time::Duration::from_secs(5) { std::thread::sleep(std::time::Duration::from_millis(20)); }
+        while calls(&root).is_empty() && started.elapsed() < std::time::Duration::from_secs(5) { std::thread::sleep(std::time::Duration::from_millis(20)); }
         chat::cancel_turn(&root, &id).unwrap();
         assert_eq!(worker.join().unwrap()["status"], "cancelled");
     });
@@ -132,7 +134,7 @@ fn 失去回覆程序後可重新提問_舊訊息仍保留() {
     let root = fixture(); let pending = start(&root, json!({ "input": "問題一", "provider": "codex" }));
     let id = pending["id"].as_str().unwrap(); let mut crashed = pending.clone();
     crashed["status"] = json!("running"); crashed["pid"] = json!(0);
-    fs::write(root.join(format!(".aipipe/chats/{id}.json")), crashed.to_string()).unwrap();
+    fs::write(data_dir(&root).join(format!("chats/{id}.json")), crashed.to_string()).unwrap();
     assert_eq!(chat::get_chat(&root, id).unwrap()["status"], "error");
     let retry = start(&root, json!({ "chatId": id, "retry": true, "provider": "codex" }));
     assert_eq!(run(&root, &retry)["messages"].as_array().unwrap().len(), 2);
@@ -141,29 +143,29 @@ fn 失去回覆程序後可重新提問_舊訊息仍保留() {
 #[test]
 fn claude_對話可讀專案_限制為讀檔工具並保存實際回覆() {
     let root = fixture();
-    let mut cfg = aipipe::core::config::load_config(&root).unwrap();
+    let mut cfg = ai_workflow::core::config::load_config(&root).unwrap();
     cfg["cli"]["claude"] = json!(install_fake(&root, "claude").to_string_lossy()); save_config(&root, &cfg).unwrap();
     fs::write(root.join(".fake-cli.json"), json!({ "claude": { "text": "Claude 的架構說明" } }).to_string()).unwrap();
     let pending = start(&root, json!({ "input": "解釋架構", "provider": "claude" }));
     let done = run(&root, &pending);
     assert_eq!(done["messages"][1]["provider"], "claude");
-    let line = fs::read_to_string(root.join(".aipipe/calls.jsonl")).unwrap();
-    let call: Value = serde_json::from_str(line.lines().next().unwrap()).unwrap(); let args = call["args"].as_array().unwrap();
+    let call = calls(&root).into_iter().next().unwrap(); let args = call["args"].as_array().unwrap();
     assert!(args.windows(2).any(|a| a == [json!("--tools"), json!("Read,Glob,Grep")]));
     assert!(args.windows(2).any(|a| a == [json!("--disallowedTools"), json!("Edit,Write,NotebookEdit,mcp__*")]));
+    // 流程資料在專案外，Claude 要把專案資料目錄當成額外工作目錄才讀得到 Skill 快照與參考資料。
+    assert!(args.windows(2).any(|a| a[0] == "--add-dir" && a[1] == json!(data_dir(&root).to_string_lossy())), "{args:?}");
 }
 
 #[test]
 fn 只有附件可發問且追問沿用快照_重新讀取對話仍保留參考() {
-    let root=fixture(); fs::write(root.join("reference.md"),"UNIQUE_CHAT_REFERENCE").unwrap();
-    let item=aipipe::core::references::import(&root,&json!({"path":root.join("reference.md")})).unwrap();
-    let first=start(&root,json!({"provider":"codex","references":[item["id"]]}));
+    let root = fixture(); fs::write(root.join("reference.md"), "UNIQUE_CHAT_REFERENCE").unwrap();
+    let item = ai_workflow::core::references::import(&root, &json!({"path":root.join("reference.md")})).unwrap();
+    let first = start(&root, json!({"provider":"codex","references":[item["id"]]}));
     fs::remove_file(root.join("reference.md")).unwrap();
-    let done=run(&root,&first); assert_eq!(done["status"],"done");
-    let saved=chat::get_chat(&root,done["id"].as_str().unwrap()).unwrap();
-    assert_eq!(saved["messages"][0]["references"],json!([item["id"]]));
-    let second=start(&root,json!({"chatId":done["id"],"input":"繼續解釋","provider":"codex"}));
-    assert_eq!(run(&root,&second)["status"],"done");
-    let calls=fs::read_to_string(root.join(".aipipe/calls.jsonl")).unwrap();
-    for line in calls.lines() { let call:Value=serde_json::from_str(line).unwrap(); assert!(call["prompt"].as_str().unwrap().contains("UNIQUE_CHAT_REFERENCE")); }
+    let done = run(&root, &first); assert_eq!(done["status"], "done");
+    let saved = chat::get_chat(&root, done["id"].as_str().unwrap()).unwrap();
+    assert_eq!(saved["messages"][0]["references"], json!([item["id"]]));
+    let second = start(&root, json!({"chatId":done["id"],"input":"繼續解釋","provider":"codex"}));
+    assert_eq!(run(&root, &second)["status"], "done");
+    for call in calls(&root) { assert!(call["prompt"].as_str().unwrap().contains("UNIQUE_CHAT_REFERENCE")); }
 }

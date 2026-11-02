@@ -19,7 +19,7 @@ Context 與訂閱額度不同。Claude 的 context 數字以最後一次模型�
 
 ## 保存與資料品質
 
-資料存在專案 `.aipipe/usage.json`，每筆以 session ID 更新，具原子寫入與跨程序鎖；同一筆串流或最終結果不重複計數。原始 session 紀錄也保存 tokens、context 與限額資料。自此功能啟用後開始記錄，不補估舊執行用量。
+資料存在該專案的資料目錄 `~/.ai-workflow/projects/<id>/usage.json`，每筆以 session ID 更新，具原子寫入與跨程序鎖；同一筆串流或最終結果不重複計數。原始 session 紀錄也保存 tokens、context 與限額資料。自此功能啟用後開始記錄，不補估舊執行用量。
 
 執行失敗或切換另一個 AI 時，已回報的用量仍分別保存。沒有回報的用量顯示未知，明確回報 0 時才顯示 0。Windows 與不同 WSL 發行版的額度快照分開保存，避免混用帳號資料。畫面時間統一以 Asia/Taipei 顯示。
 

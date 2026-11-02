@@ -1,43 +1,29 @@
-//! 全域執行佇列（對應 legacy/src/queue.js）：所有專案的 `aipipe run` 共用，同時最多 max_concurrent_runs 個在跑（預設 1），
-//! 避免多個專案同時燒同一份 Claude／Codex 訂閱額度。佇列存在 ~/.aipipe/queue.json，由各個 run 程序自己排隊與釋放。
+//! 全域執行佇列：所有專案的 `ai-workflow run` 共用，同時最多 max_concurrent_runs 個在跑（預設 1），
+//! 避免多個專案同時燒同一份 Claude／Codex 訂閱額度。佇列存在 <home>/queue.json，由各個 run 程序自己排隊與釋放；
+//! 上限存在全域設定 <home>/config.json。
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::home::{aipipe_home, with_lock};
+use super::config::{load_global, patch_global};
+use super::home::{app_home, with_lock};
 use super::state::{is_pid_alive_value, pid_of};
-use super::util::{now_iso, obj, read_json, resolve, write_json};
+use super::util::{now_iso, read_json, resolve, write_json};
 use super::Result;
 
 fn queue_file() -> PathBuf {
-    aipipe_home().join("queue.json")
-}
-
-fn config_file() -> PathBuf {
-    aipipe_home().join("config.json")
-}
-
-pub fn global_config() -> Value {
-    let mut cfg = read_json(config_file()).filter(Value::is_object).unwrap_or(json!({}));
-    let n = cfg["max_concurrent_runs"].as_i64().filter(|n| *n >= 1).unwrap_or(1);
-    cfg["max_concurrent_runs"] = json!(n);
-    cfg
+    app_home().join("queue.json")
 }
 
 fn max_concurrent() -> usize {
-    global_config()["max_concurrent_runs"].as_u64().unwrap_or(1) as usize
+    load_global().ok().and_then(|c| c["max_concurrent_runs"].as_u64()).filter(|n| *n >= 1).unwrap_or(1) as usize
 }
 
 pub fn set_max_concurrent(n: &Value) -> Result<Value> {
     let v = n.as_i64().or_else(|| n.as_str().and_then(|s| s.trim().parse().ok())).filter(|v| (1..=8).contains(v));
     let Some(v) = v else { crate::bail!("同時執行上限必須是 1–8 的整數") };
-    with_lock("config", || {
-        let mut cfg = read_json(config_file()).filter(Value::is_object).unwrap_or(json!({}));
-        obj(&mut cfg).insert("max_concurrent_runs".into(), json!(v));
-        write_json(&config_file(), &cfg)?;
-        Ok(global_config())
-    })
+    patch_global(&json!({ "max_concurrent_runs": v }))
 }
 
 fn same_path(a: &str, b: &Path) -> bool {
