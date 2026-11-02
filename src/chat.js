@@ -16,7 +16,7 @@ function renderChatContext() {
 }
 function renderChatOptions() {
   const provider = $('#chat-provider').value, model = $('#chat-model');
-  model.setAttribute('list', `models-${provider}`);
+  attachModelPicker(model, () => $('#chat-provider').value);
   const current = $('#chat-effort').value;
   const options = typeof effortsFor === 'function' ? effortsFor(provider, model.value) : [];
   $('#chat-effort').replaceChildren(new Option('預設', ''), ...options.map(e => new Option(e, e)));

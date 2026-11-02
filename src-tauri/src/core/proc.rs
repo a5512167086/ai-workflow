@@ -563,6 +563,56 @@ pub fn query_codex_rpc_with(spec: &CliSpec, cwd: &Path, method: &str, params: Op
     }
 }
 
+/// Claude Code 的 stream-json 控制面：只送 initialize（不送任何使用者訊息，不會呼叫模型、不耗額度），
+/// 回傳 CLI 的初始化資訊，其中 `models` 是這個帳號在 CLI 模型選單看得到的模型與各自支援的推理強度。
+pub fn query_claude_initialize(spec: &CliSpec, cwd: &Path, timeout_sec: u64) -> Result<Value> {
+    let args: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"].iter().map(|s| s.to_string()).collect();
+    let mut cmd = build_command(Some(spec), &args, Some(cwd), None)?;
+    cmd.env_clear().envs(clean_env());
+    // stderr 可能有帳號資訊，不收。
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = cmd.spawn().map_err(|e| AppError::new(e.to_string()))?;
+    let stdout = child.stdout.take().unwrap();
+    {
+        // 寫完就關閉 stdin：CLI 回覆 initialize 後因為沒有輸入而自行結束。
+        let mut stdin = child.stdin.take().unwrap();
+        let request = json!({ "type": "control_request", "request_id": "ai-workflow-models", "request": { "subtype": "initialize" } });
+        if writeln!(stdin, "{request}").and_then(|_| stdin.flush()).is_err() {
+            kill_tree(child.id());
+            let _ = child.wait();
+            return Err(AppError::new("無法啟動 Claude CLI 查詢模型"));
+        }
+    }
+    let (tx, rx) = mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut total = 0usize;
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            total += line.len();
+            if total > 2_000_000 { let _ = tx.send(None); return; }
+            if tx.send(Some(line)).is_err() { return; }
+        }
+    });
+    let finish = |child: &mut Child, out: Result<Value>| { kill_tree(child.id()); let _ = child.wait(); out };
+    let deadline = Instant::now() + Duration::from_secs(timeout_sec);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() { return finish(&mut child, Err(AppError::new("Claude CLI 模型查詢逾時"))); }
+        let line = match rx.recv_timeout(left) {
+            Ok(Some(line)) => line,
+            Ok(None) => return finish(&mut child, Err(AppError::new("Claude CLI 回應過大"))),
+            Err(mpsc::RecvTimeoutError::Timeout) => return finish(&mut child, Err(AppError::new("Claude CLI 模型查詢逾時"))),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return finish(&mut child, Err(AppError::new("這個版本的 Claude CLI 沒有回報模型清單"))),
+        };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+        if message["type"] != "control_response" { continue; }
+        let response = &message["response"];
+        if response["subtype"] == "error" { return finish(&mut child, Err(AppError::new("Claude CLI 不支援初始化查詢"))); }
+        let body = if response["response"].is_object() { response["response"].clone() } else { response.clone() };
+        return finish(&mut child, Ok(body));
+    }
+}
+
 /// 最後幾行，用 " | " 接成一行（錯誤訊息用）。
 pub fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.trim().lines().collect();

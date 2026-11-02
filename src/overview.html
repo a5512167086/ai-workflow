@@ -88,10 +88,8 @@
           <div class="card-head"><h2>AI 角色與模型</h2><button id="btn-save-models" class="primary" type="button"><svg class="ic"><use href="#i-save"/></svg>儲存</button></div>
           <p class="hint">九個階段各自選擇 AI、模型與推理強度；空白＝CLI 預設。PRD 審查與程式碼審查可以選「雙人審查」：Claude 與 Codex 各審一次，兩份都通過才算通過。只有一個 AI 可用或額度用完改用另一個 AI 時，套用那個 AI 的設定。</p>
           <div id="role-models" class="role-grid"></div>
-          <datalist id="models-claude"></datalist>
-          <datalist id="models-codex"></datalist>
           <ul id="model-defaults" class="hint model-defaults"></ul>
-          <p class="hint">Pro 訂閱不含 Fable：在 Claude Code 看得到模型選項，也可能需要額外 usage credits，建議清單不列 Fable。Handover 是給下一個 AI session 的交接紀錄。</p>
+          <p class="hint">模型清單直接向 Claude Code 與 Codex CLI 查詢，就是這個帳號可用的模型；Pro 訂閱使用 Fable 可能需要額外 usage credits。Handover 是給下一個 AI session 的交接紀錄。</p>
           <p id="models-status" class="hint" role="status"></p>
         </div>
         <div class="card">

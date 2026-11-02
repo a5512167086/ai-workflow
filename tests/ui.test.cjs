@@ -48,6 +48,7 @@ function settingsPage() {
   w.eval(`${common}\n${settings}\nwindow.ui = {
     renderSettings, renderModels, bindSettings, loadSettings, effortsFor,
     setConfig(value) { globalConfig = value; },
+    setModels(value) { modelOptions = value; },
     draft() { return modelDraft; },
     setApi(fn) { api = fn; },
   };`);
@@ -74,7 +75,8 @@ test('全域設定頁：九個角色排成 3×3 小卡，模型輸入在重畫�
   for (const card of cards) {
     assert.ok(card.querySelector('legend').textContent);
     assert.ok(card.querySelector('select.role-provider'));
-    assert.ok(card.querySelector('.model-line input[list]'));
+    assert.ok(card.querySelector('.model-line input[role=combobox]'));
+    assert.equal(card.querySelector('.model-line input').hasAttribute('list'), false);
     assert.ok(card.querySelector('.model-line select'));
   }
   // 只有兩個審查角色可以選雙人審查；雙人時顯示兩行模型。
@@ -759,5 +761,66 @@ test('技能會議：送出只呼叫 skills/run 並帶 AI 與接續 id，回覆�
   doc.querySelector('#skill-run-new').click();
   assert.equal(ui.skillState().runId, '');
   assert.equal(doc.querySelector('#skill-run-history').value, '');
+  dom.window.close();
+});
+
+test('模型選擇器取代原生清單：列出 CLI 回報的模型、可篩選與鍵盤選取，推理強度跟著模型', () => {
+  const { dom, ui, doc, w } = settingsPage();
+  doc.querySelector('#overview-settings').hidden = false;
+  ui.setModels({
+    claude: { models: [
+      { id: 'opus', name: 'Opus 5.5', description: '複雜工作', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', description: '最快', efforts: [] },
+    ] },
+    codex: { models: [{ id: 'gpt-5', name: 'GPT-5', efforts: ['low', 'high'], default: true }] },
+  });
+  ui.setConfig(globalConfig()); ui.renderSettings();
+  const input = doc.querySelectorAll('#role-models .role-card')[1].querySelector('.model-line input');
+  input.dispatchEvent(new w.Event('focus'));
+  let popup = doc.querySelector('body > ul.model-picker');
+  assert.ok(popup, '聚焦時顯示清單');
+  assert.equal(input.getAttribute('aria-expanded'), 'true');
+  const options = [...popup.querySelectorAll('[role=option]')];
+  assert.deepEqual(options.map(li => li.dataset.value), ['', 'opus', 'claude-haiku-4-5-20251001']);
+  assert.equal(options[1].querySelector('b').textContent, 'Opus 5.5');
+  assert.equal(options[1].querySelector('code').textContent, 'opus');
+  // 點選 Haiku 4.5：寫入 ID、關閉清單、存進草稿；這個模型沒有推理強度選項。
+  options[2].dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  assert.equal(input.value, 'claude-haiku-4-5-20251001');
+  assert.equal(doc.querySelector('body > ul.model-picker'), null);
+  assert.equal(ui.draft().models.author.claude.model, 'claude-haiku-4-5-20251001');
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.effortsFor('claude', 'claude-haiku-4-5-20251001'))), []);
+  assert.equal(ui.effortsFor('claude', 'opus').length, 5);
+  assert.equal(ui.effortsFor('claude', 'custom-id').length, 5, '不認得的 ID 列出全部推理強度');
+  // 鍵盤：往下兩次選到 Opus、Enter 確認；Esc 關閉。
+  input.dispatchEvent(new w.Event('focus'));
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.equal(input.value, 'opus');
+  input.dispatchEvent(new w.Event('focus'));
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(doc.querySelector('body > ul.model-picker'), null);
+  dom.window.close();
+});
+
+test('點任務以對話框顯示詳情，不改變看板版面；Esc 與關閉都會清掉選取', async () => {
+  const { dom, ui, doc, w } = page();
+  w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  w.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new w.Event('close')); };
+  doc.querySelector('#tab-board').hidden = false;
+  const state = snapshot(); state.tasks = [{ id: 1, title: '登入', status: 'pending' }];
+  ui.setSnap(state); ui.bind(); ui.renderBoard();
+  const dialog = doc.querySelector('#detail');
+  assert.equal(dialog.tagName, 'DIALOG');
+  assert.equal(dialog.open, false);
+  assert.ok(!dialog.closest('.board-canvas'), '詳情不在看板欄位裡');
+  ui.setApi(async () => ({ id: '1', task: { id: 1, title: '登入' }, state: {}, log: '', reviews: [] }));
+  await ui.selectTask('1');
+  assert.equal(dialog.open, true);
+  assert.equal(doc.querySelector('#d-title').textContent, '#1 登入');
+  dialog.dispatchEvent(new w.Event('cancel', { cancelable: true }));
+  assert.equal(dialog.open, false);
+  assert.equal(doc.querySelector('#board .task.selected'), null);
   dom.window.close();
 });

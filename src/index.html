@@ -77,7 +77,7 @@
           <div id="chat-messages" class="chat-messages" tabindex="0" role="region" aria-label="對話訊息"></div>
           <p id="chat-status" class="hint" role="status"></p>
           <form id="chat-form" class="chat-composer">
-            <div class="chat-options"><label for="chat-provider">AI<select id="chat-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><details class="chat-model-options"><summary>模型與推理設定</summary><div class="chat-model-fields"><label for="chat-model">模型<input id="chat-model" type="text" list="models-claude" placeholder="沿用對話角色預設"></label><label for="chat-effort">推理強度<select id="chat-effort"><option value="">預設</option></select></label><p id="chat-model-hint" class="hint">空白沿用首頁「專案對話」角色的設定。</p></div></details></div>
+            <div class="chat-options"><label for="chat-provider">AI<select id="chat-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><details class="chat-model-options"><summary>模型與推理設定</summary><div class="chat-model-fields"><label for="chat-model">模型<input id="chat-model" type="text" placeholder="沿用對話角色預設"></label><label for="chat-effort">推理強度<select id="chat-effort"><option value="">預設</option></select></label><p id="chat-model-hint" class="hint">空白沿用首頁「專案對話」角色的設定。</p></div></details></div>
             <div id="chat-references" class="reference-widget"></div>
             <label class="sr-only" for="chat-input">詢問專案</label><textarea id="chat-input" rows="3" maxlength="20000" placeholder="問問目前的進度、執行問題，或請 AI 畫出專案架構圖…"></textarea>
             <div class="chat-send-row"><span class="hint">Enter 傳送 · Shift+Enter 換行 · 不修改專案檔案</span><button id="chat-stop" type="button" hidden>停止回覆</button><button id="chat-retry" type="button" hidden>重試這則訊息</button><button id="chat-send" type="submit" class="primary">傳送</button></div>
@@ -241,7 +241,8 @@
       <p id="board-empty" class="board-empty" hidden></p>
       </div>
 
-      <div id="detail" class="card detail hidden" role="region" aria-labelledby="d-title">
+      <!-- 任務詳情用對話框顯示，不再擠壓看板。 -->
+      <dialog id="detail" class="card detail task-dialog" aria-labelledby="d-title">
         <div class="detail-head">
           <h2 id="d-title" tabindex="-1"></h2>
           <button id="d-close" class="icon-btn" type="button" aria-label="關閉任務詳情"><svg class="ic"><use href="#i-x"/></svg></button>
@@ -262,7 +263,7 @@
           <button data-sub="task" type="button" role="tab" aria-selected="false" aria-controls="d-body" tabindex="-1">任務內容</button>
         </div>
         <div id="d-body" class="doc log lg-host" role="tabpanel" tabindex="0"></div>
-      </div>
+      </dialog>
       </div>
     </section>
 
@@ -346,9 +347,7 @@
         </div>
       </div>
     </section>
-    <!-- 設定是全域的，只從總覽的「設定」進入；專案頁沒有設定分頁。聊天的模型選單沿用這兩個 datalist。 -->
-    <datalist id="models-claude"></datalist>
-    <datalist id="models-codex"></datalist>
+    <!-- 設定是全域的，只從總覽的「設定」進入；專案頁沒有設定分頁。 -->
 
   </main>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>

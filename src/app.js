@@ -449,7 +449,9 @@ async function selectTask(id) {
     $('#d-meta').replaceChildren(); $('#d-gates').replaceChildren();
     $('#d-body').textContent = '載入中…'; $('#d-rerun').disabled = true;
   }
-  $('#detail').classList.remove('hidden');
+  // 任務詳情是對話框：打開時不改變看板版面。
+  const dialog = $('#detail');
+  if (!dialog.open) { if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', ''); }
   renderBoard();
   await loadDetail();
   if (first && selected === id) $('#d-title').focus({ preventScroll: true });
@@ -1061,9 +1063,6 @@ async function loadModels() {
   if (modelOptions) return;
   try {
     modelOptions = await api('/api/models');
-    for (const p of ['claude', 'codex']) {
-      $(`#models-${p}`).replaceChildren(...modelOptions[p].models.map((m) => Object.assign(document.createElement('option'), { value: m.id, label: m.name })));
-    }
     if (typeof renderChatOptions === 'function') renderChatOptions();
   } catch (err) {
     toast(err.message, true);
@@ -1071,7 +1070,8 @@ async function loadModels() {
 }
 
 function effortsFor(provider, model) {
-  if (provider === 'claude') return CLAUDE_EFFORTS;
+  // Claude：CLI 回報了這個模型就用它支援的推理強度（可能是空的），否則列出全部。
+  if (provider === 'claude') return modelOptions?.claude?.models?.find((m) => m.id === model)?.efforts ?? CLAUDE_EFFORTS;
   const list = modelOptions?.codex.models || [];
   const found = list.find((m) => m.id === model) || list.find((m) => m.default);
   return found?.efforts?.length ? found.efforts : [...new Set(list.flatMap((m) => m.efforts || []))];
@@ -1462,6 +1462,10 @@ function bind() {
   $('#board-search').oninput = $('#board-filter').onchange = () => { if (snap) renderBoard(); };
   $('#board-clear').onclick = () => { $('#board-search').value = ''; $('#board-filter').value = 'all'; renderBoard(); $('#board-search').focus(); };
   $('#detail').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); $('#d-close').click(); } });
+  // 對話框自己的取消（Esc、返回鍵）也走同一個關閉流程，清掉選取並把焦點還給任務卡。
+  $('#detail').addEventListener('cancel', event => { event.preventDefault(); $('#d-close').click(); });
+  // 點對話框外的遮罩也關閉。
+  $('#detail').addEventListener('click', event => { if (event.target === event.currentTarget) { const r = event.currentTarget.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) $('#d-close').click(); } });
   $('#quota-cancel').onclick = () => { quotaDismissed = JSON.stringify(snap?.state.usage_blocked); $('#quota-notice').hidden = true; };
   $('#quota-retry').onclick = () => runAction('/api/run/continue', {}, '已改用另一個 AI 繼續');
   for (const el of [...$$('[data-command]'), $('#pc-feature'), $('#pc-context')]) el.addEventListener('input', () => { projectSettingsDirty = true; });
@@ -1500,7 +1504,8 @@ function bind() {
     const id = selected;
     selected = null;
     detail = null;
-    $('#detail').classList.add('hidden');
+    const dialog = $('#detail');
+    if (dialog.open) { if (typeof dialog.close === 'function') dialog.close(); else dialog.removeAttribute('open'); }
     renderBoard();
     // 關閉後把焦點還給原本的任務卡
     const cards = $$('#tab-board [data-task-id]');

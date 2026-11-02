@@ -56,7 +56,7 @@ ai-workflow doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是�
 設定只有一份，所有專案共用，從總覽右上角的「設定」進入；專案卡片與專案頁都沒有設定入口，也不需要先選專案。內容：
 
 - **工作流程模式**與**全域同時執行上限**放在最上方同一個區塊（左右各半）。
-- **AI 角色與模型**：需求釐清、PRD 作者、PRD 審查、拆任務、實作、修正、程式碼審查、Handover、專案對話九個角色排成 3×3 格子，每格選 AI（claude／codex，兩個審查角色多一個「雙人審查」）、模型與推理強度；視窗窄時退成 2 欄或 1 欄。模型欄位可填完整版本；下方顯示可取得的預設值與來源。Claude 版本清單參考[官方模型設定文件](https://code.claude.com/docs/en/model-config)，實際可用性依 CLI 版本與帳號而定。
+- **AI 角色與模型**：需求釐清、PRD 作者、PRD 審查、拆任務、實作、修正、程式碼審查、Handover、專案對話九個角色排成 3×3 格子，每格選 AI（claude／codex，兩個審查角色多一個「雙人審查」）、模型與推理強度；視窗窄時退成 2 欄或 1 欄。模型欄位是下拉選單，也可以直接輸入模型 ID。清單直接向 CLI 查詢：Claude 用 stream-json 的 initialize 控制請求（不送訊息、不耗額度，結果快取 10 分鐘），Codex 用 app-server 的 `model/list`；所以清單就是這個帳號在 CLI 模型選單看得到的模型，推理強度選項也跟著所選模型。CLI 查不到時改列建議清單並顯示原因。
 - **流程參數**：修正輪數、PRD 審查輪數、任務數、自動模式分支前綴。
 - **CLI 執行環境**：每個 CLI 在 Windows 或 WSL 執行，與 doctor 檢查。
 - 最底下的「目前設定」可展開看 `~/.ai-workflow/config.json` 原文；CLI 路徑、WSL 發行版、逾時、Claude 允許的工具等欄位直接改這個檔案。
@@ -65,7 +65,7 @@ ai-workflow doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是�
 
 任務遇到訂閱額度不足時，畫面提供「確認並以另一個 AI 繼續」。確認後，只有這次執行改用另一個 AI，實作與審查仍使用不同 session，雙人審查暫時降為單人；不修改原本角色設定。保留現有變更並重新驗證，另一個 AI 也無法完成時停止。額度恢復後，可在用量頁更新資料。
 
-Claude Pro 訂閱不包含 Fable 的用量；Claude Code 可選 Fable，但需額外 usage credits，詳見[官方方案說明](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)。模型建議清單不列 Fable。
+Claude Pro 訂閱不包含 Fable 的用量；Claude Code 可選 Fable，但需額外 usage credits，詳見[官方方案說明](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)。帳號看得到 Fable 時清單會列出，使用前請確認方案。
 
 「紀錄」整合目前功能的可展開 Log、PRD、每輪紀錄及任務，也可切換歷史功能查看封存。任務看板可搜尋、依狀態篩選，或切換「任務藍圖」查看任務與子任務完成度；此部分介面的資訊層級參考 MIT 授權的 [Monstrare](https://github.com/pjwang2022/Monstrare)，來源與授權詳見 [UI 設計系統](docs/design-system.md) 及 [第三方聲明](src/THIRD_PARTY_NOTICES.txt)。
 

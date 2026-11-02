@@ -65,10 +65,7 @@ async function loadModels() {
   $('#models-status').textContent = '正在從 CLI 讀取可用的模型…';
   try {
     modelOptions = await api('/api/models');
-    for (const p of ['claude', 'codex']) {
-      $(`#models-${p}`).replaceChildren(...modelOptions[p].models.map((m) => Object.assign(document.createElement('option'), { value: m.id, label: m.name })));
-    }
-    $('#models-status').textContent = modelOptions.codex.error || '';
+    $('#models-status').textContent = [modelOptions.claude.error, modelOptions.codex.error].filter(Boolean).join(' ');
     renderModels();
   } catch (err) {
     $('#models-status').textContent = err.message;
@@ -76,7 +73,8 @@ async function loadModels() {
 }
 
 function effortsFor(provider, model) {
-  if (provider === 'claude') return CLAUDE_EFFORTS;
+  // Claude：CLI 回報了這個模型就用它支援的推理強度（可能是空的），否則列出全部。
+  if (provider === 'claude') return modelOptions?.claude?.models?.find((m) => m.id === model)?.efforts ?? CLAUDE_EFFORTS;
   const list = modelOptions?.codex.models || [];
   const found = list.find((m) => m.id === model) || list.find((m) => m.default);
   return found?.efforts?.length ? found.efforts : [...new Set(list.flatMap((m) => m.efforts || []))];
@@ -127,7 +125,7 @@ function renderModels(force = false) {
       who.textContent = SETTINGS_PROVIDER_LABEL[p];
       const model = document.createElement('input');
       model.type = 'text';
-      model.setAttribute('list', `models-${p}`);
+      attachModelPicker(model, p);
       model.placeholder = '模型：沿用預設';
       model.title = '可選擇完整版本或直接輸入模型 ID';
       model.value = cur.model || '';

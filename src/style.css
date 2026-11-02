@@ -337,12 +337,10 @@ main { padding: var(--s-5); max-width: 1600px; margin: 0 auto; }
   #tab-board:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   #tab-board .toolbar { flex: none; }
   #tab-board .board-wrap { flex: 1 1 320px; min-height: 240px; overflow-y: hidden; display: flex; margin-bottom: 0; }
-  #tab-board .detail { margin-top: var(--s-4); }
   #tab-board .board { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); }
   #tab-board .col { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 0; }
   #tab-board .col > * { flex-shrink: 0; } /* 欄位高度固定後，任務卡不能被壓扁，多出來的改成捲動 */
   #tab-board .col h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: var(--s-3) 0 var(--s-2); background: var(--surface); }
-  #tab-board .detail:not(.hidden) { flex: 0 1 55%; min-height: 260px; margin-bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
   #tab-board .detail > * { flex: none; }
   #tab-board .detail #d-body { flex: 1 1 auto; min-height: 120px; max-height: none; }
 }
@@ -647,7 +645,6 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .board-feature-actions button { white-space: nowrap; }
 #tab-board:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
 #tab-board .board-wrap { flex: 1; min-height: 100px; overflow: auto; }
-#tab-board .detail:not(.hidden) { flex: 0 1 50%; min-height: 160px; overflow: auto; }
 @media (max-width: 900px) {
   .backlog-layout { grid-template-columns: minmax(280px, 42%) minmax(0, 1fr); }
   .prd-layout { grid-template-columns: minmax(0, 1fr) 300px; }
@@ -672,7 +669,6 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .board-search { flex: 1; min-width: 200px; max-width: 450px; }
 .board-search input { width: 100%; min-width: 0; }
 .board-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); position: relative; gap: var(--s-3); }
-.board-workspace:has(.detail:not(.hidden)) { grid-template-columns: minmax(0, 1fr) minmax(390px, 36%); }
 .board-canvas { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; }
 #tab-board .board-wrap { flex: 1; min-height: 0; display: flex; margin: 0; padding: 0 0 6px; overflow: auto; }
 #tab-board .board { flex: 1; grid-template-rows: minmax(0, 1fr); gap: 10px; }
@@ -694,7 +690,12 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .flag.passed, .stage-chip.stage-done { background: var(--primary-soft); color: var(--primary); }
 .stage-chip.stage-doing, .stage-chip.stage-review { background: var(--info-soft); color: var(--info); }
 .board-empty { position: absolute; bottom: 20px; left: 16px; right: 16px; padding: var(--s-4); margin: 0; border: 1px dashed var(--border-strong); background: var(--surface); color: var(--text-muted); border-radius: var(--r-md); text-align: center; pointer-events: none; }
-#tab-board .detail:not(.hidden) { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: auto; margin: 0; padding: 16px; }
+/* 任務詳情對話框：置中、接近滿版高度；內容區（log／diff／審查）在對話框內捲動，看板不受影響。 */
+#tab-board dialog.task-dialog { width: min(1100px, calc(100vw - 32px)); height: min(880px, calc(100dvh - 32px)); max-width: none; max-height: none; margin: auto; padding: 20px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+#tab-board dialog.task-dialog[open] { display: flex; flex-direction: column; }
+#tab-board dialog.task-dialog::backdrop { background: #0007; }
+#tab-board dialog.task-dialog > * { flex: none; }
+#tab-board dialog.task-dialog #d-body { flex: 1 1 auto; min-height: 120px; max-height: none; overflow: auto; }
 #tab-board .detail-head { flex: none; align-items: start; margin-bottom: 12px; }
 #tab-board .detail-head h2 { font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
 #tab-board .detail-head button { flex: none; }
@@ -731,8 +732,6 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .stage-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-muted); }
 .stage-dot.stage-doing { background: var(--info); }.stage-dot.stage-review { background: var(--review); }.stage-dot.stage-test { background: var(--warn); }.stage-dot.stage-done { background: var(--primary); }
 @media (max-width: 999px) {
-  .board-workspace:has(.detail:not(.hidden)) { grid-template-columns: minmax(0, 1fr); }
-  #tab-board .detail:not(.hidden) { position: absolute; inset: 0 0 0 auto; width: min(100%, 520px); z-index: 3; box-shadow: var(--shadow); }
   .board-overview { gap: 12px; }.board-metrics { gap: 12px; grid-template-columns: repeat(4, minmax(54px, 1fr)); }
 }
 @media (max-width: 620px) {
@@ -1000,3 +999,14 @@ main > .tab:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
   .skill-bindings-scroll { padding: 0 12px 12px; }
   .skill-bindings-table th { width: 110px; font-size: 12.5px; padding-right: 8px; }
 }
+
+/* 模型選擇器（取代原生 datalist）：固定定位在輸入框下方，寬度至少 300px，名稱粗體、ID 等寬字、說明在下一行。 */
+.model-picker { position: fixed; z-index: 60; margin: 0; padding: 4px; list-style: none; overflow: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow); }
+.model-picker [role=option] { display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: var(--r-sm); cursor: pointer; }
+.model-picker [role=option]:hover, .model-picker [role=option].active { background: var(--surface-2); }
+.model-picker [role=option].current { box-shadow: inset 3px 0 0 var(--primary); }
+.model-picker-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); min-width: 0; }
+.model-picker-head b { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.model-picker-head code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker small { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.model-picker-empty { padding: 8px 10px; font-size: 12px; color: var(--text-muted); }

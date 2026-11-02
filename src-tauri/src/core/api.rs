@@ -15,7 +15,7 @@ use super::git::is_git_repo;
 use super::home::{app_home, home_dir};
 use super::init::prepare_project;
 use super::prd::{approve_prd, current_prd};
-use super::proc::{query_codex_rpc_with, resolve_cli_for};
+use super::proc::{query_claude_initialize, query_codex_rpc_with, resolve_cli_for};
 use super::projects::{add_project, get_project, list_projects, project_id, project_summary, remove_project, touch_project};
 use super::queue::{queue_entry_for, queue_snapshot, set_max_concurrent};
 use super::runner::request_pause;
@@ -449,16 +449,47 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
 }
 
 /// 設定頁的模型選單：Codex 從 CLI 的 model/list 取得（含各模型支援的推理強度）；Claude 用 CLI 接受的別名，也能填完整名稱。
+/// Claude CLI 回報的模型清單，依 CLI 路徑與執行環境快取 10 分鐘（每次開設定頁都啟動 CLI 太慢）。查詢失敗不快取。
+static CLAUDE_MODELS: std::sync::LazyLock<std::sync::Mutex<Option<(std::time::Instant, String, Value)>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+/// 把 CLI initialize 回傳的 models 轉成設定頁用的格式。`default` 那一項不列出（空白就是 CLI 預設），
+/// 但用它的 resolvedModel／displayName 說明預設是哪個模型。
+fn claude_models_from_cli(init: &Value) -> Option<(Vec<Value>, Value)> {
+    let list = init["models"].as_array().filter(|m| !m.is_empty())?;
+    let mut default = Value::Null;
+    let models = list.iter().filter_map(|m| {
+        let id = m["value"].as_str()?;
+        if id == "default" { default = json!(format!("{}（{}）", m["displayName"].as_str().unwrap_or("預設"), m["resolvedModel"].as_str().unwrap_or(""))); return None; }
+        let efforts: Vec<Value> = if m["supportsEffort"] == true { m["supportedEffortLevels"].as_array().cloned().unwrap_or_default() } else { vec![] };
+        Some(json!({ "id": id, "name": m["displayName"].as_str().unwrap_or(id), "description": m["description"], "resolved": m["resolvedModel"], "efforts": efforts }))
+    }).collect();
+    Some((models, default))
+}
+
 fn available_models(root: &Path, cfg: &Value) -> Value {
     let efforts = |list: &[&str]| list.iter().map(|e| json!(e)).collect::<Vec<_>>();
-    let claude_models: Vec<Value> = [
-        ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-5-5", "Opus 5.5"),
-        ("claude-haiku-5-5", "Haiku 5.5"),
-        ("claude-opus-4-7", "Opus 4.7"), ("claude-opus-4-6", "Opus 4.6"), ("claude-sonnet-4-6", "Sonnet 4.6"),
-        ("opus", "Opus（隨 CLI 更新的別名）"), ("sonnet", "Sonnet（隨 CLI 更新的別名）"), ("haiku", "Haiku（隨 CLI 更新的別名）"),
+    // CLI 查不到時的備用清單：別名永遠指向 CLI 當下的最新版。
+    let fallback: Vec<Value> = [
+        ("opus", "Opus（最新版別名）"), ("sonnet", "Sonnet（最新版別名）"), ("haiku", "Haiku（最新版別名）"),
+        ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-haiku-5-5", "Haiku 5.5"),
     ].iter()
         .map(|(id, name)| json!({ "id": id, "name": name, "efforts": efforts(&["low", "medium", "high", "xhigh", "max"]) }))
         .collect();
+    let from_cli = resolve_cli_for(cfg, "claude", root).and_then(|spec| {
+        let key = format!("{}|{}|{}|{}", spec.runtime, spec.distro, spec.command, spec.bin);
+        if let Some((at, cached_key, value)) = CLAUDE_MODELS.lock().unwrap().as_ref() {
+            if cached_key == &key && at.elapsed() < std::time::Duration::from_secs(600) { return Ok(value.clone()); }
+        }
+        let init = query_claude_initialize(&spec, root, 20)?;
+        let parsed = claude_models_from_cli(&init).ok_or_else(|| AppError::new("Claude CLI 沒有回報模型清單"))?;
+        let value = json!({ "models": parsed.0, "default": parsed.1 });
+        *CLAUDE_MODELS.lock().unwrap() = Some((std::time::Instant::now(), key, value.clone()));
+        Ok(value)
+    });
+    let (claude_models, cli_default, claude_error, claude_source) = match from_cli {
+        Ok(value) => (value["models"].as_array().cloned().unwrap_or_default(), value["default"].clone(), Value::Null, "Claude CLI 模型清單（依帳號）"),
+        Err(err) => (fallback, Value::Null, json!(format!("無法從 Claude CLI 取得模型清單（{}），以下是建議清單，也可以直接輸入模型 ID", err.message)), "建議清單"),
+    };
     let mut settings = json!({});
     // WSL 使用另一份設定，不能誤拿 Windows 使用者設定充當預設值。
     if super::runtime::cli_environment(cfg, "claude", root).runtime == "windows" {
@@ -466,8 +497,9 @@ fn available_models(root: &Path, cfg: &Value) -> Value {
             if let Some(value) = super::util::read_json(file) { settings = super::config::deep_merge(&settings, &value); }
         }
     }
-    let claude = json!({ "models": claude_models, "error": null,
-        "defaultModel": settings["model"], "defaultEffort": settings["effortLevel"], "defaultSource": "Claude CLI 設定（帳號與環境可能另有覆寫）" });
+    let default_model = if settings["model"].is_string() { settings["model"].clone() } else { cli_default };
+    let claude = json!({ "models": claude_models, "error": claude_error,
+        "defaultModel": default_model, "defaultEffort": settings["effortLevel"], "defaultSource": format!("{claude_source}；預設值來自 Claude CLI 設定，帳號與環境可能另有覆寫") });
     let codex = match resolve_cli_for(cfg, "codex", root).and_then(|spec| query_codex_rpc_with(&spec, root, "model/list", Some(json!({})), 20)) {
         Ok(result) => {
             let models: Vec<Value> = result["data"].as_array().into_iter().flatten().filter(|m| m["hidden"] != true).map(|m| json!({
@@ -623,6 +655,24 @@ mod tests {
         assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
         assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "old-tag", "id": "1", "references": refs })).unwrap_err().status, 409);
         assert_eq!(handle_action(&root, "references/assign", &json!({ "target": "task", "tag": "master", "id": "1.1.1", "references": refs })).unwrap_err().status, 400);
+    }
+
+    #[test]
+    fn claude_cli_模型清單_略過預設項並保留各模型的推理強度() {
+        let init = json!({ "models": [
+            { "value": "default", "resolvedModel": "claude-opus-5-5", "displayName": "Default (recommended)", "supportsEffort": true, "supportedEffortLevels": ["low", "high"] },
+            { "value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5", "description": "complex work", "supportsEffort": true, "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"] },
+            { "value": "claude-haiku-4-5-20251001", "displayName": "Haiku 4.5", "description": "quick" },
+        ] });
+        let (models, default) = claude_models_from_cli(&init).unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["id"], "opus");
+        assert_eq!(models[0]["name"], "Opus 5.5");
+        assert_eq!(models[0]["efforts"].as_array().unwrap().len(), 5);
+        assert_eq!(models[1]["efforts"], json!([]));
+        assert_eq!(default, "Default (recommended)（claude-opus-5-5）");
+        assert!(claude_models_from_cli(&json!({ "models": [] })).is_none());
+        assert!(claude_models_from_cli(&json!({})).is_none());
     }
 
     #[test]

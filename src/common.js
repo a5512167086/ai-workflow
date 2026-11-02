@@ -277,3 +277,96 @@ function liveSince(el, label, since) {
   el.dataset.since = since; el.dataset.label = label; el.textContent = `${label}（已 ${elapsed}）`;
   liveSinceTimer ??= setInterval(() => { for (const node of $$('[data-since]')) node.textContent = `${node.dataset.label}（已 ${elapsedText(node.dataset.since)}）`; }, 1000);
 }
+
+/**
+ * 模型選擇器：取代瀏覽器原生的 datalist（WebView2 的原生清單無法套樣式，寬度與位置也會跑版）。
+ * 清單來自全域的 modelOptions（/api/models），可輸入任意模型 ID；選取後觸發 input 與 change 事件。
+ * provider 可以是字串或回傳字串的函式（聊天的 AI 會切換）。
+ */
+let modelPickerPopup = null;
+function closeModelPicker() {
+  if (!modelPickerPopup) return;
+  modelPickerPopup.input.setAttribute('aria-expanded', 'false');
+  modelPickerPopup.input.removeAttribute('aria-activedescendant');
+  modelPickerPopup.el.remove(); modelPickerPopup = null;
+}
+function attachModelPicker(input, provider) {
+  input._modelProvider = provider;
+  if (input._modelPicker) return;
+  input._modelPicker = true;
+  input.removeAttribute('list'); input.autocomplete = 'off';
+  input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-expanded', 'false');
+  const models = () => {
+    const p = typeof input._modelProvider === 'function' ? input._modelProvider() : input._modelProvider;
+    return (typeof modelOptions !== 'undefined' && modelOptions?.[p]?.models) || [];
+  };
+  const choose = id => {
+    input.value = id; closeModelPicker();
+    input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const open = (filter = true) => {
+    const query = filter ? input.value.trim().toLowerCase() : '';
+    const all = models();
+    let list = query ? all.filter(m => `${m.id} ${m.name} ${m.description || ''}`.toLowerCase().includes(query)) : all;
+    // 輸入的值剛好是某個模型時也列出全部，方便換成別的。
+    if (query && all.some(m => m.id.toLowerCase() === query)) list = all;
+    closeModelPicker();
+    if (!all.length) return;
+    const el = document.createElement('ul'); el.className = 'model-picker'; el.setAttribute('role', 'listbox');
+    el.id = `model-picker-${Math.random().toString(36).slice(2, 8)}`; input.setAttribute('aria-controls', el.id);
+    const items = [{ id: '', name: '沿用預設', description: input.placeholder?.replace(/^模型：/, '') || '' }, ...list];
+    items.forEach((model, index) => {
+      const li = document.createElement('li'); li.setAttribute('role', 'option'); li.id = `${el.id}-${index}`;
+      li.dataset.value = model.id; li.setAttribute('aria-selected', String(model.id === input.value));
+      li.classList.toggle('current', model.id === input.value);
+      const head = document.createElement('div'); head.className = 'model-picker-head';
+      const name = document.createElement('b'); name.textContent = model.name;
+      head.append(name);
+      if (model.id) { const id = document.createElement('code'); id.textContent = model.id; head.append(id); }
+      li.append(head);
+      if (model.description) { const desc = document.createElement('small'); desc.textContent = model.description; li.append(desc); }
+      li.onmousedown = event => event.preventDefault();
+      li.onclick = () => choose(model.id);
+      el.append(li);
+    });
+    if (query && !list.length) {
+      const empty = document.createElement('li'); empty.className = 'model-picker-empty'; empty.textContent = `沒有符合的模型，按 Enter 直接使用「${input.value.trim()}」`;
+      el.append(empty);
+    }
+    document.body.append(el);
+    const rect = input.getBoundingClientRect();
+    const width = Math.max(rect.width, 300);
+    const below = innerHeight - rect.bottom - 8, above = rect.top - 8;
+    const maxHeight = Math.max(160, Math.min(360, below >= 220 || below >= above ? below : above));
+    Object.assign(el.style, { left: `${Math.max(8, Math.min(rect.left, innerWidth - width - 8))}px`, width: `${width}px`, maxHeight: `${maxHeight}px` });
+    if (below >= 220 || below >= above) el.style.top = `${rect.bottom + 4}px`; else el.style.bottom = `${innerHeight - rect.top + 4}px`;
+    modelPickerPopup = { el, input, active: -1 };
+    input.setAttribute('aria-expanded', 'true');
+  };
+  const move = delta => {
+    if (!modelPickerPopup || modelPickerPopup.input !== input) { open(false); return; }
+    const options = [...modelPickerPopup.el.querySelectorAll('[role=option]')];
+    if (!options.length) return;
+    modelPickerPopup.active = (modelPickerPopup.active + delta + options.length) % options.length;
+    options.forEach((li, i) => li.classList.toggle('active', i === modelPickerPopup.active));
+    const current = options[modelPickerPopup.active];
+    input.setAttribute('aria-activedescendant', current.id); current.scrollIntoView({ block: 'nearest' });
+  };
+  input.addEventListener('focus', () => open(false));
+  input.addEventListener('click', () => { if (!modelPickerPopup) open(false); });
+  input.addEventListener('input', event => { if (event.isTrusted) open(true); });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); move(1); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); move(-1); }
+    else if (event.key === 'Escape' && modelPickerPopup) { event.preventDefault(); event.stopPropagation(); closeModelPicker(); }
+    else if (event.key === 'Enter' && modelPickerPopup?.input === input) {
+      event.preventDefault();
+      const active = modelPickerPopup.el.querySelectorAll('[role=option]')[modelPickerPopup.active];
+      choose(active ? active.dataset.value : input.value.trim());
+    }
+  });
+  input.addEventListener('blur', () => { if (modelPickerPopup?.input === input) { closeModelPicker(); input.dispatchEvent(new Event('change', { bubbles: true })); } });
+}
+// 捲動或改變視窗大小時關閉，避免清單留在錯的位置。
+addEventListener('scroll', event => { if (modelPickerPopup && !modelPickerPopup.el.contains(event.target)) closeModelPicker(); }, true);
+addEventListener('resize', closeModelPicker);
