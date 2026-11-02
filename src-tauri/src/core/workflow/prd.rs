@@ -46,7 +46,7 @@ fn set_prd_status(root: &Path, status: &str) -> Result<()> {
 }
 
 fn author(root: &Path, cfg: &Value, prompt: String, label: &str) -> Result<(String, String)> {
-    let res = run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], "author"), prompt, write: false, scope: SCOPE, label, stage: Some("prd"), skills: None, role: Some("author") })?;
+    let res = run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], "author"), prompt, write: false, scope: SCOPE, label, stage: Some("prd"), skills: None, role: Some("author"), saved: vec![] })?;
     let text = strip_outer_fence(&res.text);
     if !res.ok || text.is_empty() {
         crate::bail!("作者 AI 失敗：{}", res.error.unwrap_or_else(|| "沒有輸出".into()));
@@ -67,7 +67,7 @@ fn review_loop(root: &Path, cfg: &Value) -> Result<()> {
         let label = format!("PRD 審查 第 {round} 輪");
         let reviews = run_reviews(AgentOpts {
             root, cfg, provider: "", prompt: prd_review_prompt(root, cfg, &prd, round),
-            write: false, scope: SCOPE, label: &label, stage: Some("prd_review"), skills: None, role: Some("reviewer"),
+            write: false, scope: SCOPE, label: &label, stage: Some("prd_review"), skills: None, role: Some("reviewer"), saved: vec![],
         }, &["APPROVE"])?;
         let version = read_state(root)["prd"]["version"].clone();
         for r in &reviews {
@@ -262,7 +262,7 @@ pub fn review_current(root: &Path, cfg: &Value) -> Result<()> {
         let prd=current_prd(root); if prd.is_empty() { crate::bail!("沒有可審查的 PRD"); }
         update_state(root,|s|s["prd"]["status"]=json!("reviewing"))?;
         let round=read_state(root)["prd"]["round"].as_u64().unwrap_or(0)+1;
-        let reviews=run_reviews(AgentOpts { root,cfg,provider:"",prompt:prd_review_prompt(root,cfg,&prd,round),write:false,scope:SCOPE,label:"人工版本交叉審查",stage:Some("prd_review"),role:Some("reviewer"),skills:None },&["APPROVE"])?;
+        let reviews=run_reviews(AgentOpts { root,cfg,provider:"",prompt:prd_review_prompt(root,cfg,&prd,round),write:false,scope:SCOPE,label:"人工版本交叉審查",stage:Some("prd_review"),role:Some("reviewer"),skills:None,saved:vec![] },&["APPROVE"])?;
         let version=read_state(root)["prd"]["version"].clone();
         for review in &reviews {
             let file=format!("human-review-{round}-{}.md",review.provider); fs::write(prd_dir(root).join(&file),&review.text)?;

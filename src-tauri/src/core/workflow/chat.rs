@@ -157,7 +157,7 @@ pub fn run_turn(root: &Path, id: &str, turn: &str) -> Result<Value> {
         if interview { prompt=crate::core::requirements::prompt(root,&cfg,&chat)?; }
         change(root, id, |chat| { chat["contextMessages"] = json!(count); chat["contextTruncated"] = json!(truncated); chat["contextReferencesTruncated"]=json!(references_truncated); Ok(()) })?;
         let scope = format!("chat-{turn}");
-        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: if interview { "需求釐清" } else { "專案對話" }, stage: Some("chat"), role: Some(if interview { "interviewer" } else { "chat" }), skills: Some(if interview { vec!["grill-me".into()] } else { vec![] }) })?;
+        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: if interview { "需求釐清" } else { "專案對話" }, stage: Some("chat"), role: Some(if interview { "interviewer" } else { "chat" }), skills: Some(if interview { interview_skills(&cfg) } else { vec![] }), saved: vec![] })?;
         if !result.ok { return Err(AppError::new(result.error_text())); }
         Ok(result)
     })();
@@ -191,4 +191,9 @@ pub fn rename_chat(root: &Path, id: &str, title: &str) -> Result<Value> {
 }
 pub fn delete_chat(root: &Path, id: &str) -> Result<()> {
     locked(root, || { if active(&get_chat(root, id)?) { crate::bail!(409; "請先停止回覆，再刪除對話"); } fs::remove_file(file(root, id)?)?; Ok(()) })
+}
+
+/// 需求釐清會議載入 Skills 頁「需求釐清」綁定的技能（預設 grill-me）；提示詞本身已經內含同樣的會議規則。
+fn interview_skills(cfg: &Value) -> Vec<String> {
+    cfg["skills"]["interview"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect()
 }

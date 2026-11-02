@@ -222,6 +222,18 @@ fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Valu
             }
             patch
         }
+        "config/token_saving" => {
+            // 只收已知的開關；值的型別由 validate_config 檢查。
+            let body = &body["token_saving"];
+            let mut saving = json!({});
+            for key in crate::core::config::TOKEN_SAVING_SWITCHES {
+                if !body[key].is_null() { saving[key] = body[key].clone(); }
+            }
+            for role in crate::core::config::TERSE_ROLES {
+                if !body["terse"][role].is_null() { saving["terse"][role] = body["terse"][role].clone(); }
+            }
+            json!({ "token_saving": saving })
+        }
         "skills/config" => {
             for (stage, names) in body["skills"].as_object().into_iter().flatten() {
                 let Some(names) = names.as_array().filter(|_| SKILL_STAGES.contains(&stage.as_str())) else {
@@ -234,7 +246,7 @@ fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Valu
                     }
                 }
             }
-            json!({ "skills": body["skills"] })
+            json!({ "skills": body["skills"], crate::core::config::SKILLS_CUSTOMIZED: true })
         }
         _ => return Err(http(404, "未知操作")),
     };
@@ -323,7 +335,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             crate::core::guards::check(&snap, "task.rerun")?;
             if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
         }
-        "config/runtime" | "config/models" | "config/mode" | "config/limits" => config_action(action, body, Some(root)),
+        "config/runtime" | "config/models" | "config/mode" | "config/limits" | "config/token_saving" => config_action(action, body, Some(root)),
         "config/project" => {
             crate::core::guards::check(&snap, "project.settings")?;
             // 只有 build/test/lint、feature、context_files 屬於專案。
@@ -347,6 +359,7 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         }
         "doctor" => doctor_report(root),
         "usage/refresh" => refresh_usage_limits(root, &snap["config"]),
+        "graph/build" => { crate::core::graph::build(root)?; Ok(crate::core::graph::summary(root)) },
         "skills/import" => {
             busy_guard(&snap)?;
             Ok(json!({ "skill": import_skill(root, &text_field(body, "path"))?.to_json() }))
@@ -443,6 +456,7 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
                 return Ok(json!({ "prd": current_prd(root), "status": state["prd"], "rounds": prd_rounds(root, &state) }));
             }
             "references" => return Ok(json!({ "items": crate::core::references::list(root) })),
+            "graph" => return Ok(crate::core::graph::summary(root)),
             "backlog" => {
                 // 每一項帶上 lock：已產生目前 PRD 或功能已完成的需求不能再改（前端停用按鈕並顯示原因）。
                 let state = read_state(root);
@@ -579,7 +593,7 @@ fn handle_global(action: &str, body: &Value) -> Result<Value> {
             q["max"] = set_max_concurrent(&body["max"])?["max_concurrent_runs"].clone();
             Ok(json!({ "queue": q }))
         }
-        "config/runtime" | "config/models" | "config/mode" | "config/limits" | "skills/config" => config_action(action, body, None),
+        "config/runtime" | "config/models" | "config/mode" | "config/limits" | "config/token_saving" | "skills/config" => config_action(action, body, None),
         "doctor" => doctor_report(&home_dir()),
         _ => Err(http(404, "未知操作")),
     }

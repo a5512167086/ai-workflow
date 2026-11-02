@@ -23,6 +23,8 @@ let selected = null;
 let subtab = 'log';
 let detail = null;
 const logs = {};
+/** 已經從檔案讀過完整內容（最多最後 200 KB）的 log；串流只會推送開著 App 之後新增的部分。 */
+const logsFull = new Set();
 let prdView = (() => {
   try {
     return localStorage.getItem('ai-workflow-prd-view') === 'raw' ? 'raw' : 'preview';
@@ -195,10 +197,50 @@ function renderUsage(usage = snap?.usage) {
   const rows = $('#usage-recent'); rows.replaceChildren();
   for (const session of usage.recent) {
     const row = document.createElement('tr');
-    for (const value of [session.label, `${session.provider} / ${session.runtime}`, session.status === 'running' ? '執行中' : session.status === 'done' ? '完成' : '失敗', tokenNumber(session.tokens?.inputTokens), tokenNumber(session.tokens?.outputTokens), tokenNumber(session.tokens?.totalTokens)]) {
+    for (const value of [session.label, `${session.provider} / ${session.runtime}`, session.status === 'running' ? '執行中' : session.status === 'done' ? '完成' : '失敗', tokenNumber(session.tokens?.inputTokens), tokenNumber(session.tokens?.outputTokens), tokenNumber(session.tokens?.totalTokens), savedText(session)]) {
       const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
     }
     rows.append(row);
+  }
+  renderUsageSaving(usage);
+}
+
+const USAGE_STAGES = {
+  interview: '需求釐清', prd: 'PRD 起草與修訂', prd_review: 'PRD 審查', tasks: '拆任務', implement: '實作', code_review: '程式碼審查',
+  fix: '修正', handover: 'Handover', chat: '專案對話', skill: '技能會議', unknown: '舊紀錄（未分類）',
+};
+const SAVING_FEATURES = {
+  review_diff_filter: '審查略過 lockfile', prd_excerpt: '只附相關 PRD', dedupe_skills: '內建技能不重複', code_map: '專案圖譜',
+};
+/** 單次執行的估計節省：有省就顯示數字，精簡回覆另外標註（效果無法直接估算）。 */
+function savedText(session) {
+  const saved = session.savedEstimate ? tokenNumber(session.savedEstimate) : '—';
+  return session.terse ? `${saved}（精簡回覆）` : saved;
+}
+function renderUsageSaving(usage) {
+  $('#usage-saved').textContent = tokenNumber(usage.savedEstimate ?? 0);
+  const features = $('#usage-saving-features'); features.replaceChildren();
+  const saving = usage.tokenSaving || {};
+  const terse = Object.entries(saving.terse || {}).filter(([, on]) => on).length;
+  for (const [key, label] of [...Object.entries(SAVING_FEATURES), ['terse', `精簡回覆（${terse} 個角色）`]]) {
+    const on = key === 'terse' ? terse > 0 : saving[key] === true;
+    const item = document.createElement('li'); item.className = on ? 'on' : '';
+    item.textContent = `${on ? '開' : '關'}・${label}`; features.append(item);
+  }
+  const body = $('#usage-stages'); body.replaceChildren();
+  const stages = usage.byStage || [];
+  const total = stages.reduce((sum, s) => sum + (s.tokens || 0), 0);
+  for (const stage of stages) {
+    const row = document.createElement('tr');
+    const share = total ? `${Math.round((stage.tokens / total) * 100)}%` : '—';
+    for (const value of [USAGE_STAGES[stage.stage] || stage.stage, String(stage.sessions), tokenNumber(stage.tokens), share, tokenNumber(stage.sessions ? Math.round(stage.tokens / stage.sessions) : 0), stage.savedEstimate ? tokenNumber(stage.savedEstimate) : '—']) {
+      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    }
+    body.append(row);
+  }
+  if (!stages.length) {
+    const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 6; cell.className = 'hint';
+    cell.textContent = '還沒有紀錄'; row.append(cell); body.append(row);
   }
 }
 let usageRefreshBusy = false, lastUsageRefresh = 0;
@@ -475,6 +517,7 @@ async function loadDetail() {
     if (selected !== id) return;
     detail = data;
     logs[`task-${id}`] = detail.log;
+    logsFull.add(`task-${id}`);
     renderDetail();
   } catch (err) {
     if (selected !== id) return;
@@ -530,12 +573,12 @@ function renderDetail() {
   if (subtab === 'reviews') return body.replaceChildren(reviewsView(detail.reviews));
   // diff：GitHub 風格的並排／單欄檢視；diffview.js 沒載入時退回原文。
   if (subtab === 'diff' && typeof diffView === 'function') return body.replaceChildren(diffView(detail.diff || ''));
+  if (subtab === 'task') return body.replaceChildren(taskContentView(t, detail.implement));
   const pre = document.createElement('pre');
   pre.className = 'plain';
   pre.textContent = {
     checks: detail.checks || '（尚未執行驗證）',
     diff: detail.diff || '（尚無 diff）',
-    task: JSON.stringify(t, null, 2) + (detail.implement ? `\n\n===== 實作回報 =====\n${detail.implement}` : ''),
   }[subtab];
   body.replaceChildren(pre);
 }
@@ -565,6 +608,85 @@ function markdownBlock(text) {
   div.className = 'md md-sm';
   div.innerHTML = canRender() ? window.renderMarkdown(text || '') : `<pre>${escapeHtml(text || '')}</pre>`;
   return div;
+}
+
+/** 任務內容：用標籤、段落與清單呈現任務欄位，不顯示原始 JSON。 */
+function taskContentView(task, implement) {
+  const root = document.createElement('div');
+  root.className = 'task-content';
+  const done = boardFacts().done;
+  const chipRow = (label, items) => {
+    if (!items.length) return;
+    const row = document.createElement('div');
+    row.className = 'tc-row';
+    const name = document.createElement('span');
+    name.className = 'tc-label';
+    name.textContent = label;
+    row.append(name);
+    for (const [text, cls, title] of items) {
+      const chip = document.createElement('span');
+      chip.className = `chip ${cls || ''}`.trim();
+      chip.textContent = text;
+      if (title) chip.title = title;
+      row.append(chip);
+    }
+    root.append(row);
+  };
+  const section = (title, content) => {
+    if (!content) return;
+    const sec = document.createElement('section');
+    sec.className = 'tc-section';
+    const h = document.createElement('h4');
+    h.textContent = title;
+    sec.append(h, content);
+    root.append(sec);
+  };
+  const text = value => typeof value === 'string' && value.trim() ? markdownBlock(value) : null;
+  const list = (items, render) => {
+    if (!items?.length) return null;
+    const ul = document.createElement('ul');
+    ul.className = 'tc-list';
+    for (const item of items) ul.append(render(item));
+    return ul;
+  };
+  const statusText = status => ({ pending: '待處理', 'in-progress': '進行中', review: '審查中', done: '完成', blocked: '受阻', cancelled: '取消' }[status] || status || '待處理');
+
+  chipRow('狀態', [[statusText(task.status), `tm-${task.status || 'pending'}`]]);
+  if (task.priority) chipRow('優先順序', [[`${PRIORITY_TEXT[task.priority] || task.priority}`, `prio-${task.priority}`]]);
+  chipRow('依賴', (task.dependencies || []).map(id => [`#${id}`, done.has(String(id)) ? 'tm-done' : 'tm-pending', done.has(String(id)) ? '已完成' : '尚未完成']));
+  chipRow('對應需求', (task.requirement_ids || []).map(id => [id, 'mono']));
+  chipRow('技能', (task.skills || []).map(name => [name, 'tc-skill']));
+
+  section('說明', text(task.description));
+  section('實作細節', text(task.details));
+  section('驗收條件', list(task.acceptanceCriteria, item => {
+    const li = document.createElement('li');
+    li.className = 'tc-check';
+    li.append(markdownBlock(String(item)));
+    return li;
+  }));
+  section('測試策略', text(task.testStrategy));
+  section(`子任務（${(task.subtasks || []).length}）`, list(task.subtasks, sub => {
+    const li = document.createElement('li');
+    li.className = 'tc-sub';
+    const head = document.createElement('div');
+    head.className = 'tc-sub-head';
+    const id = document.createElement('span');
+    id.className = 'mono';
+    id.textContent = `${task.id}.${sub.id}`;
+    const title = document.createElement('b');
+    title.textContent = sub.title || '';
+    const chip = document.createElement('span');
+    chip.className = `chip tm-${sub.status || 'pending'}`;
+    chip.textContent = statusText(sub.status);
+    head.append(id, title, chip);
+    li.append(head);
+    if (sub.description || sub.details) li.append(markdownBlock([sub.description, sub.details].filter(Boolean).join('\n\n')));
+    return li;
+  }));
+  section('實作回報', text(implement));
+  if (!root.children.length) root.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: '（這個任務沒有其他內容）' }));
+  return root;
 }
 
 /** 每次審查一列（最新的在上面）；雙人審查時 Claude 與 Codex 的意見並排。 */
@@ -603,10 +725,22 @@ function reviewsView(reviews) {
   return frag;
 }
 
+/** 來源清單：固定的流程 log、目前任務清單裡的每個任務（依編號），再加上串流出現過的其他來源（對話的 log 在對話頁看）。 */
+function logScopes() {
+  const fixed = ['runner', 'prd', 'tasks'];
+  const taskIds = (snap?.tasks || []).map(t => `task-${t.id}`);
+  const known = new Set([...fixed, ...taskIds, 'process']);
+  const extra = Object.keys(logs).filter(s => !known.has(s) && !s.startsWith('chat-'));
+  const num = s => Number(s.replace(/^task-/, '')) || 0;
+  extra.sort((a, b) => a.startsWith('task-') && b.startsWith('task-') ? num(a) - num(b) : a.localeCompare(b));
+  return [...fixed, ...taskIds, 'process', ...extra];
+}
+
 function renderLogSelect() {
   const sel = $('#log-scope');
-  const scopes = Object.keys(logs).sort();
+  const scopes = logScopes();
   const cur = sel.value || 'runner';
+  if ([...sel.options].map(o => o.value).join() === scopes.join()) { if (scopes.includes(cur)) sel.value = cur; return renderLog(); }
   sel.innerHTML = '';
   for (const s of scopes) {
     const o = document.createElement('option');
@@ -620,7 +754,22 @@ function renderLogSelect() {
 
 function renderLog() {
   if ($('#tab-records').hidden || recSel !== null || recSub !== 'log') return;
-  renderLogTree($('#rec-body'), logs[$('#log-scope').value]);
+  const scope = $('#log-scope').value;
+  if (scope && !logsFull.has(scope)) { loadFullLog(scope); return renderLogTree($('#rec-body'), logs[scope] || '讀取中…'); }
+  renderLogTree($('#rec-body'), logs[scope] || '（還沒有 log）');
+}
+
+/** 第一次看某個來源時讀完整檔案；串流先收到的片段已經包含在檔案裡，所以直接取代。 */
+async function loadFullLog(scope) {
+  logsFull.add(scope);
+  try {
+    const { text } = await api(`/api/log/${scope}`);
+    logs[scope] = text || '';
+  } catch {
+    logsFull.delete(scope);
+    return;
+  }
+  if ($('#log-scope').value === scope) renderLog();
 }
 
 // ---------- 這個專案自己的欄位：build/test/lint、功能名稱、context 檔（其他設定都是全域的，在總覽的設定頁） ----------
@@ -668,6 +817,7 @@ function onState(data) {
   renderPrd();
   renderBoard();
   renderBacklog();
+  if (logScopes().join() !== [...$('#log-scope').options].map(o => o.value).join()) renderLogSelect();
   if (prevPrd !== data.state.prd.rounds.length || prevStatus !== data.state.prd.status) {
     loadRounds();
     loadBacklog();
@@ -683,6 +833,7 @@ async function loadInitialLogs() {
     try {
       const { text } = await api(`/api/log/${scope}`);
       if (text) logs[scope] = text;
+      logsFull.add(scope);
     } catch {
       // 沒有這個 log 檔
     }
@@ -1109,6 +1260,7 @@ function showTab(b) {
   if (b.dataset.tab === 'skills') loadSkills().catch(err => toast(err.message, true));
   if (b.dataset.tab === 'backlog') loadBacklog();
   if (b.dataset.tab === 'records') loadHistory();
+  if (b.dataset.tab === 'graph') loadGraph();
   for (const x of $$('.tabs button')) {
     const on = x === b;
     x.classList.toggle('active', on);
@@ -1122,13 +1274,45 @@ function showTab(b) {
   }
 }
 
+// ---------- 架構圖：專案圖譜的互動圖（graph.html）與 GRAPH_REPORT.md ----------
+let graphBusy = false, graphHtml = '';
+/** 讀取上次建立的圖譜；build 為 true 時先重新建立（只解析改過的檔案）。 */
+async function loadGraph(build = false) {
+  if (graphBusy) return;
+  graphBusy = true; $('#btn-graph-build').disabled = true;
+  $('#graph-status').textContent = build ? '正在建立專案圖譜（本機解析，不花 AI token）…' : '';
+  try {
+    renderGraph(await api(build ? '/api/graph/build' : '/api/graph', build ? {} : undefined));
+    if (build) $('#graph-status').textContent = '已重新建立';
+  } catch (error) { $('#graph-status').textContent = error.message; }
+  finally { graphBusy = false; $('#btn-graph-build').disabled = false; }
+}
+function renderGraph(graph) {
+  const frame = $('#graph-frame');
+  if (!graph?.exists) {
+    $('#graph-summary').textContent = '還沒有建立專案圖譜：按「重新建立」，或在實作任務時自動建立';
+    $('#graph-report').replaceChildren(); $('#graph-path').textContent = '';
+    frame.hidden = true; graphHtml = '';
+    return;
+  }
+  const s = graph.stats;
+  const commit = graph.commit ? ` · commit ${String(graph.commit).slice(0, 8)}` : '';
+  $('#graph-summary').textContent = `${s.files} 個檔案 · ${s.nodes} 個節點 · ${s.edges} 條關係 · ${s.communities} 個分群 · 建立於 ${usageTime(graph.builtAt)}${commit}`;
+  $('#graph-path').textContent = graph.paths?.report || '';
+  const report = $('#graph-report');
+  if (canRender()) report.innerHTML = window.renderMarkdown(graph.report || ''); else report.textContent = graph.report || '';
+  frame.hidden = false;
+  // 互動圖是獨立的頁面（含自己的 script），放在沙箱 iframe 裡；內容沒變就不重載，保留使用者的縮放與選取。
+  if (graph.html !== graphHtml) { graphHtml = graph.html; frame.srcdoc = graph.html; }
+}
+
 // ---------- Skills：左側技能清單 + 右側內容／會議；工作流綁定是全域設定的一張表 ----------
 let skillLibrary = [], skillRuns = [], skillStages = [];
 let skillSelected = null; // 技能名稱、'bindings'（綁定表）或 null（還沒選）
 let skillView = 'content', skillEditing = false, skillEditingName = null, skillPreviewKey = '';
 let skillRunId = '', skillRunFresh = false, skillSending = false, skillMessagesKey = '', skillQuery = ''; // skillRunFresh：使用者明確選了「新會議」，不要自動跳回最近一場
 let skillBindings = {}, skillBindingsSaved = {};
-const SKILL_STAGE_LABELS = { prd: 'PRD 起草／修訂', prd_review: 'PRD 審查', tasks: '拆解任務', implement: '實作', code_review: '程式碼審查', fix: '修正', handover: '交接' };
+const SKILL_STAGE_LABELS = { interview: '需求釐清', prd: 'PRD 起草／修訂', prd_review: 'PRD 審查', tasks: '拆解任務', implement: '實作', code_review: '程式碼審查', fix: '修正', handover: '交接' };
 const SKILL_RUN_STATUS = { running: '回覆中', done: '已回覆', error: '失敗' };
 const SKILL_TEMPLATE = '---\nname: my-skill\ndescription: 說明用途及使用時機\n---\n在此撰寫技能指令。\n';
 const skillStageList = () => skillStages.length ? skillStages : Object.keys(SKILL_STAGE_LABELS);
@@ -1505,6 +1689,7 @@ function bind() {
   }
   $('#usage-short').onclick = () => showTab($('#tabbtn-usage'));
   $('#btn-usage-refresh').onclick = refreshUsage;
+  $('#btn-graph-build').onclick = () => loadGraph(true);
   bindTheme();
   const tabButtons = $$('.tabs button');
   for (const b of tabButtons) b.onclick = () => showTab(b);

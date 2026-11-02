@@ -1,7 +1,7 @@
 'use strict';
 
 // 全域設定頁（總覽的「設定」）。設定只有一份，不按專案：AI 角色與模型、工作流程模式、同時執行上限、
-// 流程參數、CLI 執行環境。資料在 ~/.ai-workflow/config.json，透過 /api/config 讀寫。共用工具在 common.js。
+// 流程參數、節省 Token、CLI 執行環境。資料在 ~/.ai-workflow/config.json，透過 /api/config 讀寫。共用工具在 common.js。
 
 const ROLE_ORDER = ['interviewer', 'author', 'reviewer', 'task_planner', 'implementer', 'fixer', 'code_reviewer', 'handover', 'chat'];
 const ROLE_LABELS = {
@@ -23,6 +23,7 @@ let modelDraft = null;
 let modelsDirty = false;
 let runtimeDirty = false;
 let limitsDirty = false;
+let savingDirty = false;
 
 async function loadSettings() {
   try {
@@ -52,7 +53,20 @@ function renderSettings(payload) {
   if (!limitsDirty) {
     for (const input of $$('[data-limit]')) input.value = config[input.dataset.limit] ?? '';
   }
+  if (!savingDirty) {
+    const saving = config.token_saving || {};
+    for (const box of $$('[data-saving]')) box.checked = saving[box.dataset.saving] === true;
+    for (const box of $$('[data-terse]')) box.checked = saving.terse?.[box.dataset.terse] === true;
+  }
   renderModels();
+}
+
+/** 節省 Token 卡片目前勾選的值（送給 /api/config/token_saving）。 */
+function savingDraft() {
+  const draft = { terse: {} };
+  for (const box of $$('[data-saving]')) draft[box.dataset.saving] = box.checked;
+  for (const box of $$('[data-terse]')) draft.terse[box.dataset.terse] = box.checked;
+  return draft;
 }
 
 function renderQueue(queue) {
@@ -205,6 +219,14 @@ function bindSettings() {
     try {
       await saveGlobal('/api/config/limits', body, '已儲存流程參數');
       limitsDirty = false;
+      renderSettings();
+    } catch (err) { toast(err.message, true); }
+  };
+  for (const el of $$('[data-saving], [data-terse]')) el.addEventListener('change', () => { savingDirty = true; });
+  $('#btn-save-saving').onclick = async () => {
+    try {
+      await saveGlobal('/api/config/token_saving', { token_saving: savingDraft() }, '已儲存節省 Token 設定');
+      savingDirty = false;
       renderSettings();
     } catch (err) { toast(err.message, true); }
   };

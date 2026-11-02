@@ -4,12 +4,14 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::core::config::saving_on;
+use crate::core::savings::{prd_excerpt, saved};
 use crate::core::state::{handover_file, prd_file};
 use crate::core::skills::list_skills;
 use crate::core::util::{pretty, read_text};
 
 const MAX_FILE_CHARS: usize = 40000;
-const MAX_DIFF_CHARS: usize = 120000;
+pub const MAX_DIFF_CHARS: usize = 120000;
 
 pub fn clip(text: &str, max: usize) -> String {
     let len = text.chars().count();
@@ -175,10 +177,26 @@ fn id_of(task: &Value) -> String {
 
 const NO_TOUCH: &str = "- 不要執行 git commit、git push、切換分支，也不要修改 .taskmaster/ 或 ai-workflow 的流程資料與 handover（handover 由獨立的一步更新）。";
 
-pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> String {
+/// 實作 prompt 與節省 token 的紀錄（PRD 摘要）。
+pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> (String, Vec<Value>) {
     let prd = read_text(prd_file(root));
-    let prd = if prd.trim().is_empty() { "（沒有核准的 PRD）".to_string() } else { clip(&prd, MAX_FILE_CHARS) };
-    format!("你正在一個全新的對話中實作 開發任務 {}。先閱讀 handover 與 context 了解目前進度，再動手。
+    let mut savings = Vec::new();
+    let (prd_title, prd) = if prd.trim().is_empty() {
+        ("完整 PRD", "（沒有核准的 PRD）".to_string())
+    } else {
+        let full = clip(&prd, MAX_FILE_CHARS);
+        let excerpt = prd_excerpt(&prd, task).filter(|_| saving_on(cfg, "prd_excerpt"))
+            .map(|e| format!("{e}\n\n完整 PRD：{}。需要其他使用者故事或實作決策的背景時再讀。", prd_file(root).display()));
+        // PRD 很短時摘要加上路徑說明反而比較長，就照舊附全文。
+        match excerpt.and_then(|text| saved("prd_excerpt", &full, &text).map(|s| (text, s))) {
+            Some((text, entry)) => {
+                savings.push(entry);
+                ("PRD（與這個任務相關的部分）", text)
+            }
+            None => ("完整 PRD", full),
+        }
+    };
+    let prompt = format!("你正在一個全新的對話中實作 開發任務 {}。先閱讀 handover 與 context 了解目前進度，再動手。
 
 ## Handover 與專案 context
 {}
@@ -186,8 +204,9 @@ pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> String {
 ## 任務
 {}
 
-## 完整 PRD
+## {prd_title}
 {prd}
+{}
 
 ## 驗證指令（完成後 ai-workflow 會自動執行）
 {}
@@ -206,15 +225,32 @@ pub fn implement_prompt(root: &Path, cfg: &Value, task: &Value) -> String {
 - 只做這個任務範圍內的事，不要順手實作其他任務。
 {NO_TOUCH}
 - 完成後簡短回報：改了哪些檔案、加了哪些測試（測什麼行為）、怎麼驗證、還有什麼風險。",
-        id_of(task), context_block(root, cfg, true), task_block(task), commands_block(cfg))
+        id_of(task), context_block(root, cfg, true), task_block(task), code_map_block(root, cfg, &task_question(task)), commands_block(cfg));
+    (prompt, savings)
 }
 
-pub fn fix_checks_prompt(cfg: &Value, task: &Value, failures: &str, round: u64) -> String {
+/// token_saving.code_map 開啟時附上專案圖譜：先更新圖譜，再用 question（任務內容、失敗輸出或審查意見）查出相關的子圖。
+/// 關閉或建立失敗時是空字串，流程照常進行。
+fn code_map_block(root: &Path, cfg: &Value, question: &str) -> String {
+    if !saving_on(cfg, "code_map") {
+        return String::new();
+    }
+    crate::core::graph::prompt_context(root, question).map(|text| format!("\n## 專案圖譜\n{text}\n")).unwrap_or_default()
+}
+
+/// 用來查圖譜的任務文字（標題、說明、細節、測試策略與驗收條件）。
+fn task_question(task: &Value) -> String {
+    let mut parts: Vec<String> = ["title", "description", "details", "testStrategy"].iter().filter_map(|k| task[k].as_str().map(String::from)).collect();
+    parts.extend(task["acceptanceCriteria"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)));
+    parts.join("\n")
+}
+
+pub fn fix_checks_prompt(root: &Path, cfg: &Value, task: &Value, failures: &str, round: u64) -> String {
     format!("你正在修正 開發任務 {} 的實作（第 {round} 輪修正）。驗證指令失敗，請修好它們。
 
 ## 任務
 {}
-
+{}
 ## 失敗的驗證輸出
 {}
 
@@ -225,15 +261,15 @@ pub fn fix_checks_prompt(cfg: &Value, task: &Value, failures: &str, round: u64) 
 - 找出根本原因再修，不要為了讓測試通過而刪除或弱化測試。
 {NO_TOUCH}
 - 完成後簡短說明修了什麼。",
-        id_of(task), task_block(task), clip(failures, MAX_FILE_CHARS), commands_block(cfg))
+        id_of(task), task_block(task), code_map_block(root, cfg, &format!("{}\n{}", task_question(task), clip(failures, 8000))), clip(failures, MAX_FILE_CHARS), commands_block(cfg))
 }
 
-pub fn fix_review_prompt(cfg: &Value, task: &Value, review: &str, round: u64) -> String {
+pub fn fix_review_prompt(root: &Path, cfg: &Value, task: &Value, review: &str, round: u64) -> String {
     format!("你正在修正 開發任務 {} 的實作（第 {round} 輪修正）。程式碼審查者提出以下意見，請處理。
 
 ## 任務
 {}
-
+{}
 ## 審查意見
 {}
 
@@ -244,7 +280,12 @@ pub fn fix_review_prompt(cfg: &Value, task: &Value, review: &str, round: u64) ->
 - 處理合理的意見；不同意的意見在回覆中說明理由。
 {NO_TOUCH}
 - 完成後簡短說明改了什麼。",
-        id_of(task), task_block(task), clip(review, MAX_FILE_CHARS), commands_block(cfg))
+        id_of(task), task_block(task), code_map_block(root, cfg, &format!("{}\n{}", task_question(task), clip(review, 8000))), clip(review, MAX_FILE_CHARS), commands_block(cfg))
+}
+
+/// git diff --stat 的摘要行（檔案清單與合計），給 handover 使用。
+pub fn diff_stat(diff: &str) -> String {
+    diff.lines().filter(|l| (l.starts_with(' ') && l.len() > 1 && !l[1..].starts_with(char::is_whitespace) && l.contains('|')) || l.contains("file changed") || l.contains("files changed")).collect::<Vec<_>>().join("\n")
 }
 
 pub fn code_review_prompt(task: &Value, diff: &str, check_summary: &str) -> String {
@@ -368,8 +409,8 @@ mod tests {
         std::fs::write(prd_file(&root), "# PRD 內容").unwrap();
         std::fs::write(handover_file(&root), "上次進度").unwrap();
         let task = serde_json::json!({ "id": 1, "title": "t" });
-        let prompt = implement_prompt(&root, &crate::core::config::default_config(), &task);
-        assert!(prompt.contains("# PRD 內容") && prompt.contains("上次進度"));
+        let (prompt, savings) = implement_prompt(&root, &crate::core::config::default_config(), &task);
+        assert!(prompt.contains("# PRD 內容") && prompt.contains("上次進度") && savings.is_empty());
         assert!(!prompt.contains(".aipipe"));
         let handover = handover_prompt(&root, &task, "", "");
         assert!(handover.contains("上次進度") && handover.contains("不要修改任何檔案"));

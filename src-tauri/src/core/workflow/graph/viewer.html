@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>專案圖譜</title>
+<!-- ai-workflow 產生的互動圖譜（功能參考 graphify 的 graph.html，自行實作、不需網路）。 -->
+<style>
+  :root { --bg: #ffffff; --panel: #f8fafc; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --edge: rgba(100,116,139,.35); --hl: #15803d; }
+  :root[data-theme="dark"] { --bg: #0f172a; --panel: #111827; --text: #e2e8f0; --muted: #94a3b8; --border: #334155; --edge: rgba(148,163,184,.3); --hl: #4ade80; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0f172a; --panel: #111827; --text: #e2e8f0; --muted: #94a3b8; --border: #334155; --edge: rgba(148,163,184,.3); --hl: #4ade80; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
+  .app { display: flex; height: 100%; }
+  aside { width: 300px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  main { position: relative; flex: 1; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  h1 { font-size: 15px; margin: 0; }
+  h2 { font-size: 12px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+  input[type=search] { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+  button { font: inherit; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .results li, .neighbors li { padding: 3px 4px; border-radius: 4px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .results li:hover, .neighbors li:hover { background: var(--border); }
+  .legend li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; word-break: break-all; }
+  .banner { position: absolute; top: 8px; left: 8px; right: 8px; padding: 6px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); }
+  .hint { position: absolute; bottom: 8px; right: 12px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 700px) { .app { flex-direction: column; } aside { width: auto; max-height: 45%; border-right: none; border-bottom: 1px solid var(--border); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div>
+      <h1 id="title">專案圖譜</h1>
+      <div id="stats" class="muted"></div>
+    </div>
+    <div class="row">
+      <span class="muted">主題</span>
+      <button data-theme-set="light" type="button">淺色</button><button data-theme-set="dark" type="button">深色</button><button data-theme-set="system" type="button">跟隨系統</button>
+    </div>
+    <div>
+      <h2>搜尋</h2>
+      <input id="search" type="search" placeholder="名稱或檔案路徑" aria-label="搜尋節點">
+      <ul id="results" class="results"></ul>
+    </div>
+    <div id="info" hidden>
+      <h2>節點</h2>
+      <dl id="details"></dl>
+      <h2 style="margin-top:8px">相鄰節點</h2>
+      <ul id="neighbors" class="neighbors"></ul>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between"><h2>分群</h2><span class="row"><button id="all" type="button">全選</button><button id="none" type="button">全不選</button></span></div>
+      <ul id="legend" class="legend"></ul>
+    </div>
+  </aside>
+  <main>
+    <canvas id="canvas" aria-label="專案圖譜"></canvas>
+    <div id="banner" class="banner" hidden></div>
+    <div class="hint">拖曳平移 · 滾輪縮放 · 點節點看細節 · 虛線是推斷或不確定的關係</div>
+  </main>
+</div>
+<script>
+'use strict';
+const DATA = /*__GRAPH__*/null;
+const PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'];
+const $ = sel => document.querySelector(sel);
+const canvas = $('#canvas');
+const ctx = canvas.getContext('2d');
+const nodes = DATA.nodes.map(([label, kind, file, line, community, degree], i) => ({ i, label, kind, file, line, community, degree, x: 0, y: 0, vx: 0, vy: 0 }));
+const links = DATA.links.map(([s, t, r, c]) => ({ s, t, relation: DATA.relations[r], confidence: DATA.confidences[c] }));
+const adj = nodes.map(() => []);
+for (const l of links) { adj[l.s].push(l); adj[l.t].push(l); }
+const maxDegree = Math.max(1, ...nodes.map(n => n.degree));
+// 縮小時只標出連接最多的 25 個節點（graphify 只標連接數達最大值 15% 的節點），放大後才顯示全部名稱。
+const labelDegree = Math.max(maxDegree * 0.15, [...nodes].map(n => n.degree).sort((a, b) => b - a)[24] ?? 0);
+const hidden = new Set();
+let selected = null, hover = null;
+const view = { x: 0, y: 0, k: 1 };
+
+$('#title').textContent = `專案圖譜 · ${DATA.project}`;
+$('#stats').textContent = `${DATA.stats.nodes} 個節點 · ${DATA.stats.edges} 條關係 · ${DATA.communities.length} 個分群 · 建立於 ${String(DATA.stats.built).replace('T', ' ').slice(0, 16)}`;
+if (DATA.aggregated) { const b = $('#banner'); b.hidden = false; b.textContent = `節點超過 ${DATA.limit} 個，只顯示檔案層級的關係；完整內容見 graph.json。`; }
+
+// 主題：淺色／深色／跟隨系統，記在瀏覽器裡。
+function setTheme(mode) {
+  if (mode === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = mode;
+  try { localStorage.setItem('graph-theme', mode); } catch {}
+  draw();
+}
+for (const b of document.querySelectorAll('[data-theme-set]')) b.onclick = () => setTheme(b.dataset.themeSet);
+try { const saved = localStorage.getItem('graph-theme'); if (saved && saved !== 'system') document.documentElement.dataset.theme = saved; } catch {}
+
+const color = n => PALETTE[n.community % PALETTE.length];
+const radius = n => 3 + 9 * n.degree / maxDegree;
+const visible = n => !hidden.has(n.community);
+
+// 版面：同一個分群先放在同一個圓上，再用力導向排開（網格近似斥力，數千個節點也跑得動）。
+function layout() {
+  const groups = new Map();
+  for (const n of nodes) { if (!groups.has(n.community)) groups.set(n.community, []); groups.get(n.community).push(n); }
+  const ring = Math.sqrt(nodes.length) * 18;
+  [...groups.values()].forEach((members, g) => {
+    const angle = (g / groups.size) * Math.PI * 2;
+    const cx = Math.cos(angle) * ring, cy = Math.sin(angle) * ring;
+    members.forEach((n, j) => { const a = j * 2.4, r = 6 * Math.sqrt(j + 1); n.x = cx + Math.cos(a) * r; n.y = cy + Math.sin(a) * r; });
+  });
+  const ideal = 30, cell = ideal * 2;
+  for (let step = 0; step < 220; step++) {
+    const grid = new Map();
+    for (const n of nodes) { const key = `${Math.floor(n.x / cell)},${Math.floor(n.y / cell)}`; if (!grid.has(key)) grid.set(key, []); grid.get(key).push(n); }
+    for (const n of nodes) {
+      const gx = Math.floor(n.x / cell), gy = Math.floor(n.y / cell);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        for (const m of grid.get(`${gx + dx},${gy + dy}`) || []) {
+          if (m === n) continue;
+          let ddx = n.x - m.x, ddy = n.y - m.y, d2 = ddx * ddx + ddy * ddy || 0.01;
+          if (d2 > cell * cell) continue;
+          const f = ideal * ideal / d2;
+          n.vx += ddx * f * 0.05; n.vy += ddy * f * 0.05;
+        }
+      }
+    }
+    for (const l of links) {
+      const a = nodes[l.s], b = nodes[l.t];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = (d - ideal) / d * 0.02 * (l.confidence === 'EXTRACTED' ? 1 : 0.5);
+      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+    }
+    const cool = 1 - step / 220;
+    for (const n of nodes) {
+      n.vx -= n.x * 0.0008; n.vy -= n.y * 0.0008;
+      const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy), cap = 12 * cool + 0.5;
+      if (v > cap) { n.vx *= cap / v; n.vy *= cap / v; }
+      n.x += n.vx; n.y += n.vy; n.vx *= 0.5; n.vy *= 0.5;
+    }
+  }
+}
+
+function fit() {
+  const shown = nodes.filter(visible);
+  if (!shown.length) return;
+  const xs = shown.map(n => n.x), ys = shown.map(n => n.y);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  view.k = Math.min(w / (x1 - x0 + 80), h / (y1 - y0 + 80), 3);
+  view.x = w / 2 - (x0 + x1) / 2 * view.k; view.y = h / 2 - (y0 + y1) / 2 * view.k;
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const css = getComputedStyle(document.documentElement);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+  const focus = selected ? new Set([selected.i, ...adj[selected.i].map(l => l.s === selected.i ? l.t : l.s)]) : null;
+  for (const l of links) {
+    const a = nodes[l.s], b = nodes[l.t];
+    if (!visible(a) || !visible(b)) continue;
+    const lit = focus && (l.s === selected.i || l.t === selected.i);
+    ctx.strokeStyle = lit ? css.getPropertyValue('--hl') : css.getPropertyValue('--edge');
+    ctx.lineWidth = (l.confidence === 'EXTRACTED' ? 1.5 : 1) / Math.sqrt(view.k) * (lit ? 1.6 : 1);
+    ctx.setLineDash(l.confidence === 'EXTRACTED' ? [] : [4 / view.k, 3 / view.k]);
+    ctx.globalAlpha = focus && !lit ? 0.15 : 1;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    ctx.globalAlpha = focus && !focus.has(n.i) ? 0.2 : 1;
+    ctx.fillStyle = color(n);
+    ctx.beginPath(); ctx.arc(n.x, n.y, radius(n), 0, Math.PI * 2); ctx.fill();
+    if (n === selected || n === hover) { ctx.strokeStyle = css.getPropertyValue('--text'); ctx.lineWidth = 2 / view.k; ctx.stroke(); }
+  }
+  ctx.fillStyle = css.getPropertyValue('--text');
+  ctx.font = `${12 / view.k}px system-ui, sans-serif`;
+  ctx.globalAlpha = 1;
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    const big = n.degree >= labelDegree || view.k > 2.2;
+    if (big || n === selected || n === hover || (focus && focus.has(n.i) && view.k > 0.8)) ctx.fillText(n.label, n.x + radius(n) + 2 / view.k, n.y + 4 / view.k);
+  }
+  ctx.restore();
+}
+
+function nodeAt(px, py) {
+  const x = (px - view.x) / view.k, y = (py - view.y) / view.k;
+  let best = null, bestD = Infinity;
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    const d = Math.hypot(n.x - x, n.y - y);
+    if (d < Math.max(radius(n), 6 / view.k) && d < bestD) { best = n; bestD = d; }
+  }
+  return best;
+}
+
+function select(n, center = false) {
+  selected = n;
+  $('#info').hidden = !n;
+  if (n) {
+    const community = DATA.communities.find(c => c[0] === n.community);
+    const rows = [['名稱', n.label], ['種類', n.kind], ['分群', community ? community[1] : n.community], ['位置', n.line ? `${n.file}:L${n.line}` : n.file], ['連接數', n.degree]];
+    $('#details').replaceChildren(...rows.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
+    const list = $('#neighbors'); list.replaceChildren();
+    const seen = new Set();
+    for (const l of adj[n.i]) {
+      const other = nodes[l.s === n.i ? l.t : l.s];
+      if (seen.has(other.i)) continue; seen.add(other.i);
+      const li = document.createElement('li');
+      li.textContent = `${l.s === n.i ? '→' : '←'} ${other.label}（${l.relation}${l.confidence === 'EXTRACTED' ? '' : '・' + l.confidence}）`;
+      li.title = other.file;
+      li.onclick = () => select(other, true);
+      list.append(li);
+    }
+    if (center) { view.x = canvas.clientWidth / 2 - n.x * view.k; view.y = canvas.clientHeight / 2 - n.y * view.k; }
+  }
+  draw();
+}
+
+// 少於 3 個節點的小分群（多半是單獨的文件或設定檔）合成一列，圖例才不會太長。
+function renderLegend() {
+  const list = $('#legend'); list.replaceChildren();
+  const small = DATA.communities.filter(([, , size]) => size < 3).map(([id]) => id);
+  const row = (ids, color, text) => {
+    const li = document.createElement('li');
+    const box = document.createElement('input'); box.type = 'checkbox'; box.checked = ids.some(id => !hidden.has(id));
+    box.onchange = () => { for (const id of ids) { if (box.checked) hidden.delete(id); else hidden.add(id); } draw(); };
+    const sw = document.createElement('span'); sw.className = 'swatch'; sw.style.background = color;
+    const label = document.createElement('span'); label.textContent = text;
+    li.append(box, sw, label); list.append(li);
+  };
+  for (const [id, name, size] of DATA.communities) if (size >= 3) row([id], PALETTE[id % PALETTE.length], `${name}（${size}）`);
+  if (small.length) row(small, 'var(--muted)', `其他小分群（${small.length} 個）`);
+}
+$('#all').onclick = () => { hidden.clear(); renderLegend(); draw(); };
+$('#none').onclick = () => { for (const [id] of DATA.communities) hidden.add(id); renderLegend(); draw(); };
+
+$('#search').oninput = event => {
+  const q = event.target.value.trim().toLowerCase();
+  const list = $('#results'); list.replaceChildren();
+  if (!q) return;
+  for (const n of nodes.filter(n => n.label.toLowerCase().includes(q) || n.file.toLowerCase().includes(q)).slice(0, 20)) {
+    const li = document.createElement('li'); li.textContent = `${n.label} · ${n.file}`; li.onclick = () => { hidden.delete(n.community); renderLegend(); select(n, true); };
+    list.append(li);
+  }
+};
+
+let drag = null;
+canvas.onmousedown = e => { drag = { x: e.offsetX, y: e.offsetY, vx: view.x, vy: view.y, moved: false }; canvas.classList.add('dragging'); };
+window.onmouseup = e => {
+  canvas.classList.remove('dragging');
+  if (drag && !drag.moved && e.target === canvas) select(nodeAt(e.offsetX, e.offsetY));
+  drag = null;
+};
+canvas.onmousemove = e => {
+  if (drag) {
+    const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    view.x = drag.vx + dx; view.y = drag.vy + dy; draw(); return;
+  }
+  const n = nodeAt(e.offsetX, e.offsetY);
+  if (n !== hover) { hover = n; canvas.title = n ? `${n.label}\n${n.file}${n.line ? ':L' + n.line : ''}` : ''; draw(); }
+};
+canvas.onwheel = e => {
+  e.preventDefault();
+  const k = Math.min(8, Math.max(0.05, view.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  view.x = e.offsetX - (e.offsetX - view.x) * k / view.k; view.y = e.offsetY - (e.offsetY - view.y) * k / view.k; view.k = k; draw();
+};
+window.onresize = draw;
+
+renderLegend();
+layout();
+fit();
+draw();
+</script>
+</body>
+</html>

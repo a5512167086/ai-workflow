@@ -245,7 +245,9 @@ impl Telemetry {
     }
 
     pub fn snapshot(&self) -> Value {
-        json!({ "tokens": self.tokens.as_ref().map(Tokens::to_json), "context": self.context, "limits": self.limits })
+        // requests：這個 session 送了幾次 API 請求（Claude 每則 assistant 訊息一次）；Codex 沒有回報，留 null。
+        let requests = if self.messages.is_empty() { Value::Null } else { json!(self.messages.len()) };
+        json!({ "tokens": self.tokens.as_ref().map(Tokens::to_json), "context": self.context, "limits": self.limits, "requests": requests })
     }
 }
 
@@ -253,10 +255,12 @@ impl Telemetry {
 pub fn record_telemetry(root: &Path, session: &Value, telemetry: &Value) -> Result<()> {
     change(root, |store| {
         let id = session["id"].as_str().unwrap_or("").to_string();
+        let saved = session["saved"].as_array().map(|e| crate::core::savings::total_saved(e)).unwrap_or(0);
         store["sessions"][id.as_str()] = json!({
             "id": id, "provider": session["provider"], "runtime": session["runtime"], "distro": session["distro"].as_str().unwrap_or(""),
-            "label": session["label"], "status": session["status"], "updatedAt": now_iso(),
-            "tokens": telemetry["tokens"], "context": telemetry["context"],
+            "label": session["label"], "stage": if session["role"] == "interviewer" { json!("interview") } else { session["stage"].clone() }, "status": session["status"], "updatedAt": now_iso(),
+            "tokens": telemetry["tokens"], "context": telemetry["context"], "requests": telemetry["requests"],
+            "terse": session["terse"].as_bool().unwrap_or(false), "saved": session["saved"].as_array().cloned().unwrap_or_default(), "savedTokens": saved,
         });
     })?;
     if let Some(windows) = telemetry["limits"].as_array().filter(|l| !l.is_empty()) {
@@ -375,9 +379,28 @@ pub fn usage_snapshot_at(root: &Path, cfg: &Value, now: chrono::DateTime<chrono:
         Value::Object(row)
     }).collect();
     let unknown = sessions.len() - measured_sessions;
+    // 節省量是估計值：每次請求少送的 tokens × 請求次數（不知道請求次數時算一次，所以是下限）。
+    for s in sessions.iter_mut() {
+        let per_request = s["savedTokens"].as_f64().unwrap_or(0.0);
+        s["savedEstimate"] = num(per_request * s["requests"].as_f64().unwrap_or(1.0).max(1.0));
+    }
+    let saved_total: f64 = sessions.iter().filter_map(|s| s["savedEstimate"].as_f64()).sum();
+    let mut stages: Vec<(String, f64, f64, u64)> = Vec::new();
+    for s in &sessions {
+        let stage = s["stage"].as_str().unwrap_or("unknown").to_string();
+        let i = stages.iter().position(|(k, ..)| *k == stage).unwrap_or_else(|| { stages.push((stage, 0.0, 0.0, 0)); stages.len() - 1 });
+        stages[i].1 += total_of(s).unwrap_or(0.0);
+        stages[i].2 += s["savedEstimate"].as_f64().unwrap_or(0.0);
+        stages[i].3 += 1;
+    }
+    stages.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let by_stage: Vec<Value> = stages.into_iter().map(|(stage, tokens, saved, n)| json!({ "stage": stage, "tokens": num(tokens), "savedEstimate": num(saved), "sessions": n })).collect();
     sessions.sort_by(by_updated);
     sessions.truncate(20);
-    json!({ "totalTokens": total.map(num).unwrap_or(Value::Null), "measuredSessions": measured_sessions, "unknownSessions": unknown, "providers": providers, "recent": sessions })
+    json!({
+        "totalTokens": total.map(num).unwrap_or(Value::Null), "measuredSessions": measured_sessions, "unknownSessions": unknown, "providers": providers, "recent": sessions,
+        "savedEstimate": num(saved_total), "byStage": by_stage, "tokenSaving": cfg["token_saving"].clone(),
+    })
 }
 
 pub fn refresh_usage_limits(root: &Path, cfg: &Value) -> Result<Value> {

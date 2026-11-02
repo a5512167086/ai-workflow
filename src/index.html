@@ -22,6 +22,8 @@
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></symbol>
     <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+    <!-- 品牌標誌：兩個循環箭頭包住一串流程節點（loop ＋ flow）。 -->
+    <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4.5 10a8 8 0 0 1 14.2-3"/><path d="M19 3.5v3.8h-3.8"/><path d="M19.5 14a8 8 0 0 1-14.2 3"/><path d="M5 20.5v-3.8h3.8"/><path d="M8.5 12h7" stroke-width="1.4"/><circle cx="8.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15.5" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
     <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M3 5h18v11H3zM8 20h8M12 16v4"/></symbol>
@@ -39,7 +41,7 @@
   <header class="topbar">
     <div class="brand">
       <a class="icon-btn back-link" href="overview.html" aria-label="回到所有專案" title="回到所有專案"><svg class="ic"><use href="#i-back"/></svg></a>
-      <span class="logo" aria-hidden="true"><svg><use href="#i-pulse"/></svg></span>
+      <span class="logo" aria-hidden="true"><svg><use href="#i-logo"/></svg></span>
       <span class="name">ai-workflow <small class="hint">v0.4.0</small></span>
       <span id="project" class="project mono" title=""></span>
     </div>
@@ -61,6 +63,7 @@
     <button data-tab="prd" type="button" role="tab" aria-selected="false" aria-controls="tab-prd" id="tabbtn-prd" tabindex="-1">PRD <span class="tab-badge" id="tab-prd-badge"></span></button>
     <button data-tab="board" type="button" role="tab" aria-selected="false" aria-controls="tab-board" id="tabbtn-board" tabindex="-1">任務看板 <span class="tab-badge" id="tab-board-badge"></span></button>
     <button data-tab="records" type="button" role="tab" aria-selected="false" aria-controls="tab-records" id="tabbtn-records" tabindex="-1">紀錄</button>
+    <button data-tab="graph" type="button" role="tab" aria-selected="false" aria-controls="tab-graph" id="tabbtn-graph" tabindex="-1">架構圖</button>
     <button data-tab="usage" type="button" role="tab" aria-selected="false" aria-controls="tab-usage" id="tabbtn-usage" tabindex="-1">用量</button>
     <button data-tab="skills" type="button" role="tab" aria-selected="false" aria-controls="tab-skills" id="tabbtn-skills" tabindex="-1">Skills</button>
   </nav>
@@ -267,6 +270,19 @@
       </div>
     </section>
 
+    <section id="tab-graph" class="tab" role="tabpanel" aria-labelledby="tabbtn-graph" hidden>
+      <div class="card">
+        <div class="card-head"><h2>專案圖譜</h2><button id="btn-graph-build" type="button"><svg class="ic"><use href="#i-redo"/></svg>重新建立</button></div>
+        <p id="graph-summary">還沒有建立專案圖譜</p>
+        <p class="hint">以 tree-sitter 在本機解析 Rust、JavaScript、TypeScript、Python、Go、Java 的定義、匯入、呼叫與繼承，不花 AI token；設計參考 <span class="mono">graphify</span>。開啟「設定 → 節省 Token → 專案圖譜」時，每次實作與修正前會自動更新，並依任務內容把相關的節點與關係附給 AI，取代整個專案搜尋。</p>
+        <p id="graph-status" class="hint" role="status"></p>
+      </div>
+      <div class="card spaced graph-view"><iframe id="graph-frame" title="專案圖譜互動圖" sandbox="allow-scripts"></iframe></div>
+      <details class="card spaced graph-report" open>
+        <summary><h2>GRAPH_REPORT.md</h2><span id="graph-path" class="hint mono"></span></summary>
+        <div id="graph-report" class="md"></div>
+      </details>
+    </section>
     <section id="tab-usage" class="tab" role="tabpanel" aria-labelledby="tabbtn-usage" hidden>
       <div class="card">
         <div class="card-head"><h2>Token 用量與訂閱額度</h2><button id="btn-usage-refresh" type="button">更新訂閱額度</button></div>
@@ -274,10 +290,18 @@
         <p class="hint">Token 統計包含快取讀取，代表處理量。訂閱額度 % 由 CLI 回報，不能換算成固定剩餘 tokens；未回報時顯示未知。紀錄自此功能啟用後開始。</p>
         <p id="usage-refresh-status" class="hint" role="status"></p>
       </div>
+      <div class="card spaced usage-saving">
+        <div class="card-head"><h2>節省 Token</h2><a class="btn" href="overview.html#settings">調整設定</a></div>
+        <p>估計省下 <strong id="usage-saved">0</strong> tokens</p>
+        <p class="hint">估計值＝每次請求少送的 tokens × 請求次數。Claude 會回報請求次數；Codex 不回報，以 1 次計，所以是下限。精簡回覆與專案地圖的效果無法直接估算，請比較各階段的平均用量。</p>
+        <ul id="usage-saving-features" class="usage-saving-features" aria-label="目前的節省 Token 設定"></ul>
+        <h3>依階段</h3>
+        <div class="usage-table-wrap"><table class="usage-table"><thead><tr><th>階段</th><th>次數</th><th>tokens</th><th>占比</th><th>平均每次</th><th>估計省下</th></tr></thead><tbody id="usage-stages"></tbody></table></div>
+      </div>
       <div id="usage-providers" class="settings-layout spaced"></div>
       <details class="card spaced usage-recent">
         <summary><h2>最近 20 次執行</h2></summary>
-        <div class="usage-table-wrap"><table class="usage-table"><thead><tr><th>工作</th><th>AI／環境</th><th>狀態</th><th>輸入 tokens</th><th>輸出 tokens</th><th>合計</th></tr></thead><tbody id="usage-recent"></tbody></table></div>
+        <div class="usage-table-wrap"><table class="usage-table"><thead><tr><th>工作</th><th>AI／環境</th><th>狀態</th><th>輸入 tokens</th><th>輸出 tokens</th><th>合計</th><th>估計省下</th></tr></thead><tbody id="usage-recent"></tbody></table></div>
       </details>
     </section>
     <section id="tab-skills" class="tab" role="tabpanel" aria-labelledby="tabbtn-skills" hidden>
@@ -289,7 +313,7 @@
           </div>
           <button id="skills-toggle" class="skills-toggle" type="button" aria-expanded="false" aria-controls="skill-nav"><span>技能清單</span><svg class="ic"><use href="#i-down"/></svg></button>
           <nav id="skill-nav" class="skill-nav" aria-label="技能與設定">
-            <button id="skill-nav-bindings" class="skill-item skill-item-bindings" type="button" aria-current="false"><strong>工作流技能綁定</strong><span class="skill-item-desc">七個階段各載入哪些技能</span></button>
+            <button id="skill-nav-bindings" class="skill-item skill-item-bindings" type="button" aria-current="false"><strong>工作流技能綁定</strong><span class="skill-item-desc">每個階段各載入哪些技能</span></button>
             <div class="skill-nav-label">技能</div>
             <ul id="skill-list" class="skill-list" aria-label="共用技能"></ul>
           </nav>

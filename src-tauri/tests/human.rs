@@ -61,9 +61,11 @@ fn 需求釐清至少回答一輪才能確認_確認後才能起草_需求修改
     let prompt = first["prompt"].as_str().unwrap();
     assert!(prompt.contains("需求釐清會議") && prompt.contains("匯出 CSV") && prompt.contains("財務報表"), "{prompt}");
     assert_eq!(first["thread"]["sandbox"], "read-only");
-    // 會議固定載入 grill-me 技能，並以需求釐清角色記錄 session。
+    // 會議綁定 grill-me 技能，並以需求釐清角色記錄 session。會議提示詞已內含 grill-me 的方法，
+    // 預設（token_saving.dedupe_skills）不重複附加，session 記下略過的技能。
     let sessions: Vec<Value> = fs::read_dir(data_dir(&root).join("sessions")).unwrap().map(|e| serde_json::from_str(&fs::read_to_string(e.unwrap().path()).unwrap()).unwrap()).collect();
-    assert!(sessions.iter().any(|s| s["stage"] == "chat" && s["skills"][0]["name"] == "grill-me"), "{sessions:?}");
+    assert!(sessions.iter().any(|s| s["stage"] == "chat" && s["role"] == "interviewer" && s["saved"][0]["skills"] == json!(["grill-me"])), "{sessions:?}");
+    assert!(!prompt.contains("### Skill: grill-me"));
 
     // 使用者回答後接續同一個會議，AI 回報 ready 才出現可確認的摘要。
     let answered = requirements::start(&root, &json!({ "id": id, "input": "只給財務人員使用" }), &launch).unwrap();

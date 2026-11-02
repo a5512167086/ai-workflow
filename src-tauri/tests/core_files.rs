@@ -187,9 +187,9 @@ fn 預設技能可被標準_yaml_解析_匯入完整資源並保存不可變版�
     fs::write(source.join("references").join("design.md"), "original").unwrap();
     import_skill(&root, &source.to_string_lossy()).unwrap();
     let cfg = json!({ "skills": { "implement": ["custom-design"] } });
-    let first = prepare_skills(&root, &cfg, Some("implement"), None, &native_path).unwrap();
+    let first = prepare_skills(&root, &cfg, Some("implement"), None, None, &native_path).unwrap();
     fs::write(data_dir(&root).join("skills/custom-design/references/design.md"), "changed").unwrap();
-    let second = prepare_skills(&root, &cfg, Some("implement"), None, &native_path).unwrap();
+    let second = prepare_skills(&root, &cfg, Some("implement"), None, None, &native_path).unwrap();
     assert_ne!(first.snapshots[0]["version"], second.snapshots[0]["version"]);
     let snap = PathBuf::from(first.snapshots[0]["path"].as_str().unwrap());
     assert!(snap.starts_with(data_dir(&root)), "Skill 快照放在資料目錄");
@@ -239,11 +239,21 @@ fn 不會默默執行專屬_frontmatter_壞_yaml_與缺少說明會拒絕() {
     let root = project();
     save_skill(&root, "---\nname: special\ndescription: test\nhooks: {}\n---\nRun things.", None).unwrap();
     assert_eq!(list_skills(&root).iter().find(|s| s["name"] == "special").unwrap()["compatible"], false);
-    let err = prepare_skills(&root, &json!({}), None, Some(&["special".to_string()]), &native_path).unwrap_err();
+    let err = prepare_skills(&root, &json!({}), None, None, Some(&["special".to_string()]), &native_path).unwrap_err();
     assert!(err.message.contains("專屬欄位"));
     assert!(parse_skill("---\nname: test\n---\nbody").is_err());
     assert!(parse_skill("---\nname: [\n---\nbody").is_err());
-    assert_eq!(prepare_skills(&root, &default_config(), Some("prd"), None, &native_path).unwrap().text, "");
+    assert_eq!(prepare_skills(&root, &default_config(), Some("code_review"), None, None, &native_path).unwrap().text, "");
+    // 預設綁定：PRD 起草綁 to-spec。PRD 提示詞已內含同樣的方法，預設（token_saving.dedupe_skills）不重複附加；關掉後照常附加。
+    let deduped = prepare_skills(&root, &default_config(), Some("prd"), Some("author"), None, &native_path).unwrap();
+    assert!(!deduped.text.contains("to-spec") && deduped.skipped == ["to-spec"] && deduped.saved_tokens > 0);
+    let mut full = default_config();
+    full["token_saving"]["dedupe_skills"] = json!(false);
+    assert!(prepare_skills(&root, &full, Some("prd"), Some("author"), None, &native_path).unwrap().text.contains("to-spec"));
+    // 只有內建技能所屬的階段才略過：to-spec 綁在 PRD 審查時照常附加。
+    let mut review = default_config();
+    review["skills"]["prd_review"] = json!(["to-spec"]);
+    assert!(prepare_skills(&root, &review, Some("prd_review"), Some("reviewer"), None, &native_path).unwrap().text.contains("to-spec"));
 }
 
 // ---------- 專案清單、佇列、待辦、封存 ----------

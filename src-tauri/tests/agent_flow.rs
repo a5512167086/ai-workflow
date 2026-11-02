@@ -39,7 +39,7 @@ fn sessions(root: &Path) -> Vec<Value> {
 }
 
 fn agent<'a>(root: &'a Path, cfg: &'a Value, provider: &'a str, write: bool, stage: Option<&'a str>) -> AgentOpts<'a> {
-    AgentOpts { root, cfg, provider, prompt: "Write a PRD.".into(), write, scope: "prd", label: "test", stage, skills: None, role: None }
+    AgentOpts { root, cfg, provider, prompt: "Write a PRD.".into(), write, scope: "prd", label: "test", stage, skills: None, role: None, saved: vec![] }
 }
 
 fn mode(m: &str) -> Value {
@@ -139,7 +139,7 @@ fn codex_與_claude_接到相同_skill_指令_未綁定階段不帶入技能() {
         assert_eq!(record["status"], "done");
         assert_eq!(record["provider"], provider);
         prompts.push(calls(&root)[0]["prompt"].as_str().unwrap().to_string());
-        assert_eq!(prepare_skills(&root, &cfg, Some("prd"), None, &native_path).unwrap().text, "");
+        assert_eq!(prepare_skills(&root, &cfg, Some("code_review"), None, None, &native_path).unwrap().text, "");
     }
     let body = load_skill(&project(), "uiux-design").unwrap().body;
     assert!(prompts.iter().all(|p| p.contains(&body)));
@@ -197,7 +197,7 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
             ])
         };
         let (root, cfg) = fixture(&[provider], json!({ provider: { "events": events } }));
-        let result = run_agent(AgentOpts { root: &root, cfg: &cfg, provider, prompt: "test".into(), write: false, scope: "test", label: "test", stage: None, skills: None, role: None }).unwrap();
+        let result = run_agent(AgentOpts { root: &root, cfg: &cfg, provider, prompt: "test".into(), write: false, scope: "test", label: "test", stage: None, skills: None, role: None, saved: vec![] }).unwrap();
         assert!(result.ok, "{:?}", result.error);
         assert_eq!(result.text, "done");
         let expected = if provider == "claude" { 130 } else { 110 };

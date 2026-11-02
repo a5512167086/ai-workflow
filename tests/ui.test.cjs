@@ -22,7 +22,7 @@ function page() {
     setSnap(value) { snap = value; },
     setApi(fn) { api = fn; },
     setArchive(value) { recArchive = value; },
-    archive() { return recArchive; }, renderUsage, runAction, renderPrd,
+    archive() { return recArchive; }, renderUsage, runAction, renderPrd, loadGraph, renderGraph,
     renderBoard, boardFacts, selectTask, renderTaskGates,
     sendChat, openChat, newChat, renderChatMessages, renderChatMarkdown,
     setChat(value) { chatId = value?.id || null; chatSession = value; chatMessagesKey = ''; renderChatMessages(); renderChatControls(); },
@@ -34,6 +34,7 @@ function page() {
     setDetail(value) { detail = value; },
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
+    taskContentView, logScopes, renderLogSelect, renderLog,
     setLog(scope, text) { logs[scope] = text; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
@@ -239,6 +240,93 @@ test('未知 context 隱藏，已有數據才顯示', () => {
   usage.providers[0].latest.context = { remainingPercent: 50, remainingTokens: 100, capacity: 200 };
   ui.renderUsage(usage);
   assert.match(doc.querySelector('#usage-providers').textContent, /50.0%/);
+  dom.window.close();
+});
+
+test('用量分頁顯示估計省下的 tokens、目前的節省開關與依階段的用量', () => {
+  const { dom, ui, doc } = page();
+  ui.renderUsage({
+    totalTokens: 400, measuredSessions: 3, unknownSessions: 0, providers: [], savedEstimate: 1234,
+    tokenSaving: { review_diff_filter: true, prd_excerpt: false, dedupe_skills: true, code_map: false, terse: { implementer: true, fixer: false } },
+    byStage: [{ stage: 'implement', sessions: 2, tokens: 300, savedEstimate: 1234 }, { stage: 'code_review', sessions: 1, tokens: 100, savedEstimate: 0 }],
+    recent: [
+      { label: '實作任務 1', provider: 'claude', runtime: 'windows', status: 'done', tokens: { totalTokens: 200 }, savedEstimate: 1000, terse: true },
+      { label: '程式碼審查 第 1 次', provider: 'codex', runtime: 'windows', status: 'done', tokens: { totalTokens: 100 }, savedEstimate: 0, terse: false },
+    ],
+  });
+  assert.equal(doc.querySelector('#usage-saved').textContent, '1,234');
+  const features = [...doc.querySelectorAll('#usage-saving-features li')].map(li => [li.textContent, li.className]);
+  assert.deepEqual(features.find(([text]) => text.includes('審查略過 lockfile')), ['開・審查略過 lockfile', 'on']);
+  assert.deepEqual(features.find(([text]) => text.includes('只附相關 PRD')), ['關・只附相關 PRD', '']);
+  assert.deepEqual(features.find(([text]) => text.includes('精簡回覆')), ['開・精簡回覆（1 個角色）', 'on']);
+  const stages = [...doc.querySelectorAll('#usage-stages tr')].map(tr => [...tr.cells].map(td => td.textContent));
+  assert.deepEqual(stages, [['實作', '2', '300', '75%', '150', '1,234'], ['程式碼審查', '1', '100', '25%', '100', '—']]);
+  const recent = [...doc.querySelectorAll('#usage-recent tr')].map(tr => tr.cells[6].textContent);
+  assert.deepEqual(recent, ['1,000（精簡回覆）', '—']);
+  ui.renderUsage({ providers: [], recent: [] });
+  assert.equal(doc.querySelector('#usage-stages').textContent, '還沒有紀錄');
+  assert.equal(doc.querySelector('#usage-saved').textContent, '0');
+  dom.window.close();
+});
+
+test('架構圖分頁：沒有圖譜時提示建立；有圖譜時顯示統計、報告與沙箱裡的互動圖，重新建立只呼叫 graph/build', async () => {
+  const { dom, ui, doc } = page();
+  const requests = [];
+  const graph = {
+    exists: true, builtAt: '2026-11-02T08:00:00.000Z', commit: 'abcdef1234567',
+    stats: { files: 12, nodes: 340, edges: 900, communities: 7 },
+    report: '# 專案圖譜報告 - demo\n\n## 核心節點\n1. `data_dir()` - 55 條關係',
+    html: '<!doctype html><html><body><script>const DATA = {};</script></body></html>',
+    paths: { report: 'C:\\h\\graph\\GRAPH_REPORT.md' },
+  };
+  let built = false;
+  ui.setApi(async (path, body) => { requests.push({ path, body }); if (path === '/api/graph/build') built = true; return built ? graph : { exists: false }; });
+  await ui.loadGraph();
+  assert.match(doc.querySelector('#graph-summary').textContent, /還沒有建立專案圖譜/);
+  assert.equal(doc.querySelector('#graph-frame').hidden, true);
+  await ui.loadGraph(true);
+  assert.deepEqual(requests.map(r => r.path), ['/api/graph', '/api/graph/build']);
+  assert.match(doc.querySelector('#graph-summary').textContent, /12 個檔案 · 340 個節點 · 900 條關係 · 7 個分群/);
+  assert.match(doc.querySelector('#graph-summary').textContent, /commit abcdef12/);
+  assert.match(doc.querySelector('#graph-report').textContent, /核心節點/);
+  assert.equal(doc.querySelector('#graph-path').textContent, 'C:\\h\\graph\\GRAPH_REPORT.md');
+  const frame = doc.querySelector('#graph-frame');
+  assert.equal(frame.hidden, false);
+  assert.equal(frame.getAttribute('sandbox'), 'allow-scripts', '互動圖只能跑自己的 script，不能存取 App');
+  assert.match(frame.srcdoc, /const DATA = \{\}/);
+  assert.equal(doc.querySelector('#graph-status').textContent, '已重新建立');
+  dom.window.close();
+});
+
+test('節省 Token 設定：勾選反映全域設定，儲存只送 token_saving 到全域路由，未儲存的勾選不會被重畫蓋掉', async () => {
+  const { dom, ui, doc } = settingsPage();
+  const requests = [];
+  const config = { ...globalConfig(), token_saving: { review_diff_filter: true, prd_excerpt: true, dedupe_skills: true, code_map: false, terse: { reviewer: true, implementer: true, fixer: true, code_reviewer: true } } };
+  ui.setApi(async (path, body) => {
+    requests.push({ path, body });
+    if (path === '/api/config') return { config, text: '{}', home: 'C:\\h', queue: { max: 1, running: [], waiting: [] } };
+    if (path === '/api/models') return { claude: { models: [] }, codex: { models: [] } };
+    return { config: { ...config, token_saving: { ...config.token_saving, ...body.token_saving } } };
+  });
+  ui.bindSettings();
+  await ui.loadSettings();
+  const box = key => doc.querySelector(`[data-saving="${key}"]`);
+  const terse = role => doc.querySelector(`[data-terse="${role}"]`);
+  assert.equal(box('prd_excerpt').checked, true);
+  assert.equal(box('code_map').checked, false);
+  assert.equal(terse('fixer').checked, true);
+  box('code_map').checked = true; box('code_map').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  terse('fixer').checked = false; terse('fixer').dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  ui.renderSettings();
+  assert.equal(box('code_map').checked, true, '還沒儲存的勾選不能被重畫蓋掉');
+  await doc.querySelector('#btn-save-saving').onclick();
+  const save = requests.find(r => r.path === '/api/config/token_saving');
+  assert.deepEqual(JSON.parse(JSON.stringify(save.body.token_saving)), {
+    review_diff_filter: true, prd_excerpt: true, dedupe_skills: true, code_map: true,
+    terse: { reviewer: true, implementer: true, fixer: false, code_reviewer: true },
+  });
+  assert.equal(requests.some(r => /\/api\/p\//.test(r.path)), false);
+  assert.equal(terse('fixer').checked, false);
   dom.window.close();
 });
 
@@ -974,5 +1062,48 @@ test('防呆：按鈕依後端 guards 停用並顯示原因，參考資料被鎖
   ui.setSnap(state); ui.renderPrd(); ui.renderHumanControls();
   assert.equal(doc.querySelector('#btn-prd-edit').disabled, false);
   assert.equal(doc.querySelector('#btn-prd-edit').title, '');
+  dom.window.close();
+});
+
+test('任務內容用標籤與段落呈現，不顯示原始 JSON', () => {
+  const { dom, ui } = page();
+  const state = snapshot();
+  state.tasks = [{ id: 6, title: '前置', status: 'done' }, { id: 7, title: '另一個', status: 'pending' }];
+  ui.setSnap(state);
+  const view = ui.taskContentView({
+    id: 9, title: '樣式', status: 'in-progress', priority: 'low', dependencies: ['6', '7'], requirement_ids: ['FR-140', 'AC-24'],
+    skills: ['uiux-design'], description: '完成淺色主題', details: '- 置中容器\n- `box-sizing`', testStrategy: '`npm test` 全部綠燈',
+    acceptanceCriteria: ['只有淺色主題', '375px 不破版'], subtasks: [{ id: 1, title: '版面', status: 'done' }],
+  }, '改了 styles.css');
+  const text = view.textContent;
+  assert.ok(!text.includes('"acceptanceCriteria"') && !text.includes('{'));
+  const headings = [...view.querySelectorAll('h4')].map(h => h.textContent);
+  assert.deepEqual(headings, ['說明', '實作細節', '驗收條件', '測試策略', '子任務（1）', '實作回報']);
+  assert.equal(view.querySelectorAll('.tc-check').length, 2);
+  const deps = [...view.querySelectorAll('.tc-row')].find(row => row.textContent.startsWith('依賴'));
+  assert.deepEqual([...deps.querySelectorAll('.chip')].map(c => [c.textContent, c.classList.contains('tm-done')]), [['#6', true], ['#7', false]]);
+  assert.ok(view.querySelector('.chip.tc-skill').textContent === 'uiux-design');
+  assert.ok(view.querySelector('.chip.prio-low'));
+  dom.window.close();
+});
+
+test('紀錄的來源列出每個任務（依編號），第一次選取時讀完整 log', async () => {
+  const { dom, ui, doc } = page();
+  const state = snapshot();
+  state.tasks = [1, 2, 10, 3].map(id => ({ id, title: `T${id}`, status: 'done' }));
+  ui.setSnap(state);
+  doc.querySelector('#tab-records').hidden = false;
+  ui.setLog('task-2', '只有串流到的尾巴');
+  ui.setLog('chat-abc', '對話');
+  const calls = [];
+  ui.setApi(async path => { calls.push(path); return { text: `完整 ${path}` }; });
+  ui.renderLogSelect();
+  const options = [...doc.querySelectorAll('#log-scope option')].map(o => o.value);
+  assert.deepEqual(options, ['runner', 'prd', 'tasks', 'task-1', 'task-2', 'task-10', 'task-3', 'process']);
+  doc.querySelector('#log-scope').value = 'task-2';
+  ui.renderLog();
+  await new Promise(r => setTimeout(r, 0));
+  assert.ok(calls.includes('/api/log/task-2'));
+  assert.ok(doc.querySelector('#rec-body').textContent.includes('完整 /api/log/task-2'));
   dom.window.close();
 });

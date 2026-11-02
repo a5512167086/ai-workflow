@@ -5,6 +5,7 @@ pub mod capabilities;
 pub mod errors;
 pub mod permissions;
 pub mod prompts;
+pub mod savings;
 pub mod usage;
 mod claude;
 mod codex;
@@ -42,6 +43,8 @@ pub struct AgentOpts<'a> {
     pub role: Option<&'a str>,
     /// 明確指定的 Skills；None 時用 cfg.skills[stage]。
     pub skills: Option<Vec<String>>,
+    /// 組 prompt 時節省 token 的紀錄（savings::saved），連同技能去重一起存進 session 與用量。
+    pub saved: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,14 +128,20 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
     let (root, cfg, scope, label) = (opts.root, opts.cfg, opts.scope, opts.label);
     let spec = resolve_cli_for(cfg, provider, root)?;
     let to_path = |p: &Path| spec.to_path(p).unwrap_or_else(|_| p.to_string_lossy().into_owned());
-    let prepared = prepare_skills(root, cfg, opts.stage, opts.skills.as_deref(), &to_path)?;
+    let prepared = prepare_skills(root, cfg, opts.stage, opts.role, opts.skills.as_deref(), &to_path)?;
     let references = crate::core::references::prepare(root,cfg,opts.stage,scope,&to_path)?;
-    let prompt = [opts.prompt.as_str(), prepared.text.as_str(), references.text.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
+    let terse = if crate::core::config::terse_on(cfg, opts.role) { crate::core::savings::TERSE_RULES } else { "" };
+    let prompt = [opts.prompt.as_str(), terse, prepared.text.as_str(), references.text.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n");
+    let mut saved = opts.saved.clone();
+    if !prepared.skipped.is_empty() {
+        saved.push(json!({ "feature": "dedupe_skills", "tokens": prepared.saved_tokens, "skills": prepared.skipped }));
+    }
     let session_id = uuid::Uuid::new_v4().to_string();
     let session_file = data_dir(root).join("sessions").join(format!("{session_id}.json"));
     let session = json!({
         "id": session_id, "provider": provider, "runtime": spec.runtime, "distro": cli_environment(cfg, provider, root).distro,
-        "stage": opts.stage.unwrap_or("skill"), "label": label, "skills": prepared.snapshots, "references": references.snapshots, "started_at": now_iso(), "status": "running",
+        "stage": opts.stage.unwrap_or("skill"), "role": opts.role, "label": label, "skills": prepared.snapshots, "references": references.snapshots, "started_at": now_iso(), "status": "running",
+        "terse": !terse.is_empty(), "saved": saved, "promptTokens": crate::core::savings::estimate_tokens(&prompt),
     });
     write_json(&session_file, &session)?;
     let mut telemetry = Telemetry::new(provider);
@@ -250,7 +259,7 @@ pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> 
         let label = if dual { format!("{}（{}）", base.label, provider_name(&provider)) } else { base.label.to_string() };
         let result = run_agent(AgentOpts {
             root: base.root, cfg: base.cfg, provider: &provider, prompt: base.prompt.clone(), write: base.write, scope: base.scope,
-            label: &label, stage: base.stage, skills: base.skills.clone(), role: base.role,
+            label: &label, stage: base.stage, skills: base.skills.clone(), role: base.role, saved: base.saved.clone(),
         })?;
         if !result.ok {
             crate::bail!("{}審查 AI 失敗：{}", if dual { format!("{} ", provider_name(&provider)) } else { String::new() }, result.error_text());

@@ -44,6 +44,11 @@ pub const HELP: &str = "ai-workflow — 用本機已登入的 Claude Code / Code
   skills list             列出共用 Skills
   skills import <資料夾>  匯入包含 SKILL.md 的技能資料夾
   skills run <名稱> --input <需求> [--provider claude|codex] [--session <上次回覆 id>]
+  graph [build]           以 tree-sitter 建立專案圖譜（graph.json、GRAPH_REPORT.md、graph.html）
+  graph query \"<問題>\" [--budget N]
+                          只列出和問題有關的節點與關係（預設約 2000 tokens）
+  graph path <A> <B>      兩個符號之間的最短關係路徑
+  graph explain <名稱>    一個符號的位置、分群與所有連接
   run [--task <id>]       逐個任務執行（實作 → 驗證 → 審查 → 修正 → handover）
   pause                   目前任務結束後暫停
   continue                「我測完了，繼續」
@@ -162,6 +167,31 @@ pub fn main(argv: &[String]) -> Result<i32> {
                 println!("已搬移舊資料：{item}");
             }
             println!("下一步：ai-workflow doctor 確認 CLI 登入狀態，然後 ai-workflow prd \"<想法>\" 或開啟桌面 app");
+        }
+        // 專案圖譜（對應 graphify 的 update／query／path／explain）。
+        Some("graph") => {
+            let words = rest.iter().skip(1).cloned().collect::<Vec<_>>();
+            match rest.first().map(String::as_str) {
+                None | Some("build") => {
+                    let built = crate::core::graph::build(root)?;
+                    println!("已建立專案圖譜：{} 個節點、{} 條關係", built.graph.nodes.len(), built.graph.edges.len());
+                    println!("{}", crate::core::graph::report_file(root).display());
+                }
+                Some("query") => {
+                    let (g, a) = crate::core::graph::load(root)?;
+                    let budget = args.get("budget").and_then(|b| b.parse().ok()).unwrap_or(2000);
+                    println!("{}", crate::core::graph::query::query(&g, &a, &words.join(" "), budget).unwrap_or_else(|| "沒有找到相關的節點".into()));
+                }
+                Some("path") if words.len() == 2 => {
+                    let (g, a) = crate::core::graph::load(root)?;
+                    println!("{}", crate::core::graph::query::path(&g, &a, &words[0], &words[1]));
+                }
+                Some("explain") if !words.is_empty() => {
+                    let (g, a) = crate::core::graph::load(root)?;
+                    println!("{}", crate::core::graph::query::explain(&g, &a, &words.join(" ")));
+                }
+                _ => crate::bail!("用法：ai-workflow graph [build | query <問題> [--budget N] | path <A> <B> | explain <名稱>]"),
+            }
         }
         Some("doctor") => {
             let report = doctor_report(root)?;
@@ -291,7 +321,7 @@ pub fn generate_tasks(root: &Path) -> Result<usize> {
         }
         let res = run_agent(AgentOpts {
             root, cfg: &cfg, provider: cfg_str(&cfg["roles"], "task_planner"), prompt: tasks_from_prd_prompt(root, &cfg, &prd),
-            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("task_planner"),
+            write: false, scope, label: "依 PRD 產生任務", stage: Some("tasks"), skills: None, role: Some("task_planner"), saved: vec![],
         })?;
         if !res.ok {
             crate::bail!("作者 AI 產生任務失敗：{}", res.error_text());
@@ -344,7 +374,7 @@ pub fn run_skill(root: &Path, name: &str, input: &str, provider: Option<&str>, p
     let label = format!("Skill {name}");
     let result = run_agent(AgentOpts {
         root, cfg: &cfg, provider: provider.unwrap_or(cfg_str(&cfg["roles"], "author")), prompt, write: false, scope: &scope, label: &label,
-        stage: None, skills: Some(vec![name.to_string()]), role: None,
+        stage: None, skills: Some(vec![name.to_string()]), role: None, saved: vec![],
     }).and_then(|r| if r.ok { Ok(r) } else { Err(crate::core::AppError::new(r.error_text())) });
     let out = match result {
         Ok(r) => {

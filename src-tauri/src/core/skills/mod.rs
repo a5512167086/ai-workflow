@@ -261,11 +261,15 @@ pub fn delete_skill(root: &Path, name: &str) -> Result<Value> {
 pub struct PreparedSkills {
     pub snapshots: Vec<Value>,
     pub text: String,
+    /// 因為內容已經寫在該階段 prompt 裡而沒有附加的內建技能（token_saving.dedupe_skills）。
+    pub skipped: Vec<String>,
+    /// 沒附加的技能少送的 token（估計）。
+    pub saved_tokens: u64,
 }
 
 /// 依階段（或明確指定的 names）把 Skill 複製成不可變的版本快照，並產生附加在 prompt 後的說明。
 /// to_path 把 Windows 路徑轉成 CLI 看得到的路徑（WSL 時是 /mnt/...）。
-pub fn prepare_skills(root: &Path, cfg: &Value, stage: Option<&str>, names: Option<&[String]>, to_path: &dyn Fn(&Path) -> String) -> Result<PreparedSkills> {
+pub fn prepare_skills(root: &Path, cfg: &Value, stage: Option<&str>, role: Option<&str>, names: Option<&[String]>, to_path: &dyn Fn(&Path) -> String) -> Result<PreparedSkills> {
     let wanted: Vec<String> = match names {
         Some(n) => n.to_vec(),
         None => stage.and_then(|s| cfg["skills"][s].as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
@@ -278,10 +282,18 @@ pub fn prepare_skills(root: &Path, cfg: &Value, stage: Option<&str>, names: Opti
     }
     let mut snapshots = Vec::new();
     let mut blocks = Vec::new();
+    let (mut skipped, mut saved_tokens) = (Vec::new(), 0);
+    let dedupe = crate::core::config::saving_on(cfg, "dedupe_skills");
     for name in &selected {
         let skill = load_skill(root, name)?;
         if !skill.extensions.is_empty() {
             crate::bail!("{name} 含執行器專屬欄位（{}），請先轉為共用 Skill", skill.extensions.join(", "));
+        }
+        // 只略過沒改過的內建技能：使用者在技能庫編輯過的版本可能加了 prompt 沒有的內容。
+        if dedupe && skill.builtin && crate::core::savings::builtin_inlined(name, stage, role) {
+            saved_tokens += crate::core::savings::estimate_tokens(&skill.body);
+            skipped.push(name.clone());
+            continue;
         }
         let files = match &skill.dir {
             Some(dir) => bundle(dir)?,
@@ -312,7 +324,7 @@ pub fn prepare_skills(root: &Path, cfg: &Value, stage: Option<&str>, names: Opti
     } else {
         format!("## 本次選用的共用 Skills\n依下列方法完成當前工作，保留任務指定的範圍與輸出格式。\n{}", blocks.join("\n\n"))
     };
-    Ok(PreparedSkills { snapshots, text })
+    Ok(PreparedSkills { snapshots, text, skipped, saved_tokens })
 }
 
 pub fn native_path(p: &Path) -> String {

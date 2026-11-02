@@ -60,3 +60,28 @@ https://github.com/mermaid-js/mermaid
 Version: 12.2.0
 Copyright (c) 2014 - 2022 Knut Sveidqvist
 MIT License. The complete license is bundled at vendor/MERMAID-LICENSE.txt.
+
+
+tree-sitter and language grammars (project graph parsing)
+https://github.com/tree-sitter/tree-sitter
+Compiled into the desktop app to parse source files for the project graph. All are MIT licensed:
+- tree-sitter 0.27.1, tree-sitter-language 0.1.9 — Copyright (c) 2018 Max Brunsfeld
+- tree-sitter-rust 0.24.2 — Copyright (c) 2017 Maxim Sokolov
+- tree-sitter-javascript 0.25.0 — Copyright (c) 2014 Max Brunsfeld
+- tree-sitter-typescript 0.23.2 — Max Brunsfeld, Amaan Qureshi (https://github.com/tree-sitter/tree-sitter-typescript)
+- tree-sitter-python 0.25.0 — Copyright (c) 2016 Max Brunsfeld
+- tree-sitter-go 0.25.0 — Copyright (c) 2014 Max Brunsfeld
+- tree-sitter-java 0.23.5 — Ayman Nadeem, Max Brunsfeld, Amaan Qureshi (https://github.com/tree-sitter/tree-sitter-java)
+- streaming-iterator 0.1.9 — Copyright (c) 2016 Steven Fackler (MIT OR Apache-2.0, used under MIT)
+The MIT License text is the same as the one reproduced above for Matt Pocock skills, with the copyright line of each project.
+
+
+graphify (design reference only)
+https://github.com/Graphify-Labs/graphify
+Copyright 2026 Safi Shamsi and the Graphify contributors. Apache-2.0 (earlier portions MIT).
+The project graph follows graphify's design (graph.json node-link layout, EXTRACTED/INFERRED/AMBIGUOUS confidence,
+GRAPH_REPORT.md sections, query/path/explain behaviour). No graphify code or text is included; the implementation is original.
+
+caveman (idea reference only)
+https://github.com/juliusbrussee/caveman
+Apache-2.0. The terse-reply option is inspired by caveman's idea; its rules are written independently and no caveman text is included.

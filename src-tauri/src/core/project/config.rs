@@ -23,7 +23,43 @@ pub const PROVIDERS: [&str; 2] = ["claude", "codex"];
 pub const MODES: [&str; 2] = ["auto", "manual"];
 pub const CLI_NAMES: [&str; 2] = ["claude", "codex"];
 pub const RUNTIMES: [&str; 3] = ["auto", "windows", "wsl"];
-pub const SKILL_STAGES: [&str; 7] = ["prd", "prd_review", "tasks", "implement", "code_review", "fix", "handover"];
+/// interview 是需求釐清會議；其餘是 PRD 到交接的流程階段。
+pub const SKILL_STAGES: [&str; 8] = ["interview", "prd", "prd_review", "tasks", "implement", "code_review", "fix", "handover"];
+
+/// 各階段預設載入的內建技能（改寫自 Matt Pocock 的 skills）。使用者在 Skills 頁存過綁定後就以使用者的為準，包括清空。
+pub fn default_skill_bindings() -> Value {
+    json!({ "interview": ["grill-me"], "prd": ["to-spec"], "prd_review": ["grill-me"], "tasks": ["to-tickets"], "implement": ["tdd"], "code_review": [], "fix": ["tdd"], "handover": [] })
+}
+
+/// 節省 token 的開關（token_saving 底下的布林值）。terse 另外按角色設定。
+pub const TOKEN_SAVING_SWITCHES: [&str; 4] = ["review_diff_filter", "prd_excerpt", "dedupe_skills", "code_map"];
+/// 可以開精簡輸出的角色：只有回報與審查意見，PRD、任務 JSON、handover 與需求會議不套用。
+pub const TERSE_ROLES: [&str; 4] = ["reviewer", "implementer", "fixer", "code_reviewer"];
+
+pub fn default_token_saving() -> Value {
+    json!({
+        // 審查用的 diff 不放 lockfile、壓縮檔與建置產物，只在檔案清單註明已略過。
+        "review_diff_filter": true,
+        // 實作只附任務對應的使用者故事與測試決策，加上完整 PRD 的路徑；對不到使用者故事時照舊附全文。
+        "prd_excerpt": true,
+        // 內建技能的方法已經寫在該階段的 prompt 裡時不重複附加。
+        "dedupe_skills": true,
+        "terse": { "reviewer": true, "implementer": true, "fixer": true, "code_reviewer": true },
+        // 實作與修正附上自動產生的專案地圖（檔案與頂層符號），請 AI 先查地圖再讀檔。
+        "code_map": true
+    })
+}
+
+pub fn saving_on(cfg: &Value, key: &str) -> bool {
+    cfg["token_saving"][key].as_bool().unwrap_or(false)
+}
+
+pub fn terse_on(cfg: &Value, role: Option<&str>) -> bool {
+    role.is_some_and(|r| TERSE_ROLES.contains(&r) && cfg["token_saving"]["terse"][r] == true)
+}
+
+/// 使用者在 Skills 頁存過綁定的標記。
+pub const SKILLS_CUSTOMIZED: &str = "skills_customized";
 
 /// 專案欄位的預設值。context_files 預設為空：使用者可以填專案裡既有檔案的路徑（相對於專案或絕對路徑）。
 pub fn default_project() -> Value {
@@ -37,11 +73,12 @@ pub fn default_project() -> Value {
 pub fn default_global() -> Value {
     json!({
         "mode": "manual",
-        "skills": { "prd": [], "prd_review": [], "tasks": [], "implement": [], "code_review": [], "fix": [], "handover": [] },
+        "skills": default_skill_bindings(),
         // reviewer／code_reviewer 可以是 both：Claude 與 Codex 各審一次，兩份都通過才算通過。
         "roles": { "interviewer": "claude", "author": "claude", "reviewer": "codex", "task_planner": "claude", "implementer": "claude", "fixer": "claude", "code_reviewer": "codex", "handover": "claude", "chat": "claude" },
         // 每個角色、每個 AI 的模型與推理強度；空字串＝沿用 claude.model／codex.model（再空就是 CLI 預設）。
         "models": default_models(),
+        "token_saving": default_token_saving(),
         "max_fix_rounds": 3,
         "max_prd_rounds": 2,
         "num_tasks": 0,
@@ -190,6 +227,16 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
             errors.push(format!("{key} 必須是 1–10 的整數"));
         }
     }
+    let saving = &cfg["token_saving"];
+    if !saving.is_null() {
+        let flag = |v: &Value| v.is_null() || v.is_boolean();
+        let bad = !saving.is_object()
+            || TOKEN_SAVING_SWITCHES.iter().any(|k| !flag(&saving[k]))
+            || !(saving["terse"].is_null() || saving["terse"].as_object().is_some_and(|m| m.iter().all(|(r, v)| TERSE_ROLES.contains(&r.as_str()) && v.is_boolean())));
+        if bad {
+            errors.push(format!("token_saving 的 {} 必須是 true / false，terse 只能設定 {}", TOKEN_SAVING_SWITCHES.join("、"), TERSE_ROLES.join("、")));
+        }
+    }
     if cfg.get("max_concurrent_runs").is_some_and(|v| !int_in(Some(v), 1, 8)) {
         errors.push("max_concurrent_runs 必須是 1–8 的整數".into());
     }
@@ -236,11 +283,23 @@ fn apply_role_fallbacks(cfg: &mut Value, raw: &Value) {
     }
 }
 
+/// 舊版預設的綁定全是空的；使用者還沒在 Skills 頁存過時，空的階段改用目前的預設技能。
+fn apply_skill_defaults(cfg: &mut Value, raw: &Value) {
+    if raw[SKILLS_CUSTOMIZED] == true { return; }
+    let defaults = default_skill_bindings();
+    for stage in SKILL_STAGES {
+        if cfg["skills"][stage].as_array().is_none_or(Vec::is_empty) {
+            cfg["skills"][stage] = defaults[stage].clone();
+        }
+    }
+}
+
 /// 全域設定（預設值＋ config.json）。
 pub fn load_global() -> Result<Value> {
     let raw = read_raw_or_empty(&global_config_path())?;
     let mut cfg = deep_merge(&default_global(), &raw);
     apply_role_fallbacks(&mut cfg, &raw);
+    apply_skill_defaults(&mut cfg, &raw);
     let errors = validate_config(&deep_merge(&cfg, &default_project()));
     if !errors.is_empty() {
         crate::bail!("{} 設定錯誤：\n- {}", global_config_path().display(), errors.join("\n- "));
@@ -351,6 +410,40 @@ pub fn global_config_text() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 技能綁定_預設載入內建技能_存過後以使用者為準() {
+        // 沒存過：舊版留下的空陣列改用預設。
+        let raw = json!({ "skills": { "prd": [], "implement": [], "code_review": ["uiux-design"] } });
+        let mut cfg = deep_merge(&default_global(), &raw);
+        apply_skill_defaults(&mut cfg, &raw);
+        assert_eq!(cfg["skills"]["interview"], json!(["grill-me"]));
+        assert_eq!(cfg["skills"]["prd"], json!(["to-spec"]));
+        assert_eq!(cfg["skills"]["tasks"], json!(["to-tickets"]));
+        assert_eq!(cfg["skills"]["implement"], json!(["tdd"]));
+        assert_eq!(cfg["skills"]["code_review"], json!(["uiux-design"]));
+        // 存過：清空也保留。
+        let raw = json!({ "skills": { "prd": [] }, "skills_customized": true });
+        let mut cfg = deep_merge(&default_global(), &raw);
+        apply_skill_defaults(&mut cfg, &raw);
+        assert_eq!(cfg["skills"]["prd"], json!([]));
+        assert_eq!(cfg["skills"]["tasks"], json!(["to-tickets"]));
+        assert!(validate_config(&deep_merge(&cfg, &default_project())).is_empty());
+    }
+
+    #[test]
+    fn 節省_token_開關預設值與格式檢查() {
+        let cfg = default_config();
+        assert!(saving_on(&cfg, "review_diff_filter") && saving_on(&cfg, "prd_excerpt") && saving_on(&cfg, "dedupe_skills"));
+        assert!(saving_on(&cfg, "code_map") && !saving_on(&cfg, "unknown"));
+        assert!(terse_on(&cfg, Some("code_reviewer")) && !terse_on(&cfg, Some("handover")) && !terse_on(&cfg, None));
+        let mut bad = default_config();
+        bad["token_saving"]["code_map"] = json!("yes");
+        assert!(validate_config(&bad).iter().any(|e| e.starts_with("token_saving")));
+        let mut bad = default_config();
+        bad["token_saving"]["terse"]["author"] = json!(true);
+        assert!(validate_config(&bad).iter().any(|e| e.starts_with("token_saving")));
+    }
 
     #[test]
     fn validate_config_檢查角色_模式_輪數() {

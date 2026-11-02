@@ -152,7 +152,7 @@ archive/2026-11-01-匯出-csv/
 
 桌面版的「用量」頁可查看各次執行與本專案的 token 處理量、CLI 回報的訂閱額度剩餘百分比及重設時間。詳見[Token 與額度顯示](docs/usage.md)。
 
-「Skills」頁像 Claude Code／Codex 的技能管理：左側是技能清單（內建的 Grill Me、UI/UX Design 與匯入的技能，各顯示來源與相容狀態，可搜尋），右側顯示選取技能的 SKILL.md 預覽、frontmatter 欄位與資源檔，可切到文字框編輯；匯入的技能可以刪除，修改過的內建技能可以還原。「匯入技能」選擇一個像 `.claude/skills/<name>/` 的資料夾（也可以直接拖放到清單），資料夾要有 `SKILL.md`（不分大小寫），其餘檔案與子目錄當資源一起複製進該專案資料目錄的 `skills/`。右側的「會議」子頁是完整高度的對話區：選定 AI 後送出，回覆中顯示「AI 正在回覆（已 N 秒）」與執行紀錄，歷史會議可用下拉切換、接續或開新會議；清單最上面的「工作流技能綁定」是一張階段表，每列用 chips 顯示綁定的技能，＋ 加入、× 移除，有變更時才可儲存（全域設定）。Codex／Claude Code 都透過 App 載入同一份可攜式指令；每次執行保存技能快照與 session，下一輪問答以紀錄交接到新 session。
+「Skills」頁像 Claude Code／Codex 的技能管理：左側是技能清單（內建的 grill-me、to-spec、to-tickets、tdd、uiux-design 與匯入的技能，各顯示來源與相容狀態，可搜尋），右側顯示選取技能的 SKILL.md 預覽、frontmatter 欄位與資源檔，可切到文字框編輯；匯入的技能可以刪除，修改過的內建技能可以還原。「匯入技能」選擇一個像 `.claude/skills/<name>/` 的資料夾（也可以直接拖放到清單），資料夾要有 `SKILL.md`（不分大小寫），其餘檔案與子目錄當資源一起複製進該專案資料目錄的 `skills/`。右側的「會議」子頁是完整高度的對話區：選定 AI 後送出，回覆中顯示「AI 正在回覆（已 N 秒）」與執行紀錄，歷史會議可用下拉切換、接續或開新會議；清單最上面的「工作流技能綁定」是一張階段表，每列用 chips 顯示綁定的技能，＋ 加入、× 移除，有變更時才可儲存（全域設定）。預設綁定：需求釐清 grill-me、PRD 起草／修訂 to-spec、PRD 審查 grill-me、拆解任務 to-tickets、實作與修正 tdd；拆任務時 AI 也可以替個別任務指定技能（例如 UI 任務用 uiux-design）。存過一次綁定後就以你的設定為準，清空也會保留。Codex／Claude Code 都透過 App 載入同一份可攜式指令；每次執行保存技能快照與 session，下一輪問答以紀錄交接到新 session。
 
 ```bash
 ai-workflow skills list
@@ -161,6 +161,55 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
 ```
 
 完整設定與相容性見[內建任務引擎與共用 Skills](docs/tasks-and-skills.md)。
+
+## 節省 Token
+
+AI 在一個 session 裡每發一次請求，都會把整份 prompt 與之前的工具結果重讀一次，所以實際用量大多是「快取讀取」，輸出只占一小部分。縮小 prompt 的效果會乘上請求次數，這裡的功能都朝這個方向做。總覽的「設定 → 節省 Token」可以逐項開關（全域設定 `token_saving`，所有專案共用）：
+
+| 功能 | 預設 | 做什麼 |
+|---|---|---|
+| 審查略過 lockfile 與產生檔 | 開 | `package-lock.json`、`Cargo.lock`、`go.sum`、`dist/`、`build/`、`*.min.js` 等只在審查 diff 裡留檔名與一行說明；任務資料夾的 `diff.patch` 仍是完整內容 |
+| 實作只附相關的 PRD | 開 | 只附任務 `requirement_ids` 對應的使用者故事、「測試決策」與「不做的事」，加上完整 PRD 的路徑讓 AI 需要時再讀；對不到使用者故事，或摘要沒有比較短時，照舊附全文 |
+| 內建技能不重複附加 | 開 | tdd（實作）、to-spec（PRD）、to-tickets（拆任務）、grill-me（需求釐清）的方法已經寫在該階段的提示詞裡，沒改過的內建技能就不再附一次；你編輯過的版本照常附加 |
+| 精簡回覆 | PRD 審查、實作、修正、程式碼審查開 | 要求 AI 結論先行、不寒暄不重述，程式碼、路徑、錯誤訊息與否定詞保留原文；只約束回覆，不影響寫進檔案的內容與 `VERDICT` 格式。PRD、任務清單、handover 與需求釐清不套用 |
+| 專案圖譜 | 開 | 以 tree-sitter 建立程式碼圖譜（見下一節），實作與修正前依任務內容、失敗輸出或審查意見查出相關的節點與關係附給 AI（約 1,500 tokens），取代整個專案搜尋 |
+
+各專案的「用量」頁會顯示估計省下的 tokens、目前開了哪些項目，以及依階段（實作、程式碼審查、修正、handover…）分開的次數、用量、占比與平均。估計值＝每次請求少送的 tokens（中文一字約一個、英文四字元約一個）× 請求次數；Codex 不回報請求次數，以 1 次計，所以是下限。精簡回覆與專案圖譜無法直接估算，請比較開關前後各階段的平均用量。
+
+精簡回覆的想法來自 [caveman](https://github.com/juliusbrussee/caveman)，專案圖譜的設計參考 [graphify](https://github.com/Graphify-Labs/graphify)；ai-workflow 沒有使用它們的程式碼或文字，規則與實作都是自己寫的（見 `src/THIRD_PARTY_NOTICES.txt`）。
+
+## 專案圖譜
+
+AI 在大型專案裡常常一路搜尋、逐檔讀程式，同樣的內容讀好幾次，還看不清架構。專案圖譜參考 [graphify](https://github.com/Graphify-Labs/graphify) 的設計，把專案整理成一張可以查詢的圖，讓 AI 先查圖、只讀圖上標出位置的那幾行。
+
+- **解析**：用編進 App 的 tree-sitter 解析 Rust、JavaScript、TypeScript／TSX、Python、Go、Java，抽出檔案、函式、方法、類別、struct、trait、介面等節點，以及 `contains`、`method`、`imports`、`calls`、`inherits`、`implements` 關係。其他檔案（文件、設定檔）只列為檔案節點。全部在本機完成，不花 AI token；lockfile 與建置產物不放進圖譜。
+- **信心度**（與 graphify 相同）：`EXTRACTED`（1.0）是原始碼明確寫出的關係，例如 import 到的檔案、同一個類別或已 import 檔案裡的定義；`INFERRED`（0.85）只靠全專案唯一的名稱推斷；`AMBIGUOUS`（0.2）是同名的定義有 2–3 個，各連一條，留給人或 AI 判斷。`vec.push()` 這類型別未知的方法呼叫不會被接到專案裡的同名函式；Rust 會追 `pub use` 轉出與 `crate::a::b::f()` 這類寫明路徑的呼叫。
+- **輸出**：放在資料目錄的 `projects/<id>/graph/`，專案資料夾不會多任何檔案。
+  - `graph.json`：node-link 格式（`nodes`、`links`、`graph.schema_version`、`built_at_commit`），每個節點、每條關係各佔一行，AI 用搜尋工具找符號名稱就能看到誰呼叫它、它依賴誰。
+  - `GRAPH_REPORT.md`：語料檢查、摘要（各信心度比例）、圖譜新鮮度、分群導覽、核心節點（連接最多的定義）、意外的關聯、循環匯入（JavaScript／TypeScript／Python 等）、各分群與凝聚度、不確定的關聯、知識缺口、建議問題。分群用 Louvain 演算法，以連接最多的成員命名。
+  - `graph.html`：離線可用的互動圖，可以搜尋、點節點看位置與相鄰節點、依分群顯示或隱藏、切換淺色／深色；推斷或不確定的關係畫成虛線。超過 3,000 個節點時改畫檔案層級。
+- **更新**：每個實作與修正前自動重建，內容沒變的檔案沿用快取（以檔案內容雜湊判斷），本專案約 100 個檔案、1,100 個節點約 1 秒。專案頁的「架構圖」分頁可以檢視報告與互動圖，也可以手動重新建立。
+- **給 AI 的內容**：實作用任務的標題、說明、細節與驗收條件，修正另外加上失敗輸出或審查意見，用 graphify 的查詢方式（名稱完全相符 1000、開頭相符 100、包含 1、檔案路徑 0.5 分，乘上詞的稀有度；最多 3 個起點、往外走 2 層、不展開大型樞紐）查出相關的子圖，加上前 5 個核心節點與完整檔案的路徑，約 1,500 tokens。內容沒有對到圖譜裡的名稱時，只附核心節點與路徑。
+
+命令列也可以查（對應 graphify 的 `update`、`query`、`path`、`explain`）：
+
+```bash
+ai-workflow graph build
+```
+
+```bash
+ai-workflow graph query "prepare_skills 去重" --budget 2000
+```
+
+```bash
+ai-workflow graph path run_agent_session data_dir
+```
+
+```bash
+ai-workflow graph explain data_dir
+```
+
+tree-sitter 與各語言的 grammar 是 MIT 授權，會讓桌面版執行檔變大約 7 MB（依各 grammar 的靜態函式庫大小估算，其中 TypeScript／TSX 約 3 MB）。
 
 ## 執行佇列
 
@@ -240,6 +289,11 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
   "cli": { "claude": "", "codex": "" },  // 空字串 = 從 PATH 找
   "claude": { "model": "", "effort": "", "write_permission_mode": "auto", "allowed_tools": [] },  // auto 或 acceptEdits
   "codex": { "model": "", "effort": "", "windows_sandbox": "elevated", "network_access": true },  // windows_sandbox：Windows 預設 elevated，其他平台空字串
+  "token_saving": {                 // 見「節省 Token」
+    "review_diff_filter": true, "prd_excerpt": true, "dedupe_skills": true,
+    "code_map": true,
+    "terse": { "reviewer": true, "implementer": true, "fixer": true, "code_reviewer": true }
+  },
   "skills": { "prd": [], "prd_review": [], "tasks": [], "implement": ["uiux-design"], "code_review": [], "fix": [], "handover": [] }
 }
 ```
@@ -302,7 +356,8 @@ ai-workflow skills run grill-me --input "我要做報表工具" --provider codex
     archive/<日期>-<功能>/   功能封存
     chats/、references/      專案對話、參考資料快照
     skills/、skill-runs/     這個專案的技能庫與技能會議
-    sessions/、usage.json    每次 AI 呼叫的紀錄與 token 用量
+    sessions/、usage.json    每次 AI 呼叫的紀錄、token 用量與估計節省量
+    graph/                   專案圖譜：graph.json、GRAPH_REPORT.md、graph.html 與解析快取 cache.json
     tmp/                     每次送出的 prompt、Skill 快照、codex 最後回覆
     migrated.json            舊版資料搬移紀錄（只在搬過時存在）
 ```

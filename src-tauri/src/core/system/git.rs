@@ -117,6 +117,15 @@ pub fn diff_trees(root: &Path, from: &str, to: &str) -> Result<String> {
     Ok(git(root, &args, &[])?.raw)
 }
 
+/// 專案裡的檔案（已追蹤＋未追蹤但沒被 .gitignore 排除），相對路徑，用 / 分隔。
+pub fn list_files(root: &Path) -> Result<Vec<String>> {
+    let out = git_ok(root, &["ls-files", "-c", "-o", "--exclude-standard"], &[])?;
+    let mut files: Vec<String> = out.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(".aipipe/") && !l.starts_with(".taskmaster/")).map(String::from).collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 pub fn has_changes(root: &Path) -> Result<bool> {
     Ok(!git(root, &["status", "--porcelain"], &[])?.out.is_empty())
 }

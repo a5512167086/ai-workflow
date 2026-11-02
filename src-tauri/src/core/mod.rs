@@ -18,9 +18,9 @@ pub mod system;
 pub mod util;
 pub mod workflow;
 
-pub use agents::{capabilities, errors as agent_errors, permissions, prompts, usage};
+pub use agents::{capabilities, errors as agent_errors, permissions, prompts, savings, usage};
 pub use error::{AppError, Result};
 pub use project::{config, home, init, projects, queue, state, watch};
 pub use skills::builtin as builtin_skills;
 pub use system::{doctor, git, proc, runtime};
-pub use workflow::{archive, backlog, chat, guards, human, prd, references, requirements, runner, tasks};
+pub use workflow::{archive, backlog, chat, graph, guards, human, prd, references, requirements, runner, tasks};

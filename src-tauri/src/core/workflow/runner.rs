@@ -13,7 +13,9 @@ use crate::core::backlog::update_item;
 use crate::core::config::{cfg_str, load_config};
 use crate::core::git;
 use crate::core::home::with_lock;
-use crate::core::prompts::{code_review_prompt, fix_checks_prompt, fix_review_prompt, handover_prompt, implement_prompt, strip_outer_fence};
+use crate::core::config::saving_on;
+use crate::core::prompts::{clip, code_review_prompt, diff_stat, fix_checks_prompt, fix_review_prompt, handover_prompt, implement_prompt, strip_outer_fence, MAX_DIFF_CHARS};
+use crate::core::savings::{filter_review_diff, saved};
 use crate::core::proc::{run_shell, RunOpts};
 use crate::core::queue::{acquire_slot, release};
 use crate::core::state::{append_log, handover_file, is_pid_alive_value, pid_of, read_state, task_dir, task_state, update_state};
@@ -120,10 +122,20 @@ fn skills_for(cfg: &Value, stage: &str, task: &Value) -> Vec<String> {
     cfg["skills"][stage].as_array().into_iter().flatten().chain(task["skills"].as_array().into_iter().flatten()).filter_map(|v| v.as_str().map(String::from)).collect()
 }
 
+/// 程式碼審查的 prompt 與節省紀錄。review_diff_filter：lockfile 與產生檔只留檔名（比較截斷後實際會送出的長度）。
+fn review_prompt(cfg: &Value, task: &Value, diff: &str, summary: &str) -> (String, Vec<Value>) {
+    if !saving_on(cfg, "review_diff_filter") {
+        return (code_review_prompt(task, diff, summary), vec![]);
+    }
+    let (filtered, skipped) = filter_review_diff(diff);
+    let savings = if skipped.is_empty() { vec![] } else { saved("review_diff_filter", &clip(diff, MAX_DIFF_CHARS), &clip(&filtered, MAX_DIFF_CHARS)).into_iter().collect() };
+    (code_review_prompt(task, &filtered, summary), savings)
+}
+
 /// run_agent 的捷徑：角色換成 cfg.roles 裡的 provider。
 #[allow(clippy::too_many_arguments)]
-fn agent(root: &Path, cfg: &Value, role: &str, prompt: String, write: bool, scope: &str, label: &str, stage: &str, skills: Option<Vec<String>>) -> Result<crate::core::agents::AgentResult> {
-    run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], role), prompt, write, scope, label, stage: Some(stage), skills, role: Some(role) })
+fn agent(root: &Path, cfg: &Value, role: &str, prompt: String, write: bool, scope: &str, label: &str, stage: &str, skills: Option<Vec<String>>, saved: Vec<Value>) -> Result<crate::core::agents::AgentResult> {
+    run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], role), prompt, write, scope, label, stage: Some(stage), skills, role: Some(role), saved })
 }
 
 /// 執行單一任務：實作 → 驗證 → 審查 → 修正（最多 max_fix_rounds 輪）→ 更新 handover →
@@ -163,7 +175,8 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
     let mut notes = String::new();
     let mut implement_denied: Vec<String> = Vec::new();
     if !verify_only {
-        let impl_ = agent(root, cfg, "implementer", implement_prompt(root, cfg, &task), true, scope, &format!("實作任務 {id}"), "implement", Some(skills_for(cfg, "implement", &task)))?;
+        let (implement, implement_saved) = implement_prompt(root, cfg, &task);
+        let impl_ = agent(root, cfg, "implementer", implement, true, scope, &format!("實作任務 {id}"), "implement", Some(skills_for(cfg, "implement", &task)), implement_saved)?;
         if !impl_.ok {
             return Err(TaskError::Stuck(format!("實作 AI 失敗：{}", impl_.error_text())));
         }
@@ -185,7 +198,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
             round += 1;
             set_task(root, id, json!({ "step": format!("修正驗證錯誤（第 {round} 輪）"), "fix_round": round }))?;
             let failed: Vec<String> = results.iter().filter(|r| !r.ok).map(|r| format!("## {} (`{}`)\n{}", r.name, r.cmd, tail_chars(&r.output, 15000))).collect();
-            let fix = agent(root, cfg, "fixer", fix_checks_prompt(cfg, &task, &failed.join("\n\n"), round), true, scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
+            let fix = agent(root, cfg, "fixer", fix_checks_prompt(root, cfg, &task, &failed.join("\n\n"), round), true, scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
             if !fix.ok {
                 return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
             }
@@ -204,9 +217,10 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
         let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
         let label = format!("程式碼審查 第 {} 次", round + 1);
+        let (prompt, review_saved) = review_prompt(cfg, &task, shown, &summary);
         let reviews = run_reviews(AgentOpts {
-            root, cfg, provider: "", prompt: code_review_prompt(&task, shown, &summary), write: false, scope, label: &label,
-            stage: Some("code_review"), skills: Some(skills_for(cfg, "code_review", &task)), role: Some("code_reviewer"),
+            root, cfg, provider: "", prompt, write: false, scope, label: &label,
+            stage: Some("code_review"), skills: Some(skills_for(cfg, "code_review", &task)), role: Some("code_reviewer"), saved: review_saved,
         }, &["PASS"]).map_err(|e| TaskError::Stuck(e.message))?;
         // 雙人審查時每個 AI 一個檔案（review-<n>-<ai>.md），兩份都 PASS 才算通過。
         let mut verdicts = json!({});
@@ -226,7 +240,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         }
         round += 1;
         set_task(root, id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
-        let fix = agent(root, cfg, "fixer", fix_review_prompt(cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)))?;
+        let fix = agent(root, cfg, "fixer", fix_review_prompt(root, cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
         if !fix.ok {
             return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
         }
@@ -235,9 +249,8 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
 
     set_task(root, id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;
     let full = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
-    let stat: Vec<&str> = full.lines().filter(|l| (l.starts_with(' ') && l.len() > 1 && !l[1..].starts_with(char::is_whitespace) && l.contains('|')) || l.contains("file changed") || l.contains("files changed")).collect();
     // handover 不在專案裡：AI 以唯讀方式輸出新版內容，由這裡寫進專案資料目錄。
-    let ho = agent(root, cfg, "handover", handover_prompt(root, &task, &notes, &stat.join("\n")), false, scope, "更新 handover", "handover", None)?;
+    let ho = agent(root, cfg, "handover", handover_prompt(root, &task, &notes, &diff_stat(&full)), false, scope, "更新 handover", "handover", None, vec![])?;
     let handover_text = strip_outer_fence(&ho.text);
     if !ho.ok || handover_text.trim().is_empty() {
         append_log(root, scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", if ho.ok { "AI 沒有輸出內容".to_string() } else { ho.error_text() }));

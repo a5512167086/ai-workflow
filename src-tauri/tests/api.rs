@@ -86,5 +86,11 @@ fn 全域設定路由_不需要專案() {
     post("/api/config/models", json!({ "roles": { "interviewer": "claude" } })).unwrap();
     assert_eq!(post("/api/config/limits", json!({ "branch_prefix": "bad prefix" })).unwrap_err().status, 400);
     assert_eq!(post("/api/config/runtime", json!({ "runtime": { "claude": "auto" } })).unwrap()["config"]["runtime"]["claude"], "auto");
+    // 節省 token：只改送來的開關，其他開關保留預設；未知欄位不會寫入，格式錯誤會被擋下。
+    let saving = post("/api/config/token_saving", json!({ "token_saving": { "code_map": true, "terse": { "fixer": false }, "other": 1 } })).unwrap()["config"]["token_saving"].clone();
+    assert_eq!((saving["code_map"].clone(), saving["terse"]["fixer"].clone(), saving["terse"]["implementer"].clone(), saving["prd_excerpt"].clone()), (json!(true), json!(false), json!(true), json!(true)));
+    assert!(saving.get("other").is_none());
+    assert!(post("/api/config/token_saving", json!({ "token_saving": { "prd_excerpt": "yes" } })).is_err());
+    post("/api/config/token_saving", json!({ "token_saving": { "code_map": false, "terse": { "fixer": true } } })).unwrap();
     assert!(get("/api/models").unwrap()["claude"]["models"].as_array().is_some_and(|m| !m.is_empty()));
 }
