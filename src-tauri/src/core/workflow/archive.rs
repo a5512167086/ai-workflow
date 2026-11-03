@@ -358,7 +358,7 @@ pub fn read_archive(root: &Path, name: &str) -> Result<Value> {
     }
     let rounds_dir = dir.join("rounds");
     let mut names: Vec<String> = if rounds_dir.exists() {
-        fs::read_dir(&rounds_dir)?.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()
+        fs::read_dir(&rounds_dir)?.filter_map(std::result::Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect()
     } else {
         vec![]
     };

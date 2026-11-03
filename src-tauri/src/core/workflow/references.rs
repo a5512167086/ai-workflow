@@ -137,7 +137,7 @@ fn collect(
     }
     if meta.is_dir() {
         let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(fs::DirEntry::file_name);
         for e in entries {
             if skip(&e.file_name().to_string_lossy()) {
                 *excluded += 1;
@@ -162,7 +162,7 @@ fn collect(
 fn media(path: &Path) -> &'static str {
     match path
         .extension()
-        .and_then(|e| e.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or("")
         .to_lowercase()
         .as_str()
@@ -345,27 +345,12 @@ pub fn prepare(
             to_path(&dir.join("files"))
         ));
         for file in manifest["files"].as_array().into_iter().flatten() {
-            let rel = file["path"].as_str().unwrap_or("");
-            if Path::new(rel)
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
-            {
-                crate::bail!("參考清單路徑不正確");
-            }
-            let path = dir.join("files").join(rel);
-            let bytes = verified(&path, &file["sha256"])?;
+            let (path, bytes) = snapshot_file(&dir, file)?;
             total += bytes.len();
             if total > 96 * 1024 * 1024 {
                 crate::bail!("本次參考資料超過 96 MB，請減少選取");
             }
-            if manifest["kind"] == "file"
-                && file["mediaType"]
-                    .as_str()
-                    .is_some_and(|s| s.starts_with("image/"))
-                && cfg["_visual_reference_ids"]
-                    .as_array()
-                    .is_none_or(|ids| ids.contains(&json!(id)))
-            {
+            if visual_image(cfg, &manifest, file, &id) {
                 out.images.push(path.clone());
             }
             if listed >= 240 {
@@ -373,18 +358,7 @@ pub fn prepare(
             }
             listed += 1;
             out.text.push_str(&format!("- {}\n", to_path(&path)));
-            if let Ok(text) = std::str::from_utf8(&bytes) {
-                if !text.contains('\0') && budget > 0 {
-                    let excerpt: String = text.chars().take(budget.min(8000)).collect();
-                    budget -= excerpt.chars().count();
-                    out.text.push_str(&format!(
-                        "<reference_content>\n{excerpt}\n</reference_content>\n"
-                    ));
-                    if text.chars().count() > excerpt.chars().count() {
-                        out.text.push_str("（節錄；完整內容請讀取上述快照檔案）\n");
-                    }
-                }
-            }
+            push_excerpt(&mut out.text, &bytes, &mut budget);
         }
         if listed >= 240 {
             out.text
@@ -414,4 +388,42 @@ pub fn prepare(
         crate::bail!("一次最多 8 張圖片、圖片合計 20 MB，請減少附件");
     }
     Ok(out)
+}
+/// 讀取並驗證快照裡的一個檔案；清單裡的路徑只能是快照資料夾內的一般路徑。
+fn snapshot_file(dir: &Path, file: &Value) -> Result<(PathBuf, Vec<u8>)> {
+    let rel = file["path"].as_str().unwrap_or("");
+    if Path::new(rel)
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        crate::bail!("參考清單路徑不正確");
+    }
+    let path = dir.join("files").join(rel);
+    let bytes = verified(&path, &file["sha256"])?;
+    Ok((path, bytes))
+}
+/// 圖片檔且這一輪要給 AI 看（沒有指定 _visual_reference_ids 時全部都看）。
+fn visual_image(cfg: &Value, manifest: &Value, file: &Value, id: &str) -> bool {
+    manifest["kind"] == "file"
+        && file["mediaType"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("image/"))
+        && cfg["_visual_reference_ids"]
+            .as_array()
+            .is_none_or(|ids| ids.contains(&json!(id)))
+}
+/// 文字檔在剩餘預算內附上摘錄（每檔最多 8000 字）；沒有放完整內容時註明是節錄。
+fn push_excerpt(out: &mut String, bytes: &[u8], budget: &mut usize) {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if !text.contains('\0') && *budget > 0 {
+            let excerpt: String = text.chars().take((*budget).min(8000)).collect();
+            *budget -= excerpt.chars().count();
+            out.push_str(&format!(
+                "<reference_content>\n{excerpt}\n</reference_content>\n"
+            ));
+            if text.chars().count() > excerpt.chars().count() {
+                out.push_str("（節錄；完整內容請讀取上述快照檔案）\n");
+            }
+        }
+    }
 }

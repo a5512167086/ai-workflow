@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::core::agents::{blocking_items, combine_reviews, only_suggestions, run_agent, run_reviews, AgentOpts};
+use crate::core::agents::{blocking_items, combine_reviews, only_suggestions, run_agent, run_reviews, AgentOpts, Review};
 use crate::core::archive::archive_tasks;
 use crate::core::backlog::update_item;
 use crate::core::config::{cfg_str, load_config};
@@ -176,27 +176,82 @@ fn agent(root: &Path, cfg: &Value, role: &str, prompt: String, write: bool, scop
     run_agent(AgentOpts { root, cfg, provider: cfg_str(&cfg["roles"], role), prompt, write, scope, label, stage: Some(stage), skills, role: Some(role), saved })
 }
 
+/// 一次任務執行共用的資料，讓各步驟的輔助函式不用帶一長串參數。
+struct TaskRun<'a> {
+    root: &'a Path,
+    cfg: &'a Value,
+    id: &'a str,
+    scope: &'a str,
+    task: &'a Value,
+    dir: &'a Path,
+    max_fix: u64,
+}
+
 /// 執行單一任務：實作 → 驗證 → 審查 → 修正（最多 max_fix_rounds 輪）→ 更新 handover →
 /// 自動模式 commit + done；手動模式停在「等待測試」。
 fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::result::Result<&'static str, TaskError> {
     let scope = format!("task-{id}");
-    let scope = scope.as_str();
     let Some(task) = tasks::find_task(root, id)? else { return Err(AppError::new(format!("tasks.json 找不到任務 {id}")).into()) };
     let dir = task_dir(root, id)?;
     let prev = read_state(root)["tasks"][id].clone();
     let accepted = verify_only && prev["review_override"] == true;
     if !verify_only {
-        // 新的一次嘗試：清掉上一次的審查與驗證紀錄，避免 UI 顯示過期內容（log 保留）。
-        for entry in fs::read_dir(&dir).map_err(AppError::from)? {
-            let _ = fs::remove_file(entry.map_err(AppError::from)?.path());
-        }
+        clear_task_dir(&dir)?;
     }
     let base_tree = match prev["base_tree"].as_str().filter(|b| verify_only && !b.is_empty()) {
         Some(b) => b.to_string(),
         None => git::snapshot_tree(root)?,
     };
     let title = task["title"].as_str().unwrap_or("").to_string();
-    update_state(root, |s| {
+    let run = TaskRun { root, cfg, id, scope: &scope, task: &task, dir: &dir, max_fix: cfg["max_fix_rounds"].as_u64().unwrap_or(3) };
+    begin_task(&run, &title, &base_tree, verify_only)?;
+
+    // 只重新驗證時不跑實作 AI，也就沒有被權限擋下的工具呼叫。
+    let (mut notes, implement_denied) = if verify_only { (String::new(), Vec::new()) } else { implement_task(&run)? };
+    // 上一輪的審查意見與修正者的回覆，下一次審查會看到。
+    let mut previous = String::new();
+    let mut round = 0u64;
+    loop {
+        set_task(root, id, json!({ "phase": "implementing", "step": "驗證中", "fix_round": round }))?;
+        let (ok, results) = run_checks(root, cfg, id, run.scope)?;
+        set_task(root, id, json!({ "last_check_ok": ok }))?;
+        if !ok {
+            round = fix_checks(&run, round, &results, &mut notes)?;
+            continue;
+        }
+
+        if accepted {
+            accept_without_review(&run)?;
+            break;
+        }
+        let reviews = review_round(&run, round, &base_tree, &results, &previous, &implement_denied)?;
+        if reviews.iter().all(|r| r.pass) {
+            break;
+        }
+        if round >= run.max_fix {
+            record_stuck_reasons(&run, &reviews)?;
+            return Err(TaskError::Stuck(format!("審查未通過且修正輪數已用盡（{}）", run.max_fix)));
+        }
+        round += 1;
+        previous = fix_review(&run, round, &reviews, &mut notes)?;
+    }
+
+    update_handover(&run, &base_tree, &notes)?;
+    finish_task(&run, &title)
+}
+
+/// 新的一次嘗試：清掉上一次的審查與驗證紀錄，避免 UI 顯示過期內容（log 保留）。
+fn clear_task_dir(dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let _ = fs::remove_file(entry?.path());
+    }
+    Ok(())
+}
+
+/// 重設任務狀態、寫開頭 log，並把任務標成進行中。
+fn begin_task(run: &TaskRun, title: &str, base_tree: &str, verify_only: bool) -> Result<()> {
+    let id = run.id;
+    update_state(run.root, |s| {
         let t = task_state(s, id);
         let attempts = t["attempts"].as_u64().unwrap_or(0) + if verify_only { 0 } else { 1 };
         for (k, v) in [
@@ -208,122 +263,134 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         }
         s["pipeline"]["current_task"] = json!(id);
     })?;
-    append_log(root, scope, &format!("═══ 任務 {id}：{title} ═══"));
-    tasks::set_status(root, id, "in-progress")?;
+    append_log(run.root, run.scope, &format!("═══ 任務 {id}：{title} ═══"));
+    tasks::set_status(run.root, id, "in-progress")?;
+    Ok(())
+}
 
-    let mut notes = String::new();
-    let mut implement_denied: Vec<String> = Vec::new();
-    // 上一輪的審查意見與修正者的回覆，下一次審查會看到。
-    let mut previous = String::new();
-    if !verify_only {
-        let (implement, implement_saved) = implement_prompt(root, cfg, &task);
-        let impl_ = agent(root, cfg, "implementer", implement, true, scope, &format!("實作任務 {id}"), "implement", Some(skills_for(cfg, "implement", &task)), implement_saved)?;
-        if !impl_.ok {
-            return Err(TaskError::Stuck(format!("實作 AI 失敗：{}", impl_.error_text())));
-        }
-        implement_denied = impl_.denied.clone();
-        notes = impl_.text;
-        fs::write(dir.join("implement.md"), &notes).map_err(AppError::from)?;
+/// 實作 AI 寫程式；回傳實作筆記與被權限擋下的工具呼叫。
+fn implement_task(run: &TaskRun) -> std::result::Result<(String, Vec<String>), TaskError> {
+    let (implement, implement_saved) = implement_prompt(run.root, run.cfg, run.task);
+    let impl_ = agent(run.root, run.cfg, "implementer", implement, true, run.scope, &format!("實作任務 {}", run.id), "implement", Some(skills_for(run.cfg, "implement", run.task)), implement_saved)?;
+    if !impl_.ok {
+        return Err(TaskError::Stuck(format!("實作 AI 失敗：{}", impl_.error_text())));
     }
+    fs::write(run.dir.join("implement.md"), &impl_.text).map_err(AppError::from)?;
+    Ok((impl_.text, impl_.denied))
+}
 
-    let max_fix = cfg["max_fix_rounds"].as_u64().unwrap_or(3);
-    let mut round = 0u64;
-    loop {
-        set_task(root, id, json!({ "phase": "implementing", "step": "驗證中", "fix_round": round }))?;
-        let (ok, results) = run_checks(root, cfg, id, scope)?;
-        set_task(root, id, json!({ "last_check_ok": ok }))?;
-        if !ok {
-            if round >= max_fix {
-                return Err(TaskError::Stuck(format!("驗證失敗且修正輪數已用盡（{max_fix}）")));
-            }
-            round += 1;
-            set_task(root, id, json!({ "step": format!("修正驗證錯誤（第 {round} 輪）"), "fix_round": round }))?;
-            let failed: Vec<String> = results.iter().filter(|r| !r.ok).map(|r| format!("## {} (`{}`)\n{}", r.name, r.cmd, tail_chars(&r.output, 15000))).collect();
-            let fix = agent(root, cfg, "fixer", fix_checks_prompt(root, cfg, &task, &failed.join("\n\n"), round), true, scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
-            if !fix.ok {
-                return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
-            }
-            notes.push_str(&format!("\n\n### 修正第 {round} 輪\n{}", fix.text));
-            continue;
-        }
-
-        if accepted {
-            append_log(root, scope, "使用者接受目前結果：驗證通過，不再送審查");
-            set_task(root, id, json!({ "review_verdict": "ACCEPTED", "review_verdicts": {} }))?;
-            // 跳過審查也要經過 review 狀態，之後「我測完了，繼續」才能標成完成。
-            tasks::set_status(root, id, "review")?;
-            break;
-        }
-        set_task(root, id, json!({ "phase": "reviewing", "step": "程式碼審查中" }))?;
-        tasks::set_status(root, id, "review")?;
-        let diff = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
-        fs::write(dir.join("diff.patch"), &diff).map_err(AppError::from)?;
-        // 實作完全沒有改動時不送審查：審查只會一直判不通過，白白用掉修正輪數。最常見的原因是指令被權限擋下。
-        if diff.is_empty() && !verify_only && round == 0 && !implement_denied.is_empty() {
-            return Err(TaskError::Stuck(format!("實作 AI 的工具呼叫被權限擋下（{}），沒有產生任何變更，已停止，不送審查。Claude 請確認全域設定 config.json 的 claude.write_permission_mode 是 auto，或在 claude.allowed_tools 加入需要的指令；也可以自己完成這一步後按「我測完了，繼續」", implement_denied.join("、"))));
-        }
-        let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
-        let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
-        let label = format!("程式碼審查 第 {} 次", round + 1);
-        let (prompt, review_saved) = review_prompt(cfg, &task, shown, &summary, &previous);
-        let reviews = run_reviews(AgentOpts {
-            root, cfg, provider: "", prompt, write: false, scope, label: &label,
-            stage: Some("code_review"), skills: Some(skills_for(cfg, "code_review", &task)), role: Some("code_reviewer"), saved: review_saved,
-        }, &["PASS"]).map_err(|e| TaskError::Stuck(e.message))?;
-        let mut reviews = reviews;
-        for r in reviews.iter_mut().filter(|r| !r.pass && only_suggestions(&r.text)) {
-            append_log(root, scope, "審查意見只有 [建議]，沒有 [必須修正]：視為通過");
-            r.pass = true;
-            r.verdict = "PASS".into();
-        }
-        // 雙人審查時每個 AI 一個檔案（review-<n>-<ai>.md），兩份都 PASS 才算通過。
-        let mut verdicts = json!({});
-        for r in &reviews {
-            let name = if reviews.len() > 1 { format!("review-{}-{}.md", round + 1, r.provider) } else { format!("review-{}.md", round + 1) };
-            fs::write(dir.join(name), &r.text).map_err(AppError::from)?;
-            verdicts[r.provider.as_str()] = json!(r.verdict);
-        }
-        let pass = reviews.iter().all(|r| r.pass);
-        let verdict = if reviews.len() == 1 { reviews[0].verdict.clone() } else if pass { "PASS".into() } else { "FAIL".into() };
-        set_task(root, id, json!({ "review_verdict": verdict, "review_verdicts": verdicts, "reviews": round + 1 }))?;
-        if pass {
-            break;
-        }
-        if round >= max_fix {
-            // 卡住時把最後一次審查的問題列出來，使用者不用去 Log 裡翻。
-            let reasons: Vec<String> = reviews.iter().filter(|r| !r.pass).flat_map(|r| {
-                let items = blocking_items(&r.text);
-                if reviews.len() > 1 { items.into_iter().map(|i| format!("{}：{i}", crate::core::agents::provider_name(&r.provider))).collect() } else { items }
-            }).collect();
-            set_task(root, id, json!({ "stuck_reasons": reasons }))?;
-            if !reasons.is_empty() {
-                append_log(root, scope, &format!("最後一次審查的問題：\n{}", reasons.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n")));
-            }
-            return Err(TaskError::Stuck(format!("審查未通過且修正輪數已用盡（{max_fix}）")));
-        }
-        round += 1;
-        set_task(root, id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
-        let combined = combine_reviews(&reviews);
-        let fix = agent(root, cfg, "fixer", fix_review_prompt(root, cfg, &task, &combined, round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
-        if !fix.ok {
-            return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
-        }
-        notes.push_str(&format!("\n\n### 處理審查意見第 {round} 輪\n{}", fix.text));
-        previous = format!("### 審查意見（第 {round} 次）\n{combined}\n\n### 修正者的回覆\n{}", fix.text);
+/// 驗證失敗：修正輪數還有剩就讓修正 AI 修一輪並回傳新的輪數，用盡則任務卡住。
+fn fix_checks(run: &TaskRun, round: u64, results: &[Check], notes: &mut String) -> std::result::Result<u64, TaskError> {
+    if round >= run.max_fix {
+        return Err(TaskError::Stuck(format!("驗證失敗且修正輪數已用盡（{}）", run.max_fix)));
     }
+    let round = round + 1;
+    set_task(run.root, run.id, json!({ "step": format!("修正驗證錯誤（第 {round} 輪）"), "fix_round": round }))?;
+    let failed: Vec<String> = results.iter().filter(|r| !r.ok).map(|r| format!("## {} (`{}`)\n{}", r.name, r.cmd, tail_chars(&r.output, 15000))).collect();
+    let fix = agent(run.root, run.cfg, "fixer", fix_checks_prompt(run.root, run.cfg, run.task, &failed.join("\n\n"), round), true, run.scope, &format!("修正驗證錯誤 第 {round} 輪"), "fix", Some(skills_for(run.cfg, "fix", run.task)), vec![])?;
+    if !fix.ok {
+        return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
+    }
+    notes.push_str(&format!("\n\n### 修正第 {round} 輪\n{}", fix.text));
+    Ok(round)
+}
 
-    set_task(root, id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;
-    let full = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
+/// 使用者已接受目前結果：驗證通過就不再送審查。
+fn accept_without_review(run: &TaskRun) -> Result<()> {
+    append_log(run.root, run.scope, "使用者接受目前結果：驗證通過，不再送審查");
+    set_task(run.root, run.id, json!({ "review_verdict": "ACCEPTED", "review_verdicts": {} }))?;
+    // 跳過審查也要經過 review 狀態，之後「我測完了，繼續」才能標成完成。
+    tasks::set_status(run.root, run.id, "review")?;
+    Ok(())
+}
+
+/// 送程式碼審查一次，寫出審查檔並把結果記進狀態；回傳各份審查（只有 [建議] 的已視為通過）。
+fn review_round(run: &TaskRun, round: u64, base_tree: &str, results: &[Check], previous: &str, implement_denied: &[String]) -> std::result::Result<Vec<Review>, TaskError> {
+    let (root, id, scope) = (run.root, run.id, run.scope);
+    set_task(root, id, json!({ "phase": "reviewing", "step": "程式碼審查中" }))?;
+    tasks::set_status(root, id, "review")?;
+    let diff = git::diff_trees(root, base_tree, &git::snapshot_tree(root)?)?;
+    fs::write(run.dir.join("diff.patch"), &diff).map_err(AppError::from)?;
+    // 實作完全沒有改動時不送審查：審查只會一直判不通過，白白用掉修正輪數。最常見的原因是指令被權限擋下。
+    // （只重新驗證時沒有跑實作 AI，implement_denied 一定是空的。）
+    if diff.is_empty() && round == 0 && !implement_denied.is_empty() {
+        return Err(TaskError::Stuck(format!("實作 AI 的工具呼叫被權限擋下（{}），沒有產生任何變更，已停止，不送審查。Claude 請確認全域設定 config.json 的 claude.write_permission_mode 是 auto，或在 claude.allowed_tools 加入需要的指令；也可以自己完成這一步後按「我測完了，繼續」", implement_denied.join("、"))));
+    }
+    let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
+    let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
+    let label = format!("程式碼審查 第 {} 次", round + 1);
+    let (prompt, review_saved) = review_prompt(run.cfg, run.task, shown, &summary, previous);
+    let mut reviews = run_reviews(AgentOpts {
+        root, cfg: run.cfg, provider: "", prompt, write: false, scope, label: &label,
+        stage: Some("code_review"), skills: Some(skills_for(run.cfg, "code_review", run.task)), role: Some("code_reviewer"), saved: review_saved,
+    }, &["PASS"]).map_err(|e| TaskError::Stuck(e.message))?;
+    for r in reviews.iter_mut().filter(|r| !r.pass && only_suggestions(&r.text)) {
+        append_log(root, scope, "審查意見只有 [建議]，沒有 [必須修正]：視為通過");
+        r.pass = true;
+        r.verdict = "PASS".into();
+    }
+    record_reviews(run, round, &reviews)?;
+    Ok(reviews)
+}
+
+/// 雙人審查時每個 AI 一個檔案（review-<n>-<ai>.md），兩份都 PASS 才算通過。
+fn record_reviews(run: &TaskRun, round: u64, reviews: &[Review]) -> Result<()> {
+    let mut verdicts = json!({});
+    for r in reviews {
+        let name = if reviews.len() > 1 { format!("review-{}-{}.md", round + 1, r.provider) } else { format!("review-{}.md", round + 1) };
+        fs::write(run.dir.join(name), &r.text).map_err(AppError::from)?;
+        verdicts[r.provider.as_str()] = json!(r.verdict);
+    }
+    let pass = reviews.iter().all(|r| r.pass);
+    let verdict = if reviews.len() == 1 { reviews[0].verdict.clone() } else if pass { "PASS".into() } else { "FAIL".into() };
+    set_task(run.root, run.id, json!({ "review_verdict": verdict, "review_verdicts": verdicts, "reviews": round + 1 }))
+}
+
+/// 卡住時把最後一次審查的問題列出來，使用者不用去 Log 裡翻。
+fn record_stuck_reasons(run: &TaskRun, reviews: &[Review]) -> Result<()> {
+    let reasons: Vec<String> = reviews.iter().filter(|r| !r.pass).flat_map(|r| {
+        let items = blocking_items(&r.text);
+        if reviews.len() > 1 { items.into_iter().map(|i| format!("{}：{i}", crate::core::agents::provider_name(&r.provider))).collect() } else { items }
+    }).collect();
+    set_task(run.root, run.id, json!({ "stuck_reasons": reasons }))?;
+    if !reasons.is_empty() {
+        append_log(run.root, run.scope, &format!("最後一次審查的問題：\n{}", reasons.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n")));
+    }
+    Ok(())
+}
+
+/// 讓修正 AI 處理審查意見一輪；回傳下一次審查要看的審查意見與修正者的回覆。
+fn fix_review(run: &TaskRun, round: u64, reviews: &[Review], notes: &mut String) -> std::result::Result<String, TaskError> {
+    set_task(run.root, run.id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
+    let combined = combine_reviews(reviews);
+    let fix = agent(run.root, run.cfg, "fixer", fix_review_prompt(run.root, run.cfg, run.task, &combined, round), true, run.scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(run.cfg, "fix", run.task)), vec![])?;
+    if !fix.ok {
+        return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
+    }
+    notes.push_str(&format!("\n\n### 處理審查意見第 {round} 輪\n{}", fix.text));
+    Ok(format!("### 審查意見（第 {round} 次）\n{combined}\n\n### 修正者的回覆\n{}", fix.text))
+}
+
+/// 更新 handover；失敗只記 log，不影響任務結果。
+fn update_handover(run: &TaskRun, base_tree: &str, notes: &str) -> Result<()> {
+    let root = run.root;
+    set_task(root, run.id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;
+    let full = git::diff_trees(root, base_tree, &git::snapshot_tree(root)?)?;
     // handover 不在專案裡：AI 以唯讀方式輸出新版內容，由這裡寫進專案資料目錄。
-    let ho = agent(root, cfg, "handover", handover_prompt(root, &task, &notes, &diff_stat(&full)), false, scope, "更新 handover", "handover", None, vec![])?;
+    let ho = agent(root, run.cfg, "handover", handover_prompt(root, run.task, notes, &diff_stat(&full)), false, run.scope, "更新 handover", "handover", None, vec![])?;
     let handover_text = strip_outer_fence(&ho.text);
     if !ho.ok || handover_text.trim().is_empty() {
-        append_log(root, scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", if ho.ok { "AI 沒有輸出內容".to_string() } else { ho.error_text() }));
+        append_log(root, run.scope, &format!("⚠ handover 更新失敗：{}（不影響任務結果）", if ho.ok { "AI 沒有輸出內容".to_string() } else { ho.error_text() }));
     } else {
         fs::write(handover_file(root), &handover_text).map_err(AppError::from)?;
-        append_log(root, scope, &format!("handover 已更新：{}", handover_file(root).display()));
+        append_log(root, run.scope, &format!("handover 已更新：{}", handover_file(root).display()));
     }
+    Ok(())
+}
 
+/// 自動模式 commit 並標成完成；手動模式停在等待人工測試。
+fn finish_task(run: &TaskRun, title: &str) -> std::result::Result<&'static str, TaskError> {
+    let (root, id) = (run.root, run.id);
     let fresh = load_config(root)?;
     if cfg_str(&fresh, "mode") == "auto" {
         set_task(root, id, json!({ "step": "git commit" }))?;
@@ -336,7 +403,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
                 return Err(TaskError::Stuck(err.message));
             }
         };
-        append_log(root, scope, &sha.as_ref().map(|s| format!("已 commit {}", &s[..8.min(s.len())])).unwrap_or_else(|| "沒有變更可 commit".into()));
+        append_log(root, run.scope, &sha.as_ref().map(|s| format!("已 commit {}", &s[..8.min(s.len())])).unwrap_or_else(|| "沒有變更可 commit".into()));
         set_task(root, id, json!({ "phase": "done", "step": "完成", "commit": sha, "finished_at": now_iso() }))?;
         return Ok("done");
     }

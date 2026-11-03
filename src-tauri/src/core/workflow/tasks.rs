@@ -405,60 +405,76 @@ pub fn set_status(root: &Path, id: &str, status: &str) -> Result<Value> {
         if status == "done" && target_subs.iter().any(|t| t["status"] != "done") {
             crate::bail!("子任務尚未完成");
         }
-        let actual = match target.sub_index {
-            None => &mut tasks[target.index],
-            Some(k) => &mut tasks[target.index]["subtasks"][k],
-        };
+        let actual = task_at(&mut tasks, target);
         let from = actual["status"].as_str().unwrap_or("pending").to_string();
         if status == "done" && from != "review" && from != "done" {
             crate::bail!("任務需先進入 review 再完成");
         }
         actual["status"] = json!(status);
         if target.parent.is_some() {
-            let parent = &mut tasks[target.index];
-            let all_done = parent["subtasks"].as_array().unwrap().iter().all(|t| t["status"] == "done");
-            parent["status"] = json!(if all_done { "done" } else { "in-progress" });
+            sync_parent_status(&mut tasks[target.index]);
         }
-        // 重新打開已完成的前置任務，會讓依賴它的已完成工作失效，所以必須先重設那些任務。
         if from == "done" && status != "done" {
-            let mut invalidated: HashSet<String> = HashSet::from([id.to_string()]);
-            if target.parent.is_some() {
-                invalidated.insert(js_string(&tasks[target.index]["id"]));
-            }
-            for sub in &target_subs {
-                invalidated.insert(format!("{id}.{}", js_string(&sub["id"])));
-            }
-            loop {
-                let mut changed = false;
-                for t in &all {
-                    if !invalidated.contains(&t.id) && t.deps.iter().any(|d| invalidated.contains(d)) {
-                        if t.status != "pending" {
-                            crate::bail!("請先重設依賴此任務的 {}", t.id);
-                        }
-                        invalidated.insert(t.id.clone());
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            if status == "pending" && target.parent.is_none() {
-                if let Some(subs) = tasks[target.index]["subtasks"].as_array_mut() {
-                    for sub in subs {
-                        sub["status"] = json!("pending");
-                    }
-                }
-            }
+            reopen_done(&mut tasks, &all, target, &target_subs, id, status)?;
         }
-        let actual = match target.sub_index {
-            None => tasks[target.index].clone(),
-            Some(k) => tasks[target.index]["subtasks"][k].clone(),
-        };
+        let actual = task_at(&mut tasks, target).clone();
         store["groups"][tag.as_str()]["tasks"] = Value::Array(tasks);
         push_event(store, json!({ "kind": "status", "tag": tag, "id": id, "from": from, "to": status, "at": now_iso() }));
         Ok(actual)
     })
+}
+
+/// 扁平清單裡的任務在巢狀清單中的位置（主任務或子任務）。
+fn task_at<'a>(tasks: &'a mut [Value], t: &Flat) -> &'a mut Value {
+    match t.sub_index {
+        None => &mut tasks[t.index],
+        Some(k) => &mut tasks[t.index]["subtasks"][k],
+    }
+}
+
+/// 子任務狀態改變後，主任務跟著變：子任務全部完成就是 done，否則 in-progress。
+fn sync_parent_status(parent: &mut Value) {
+    let all_done = parent["subtasks"].as_array().unwrap().iter().all(|t| t["status"] == "done");
+    parent["status"] = json!(if all_done { "done" } else { "in-progress" });
+}
+
+/// 重新打開已完成的前置任務，會讓依賴它的已完成工作失效，所以必須先重設那些任務。
+fn reopen_done(tasks: &mut [Value], all: &[Flat], target: &Flat, target_subs: &[Value], id: &str, status: &str) -> Result<()> {
+    let mut invalidated: HashSet<String> = HashSet::from([id.to_string()]);
+    if target.parent.is_some() {
+        invalidated.insert(js_string(&tasks[target.index]["id"]));
+    }
+    for sub in target_subs {
+        invalidated.insert(format!("{id}.{}", js_string(&sub["id"])));
+    }
+    invalidate_dependents(all, &mut invalidated)?;
+    if status == "pending" && target.parent.is_none() {
+        if let Some(subs) = tasks[target.index]["subtasks"].as_array_mut() {
+            for sub in subs {
+                sub["status"] = json!("pending");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 依賴失效任務的任務也跟著失效，直到不再擴大；其中有不是 pending 的，就要求使用者先重設它。
+fn invalidate_dependents(all: &[Flat], invalidated: &mut HashSet<String>) -> Result<()> {
+    loop {
+        let mut changed = false;
+        for t in all {
+            if !invalidated.contains(&t.id) && t.deps.iter().any(|d| invalidated.contains(d)) {
+                if t.status != "pending" {
+                    crate::bail!("請先重設依賴此任務的 {}", t.id);
+                }
+                invalidated.insert(t.id.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
 }
 
 /// archive 用：讀取任意 JSON 檔裡的 tasks 陣列。
@@ -515,43 +531,69 @@ pub fn edit_task(root: &Path, id: &str, tag: &str, expected: &str, patch: &Value
         if store["currentTag"] != tag { crate::bail!(409; "任務群組已變更，請重新開啟"); }
         let original=group_tasks(store);
         if store_revision(store) != expected { crate::bail!(409; "任務已被其他視窗修改，請重新載入後再編輯；你的草稿仍保留"); }
-        let mut list=original.clone(); let parts:Vec<_>=id.split('.').collect();
-        let parent=list.iter_mut().find(|t|js_string(&t["id"])==parts[0]).ok_or_else(||AppError::new("找不到任務"))?;
-        let target=if parts.len()==2 { parent["subtasks"].as_array_mut().and_then(|ts|ts.iter_mut().find(|t|js_string(&t["id"])==parts[1])).ok_or_else(||AppError::new("找不到子任務"))? } else if parts.len()==1 { parent } else { crate::bail!(400; "任務 id 不正確"); };
-        for field in ["title","description","details","testStrategy","priority","dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"] {
-            if let Some(value)=patch.get(field) {
-                if ["title","description","details","testStrategy","priority"].contains(&field) && (!value.is_string() || value.as_str().unwrap().len()>100000) { crate::bail!(400; "{field} 必須是文字且小於 100 KB"); }
-                if ["dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"].contains(&field) && !value.is_array() { crate::bail!(400; "{field} 必須是陣列"); }
-                if field=="priority" && !["high","medium","low"].contains(&value.as_str().unwrap_or("")) { crate::bail!(400; "優先序不正確"); }
-                target[field]=value.clone();
-            }
-        }
+        let mut list=original.clone();
+        apply_task_patch(edit_target(&mut list, id)?, patch)?;
         let mut list=normalize(&list,true)?;
         if content_revision(&list)==content_revision(&original) { return Ok(json!({"unchanged":true,"revision":store_revision(store)})); }
-        let all=flatten(&list);
-        let mut impacted=HashSet::from([id.to_string()]);
-        if let Some((parent,_))=id.split_once('.') { impacted.insert(parent.to_string()); }
-        loop {
-            let before=impacted.len();
-            for task in &all {
-                if task.deps.iter().any(|d|impacted.contains(d)) || task.id.split_once('.').is_some_and(|(p,_)|impacted.contains(p)) { impacted.insert(task.id.clone()); }
-            }
-            if before==impacted.len() { break; }
-        }
-        for task in &mut list {
-            let parent_id=js_string(&task["id"]); let mut child_changed=false;
-            for child in task["subtasks"].as_array_mut().into_iter().flatten() {
-                if impacted.contains(&format!("{parent_id}.{}",js_string(&child["id"]))) { child["status"]=json!("pending"); child_changed=true; }
-            }
-            if impacted.contains(&parent_id) || child_changed { task["status"]=json!("pending"); impacted.insert(parent_id); }
-        }
-        crate::core::state::update_state(root,|s| {
-            s["task_approval"]=Value::Null;
-            for id in &impacted { if let Some(states)=s["tasks"].as_object_mut() { states.remove(id); } }
-            s["pipeline"]["status"]=json!("paused"); s["pipeline"]["reason"]=json!("任務已人工修改，請重新檢視並核准任務");
-        })?;
+        let mut impacted=impacted_by_edit(&flatten(&list), id);
+        reset_impacted(&mut list, &mut impacted);
+        pause_after_edit(root, &impacted)?;
         store["groups"][tag]["tasks"]=json!(list);
         push_event(store,json!({"kind":"human-edit","task":id,"at":now_iso(),"before":original,"invalidated":impacted}));
         Ok(json!({"tasks":list,"invalidated":impacted,"revision":store_revision(store)}))
+    })
+}
+
+/// 依 id（「3」或「3.2」）找出要編輯的主任務或子任務。
+fn edit_target<'a>(list: &'a mut [Value], id: &str) -> Result<&'a mut Value> {
+    let parts:Vec<_>=id.split('.').collect();
+    let parent=list.iter_mut().find(|t|js_string(&t["id"])==parts[0]).ok_or_else(||AppError::new("找不到任務"))?;
+    let target=if parts.len()==2 { parent["subtasks"].as_array_mut().and_then(|ts|ts.iter_mut().find(|t|js_string(&t["id"])==parts[1])).ok_or_else(||AppError::new("找不到子任務"))? } else if parts.len()==1 { parent } else { crate::bail!(400; "任務 id 不正確"); };
+    Ok(target)
+}
+
+/// 把人工編輯的欄位套到任務上；文字欄位要是文字且小於 100 KB，清單欄位要是陣列。
+fn apply_task_patch(target: &mut Value, patch: &Value) -> Result<()> {
+    for field in ["title","description","details","testStrategy","priority","dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"] {
+        if let Some(value)=patch.get(field) {
+            if ["title","description","details","testStrategy","priority"].contains(&field) && (!value.is_string() || value.as_str().unwrap().len()>100000) { crate::bail!(400; "{field} 必須是文字且小於 100 KB"); }
+            if ["dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"].contains(&field) && !value.is_array() { crate::bail!(400; "{field} 必須是陣列"); }
+            if field=="priority" && !["high","medium","low"].contains(&value.as_str().unwrap_or("")) { crate::bail!(400; "優先序不正確"); }
+            target[field]=value.clone();
+        }
+    }
+    Ok(())
+}
+
+/// 被編輯的任務、它的主任務，以及（遞移地）依賴它們或屬於它們的任務。
+fn impacted_by_edit(all: &[Flat], id: &str) -> HashSet<String> {
+    let mut impacted=HashSet::from([id.to_string()]);
+    if let Some((parent,_))=id.split_once('.') { impacted.insert(parent.to_string()); }
+    loop {
+        let before=impacted.len();
+        for task in all {
+            if task.deps.iter().any(|d|impacted.contains(d)) || task.id.split_once('.').is_some_and(|(p,_)|impacted.contains(p)) { impacted.insert(task.id.clone()); }
+        }
+        if before==impacted.len() { return impacted; }
+    }
+}
+
+/// 受影響的任務改回 pending；有子任務被重設的主任務也一起重設並列入受影響清單。
+fn reset_impacted(list: &mut [Value], impacted: &mut HashSet<String>) {
+    for task in list {
+        let parent_id=js_string(&task["id"]); let mut child_changed=false;
+        for child in task["subtasks"].as_array_mut().into_iter().flatten() {
+            if impacted.contains(&format!("{parent_id}.{}",js_string(&child["id"]))) { child["status"]=json!("pending"); child_changed=true; }
+        }
+        if impacted.contains(&parent_id) || child_changed { task["status"]=json!("pending"); impacted.insert(parent_id); }
+    }
+}
+
+/// 人工修改任務後：撤銷任務核准、清掉受影響任務的執行狀態，並暫停流程等使用者重新核准。
+fn pause_after_edit(root: &Path, impacted: &HashSet<String>) -> Result<()> {
+    crate::core::state::update_state(root,|s| {
+        s["task_approval"]=Value::Null;
+        for id in impacted { if let Some(states)=s["tasks"].as_object_mut() { states.remove(id); } }
+        s["pipeline"]["status"]=json!("paused"); s["pipeline"]["reason"]=json!("任務已人工修改，請重新檢視並核准任務");
     })
 }
