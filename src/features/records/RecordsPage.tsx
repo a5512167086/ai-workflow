@@ -83,9 +83,9 @@ function archiveMetaRows(m: ArchiveMeta): [string, string][] {
 function recordTitle(snap: Snapshot, selected: string | null, archive: ArchivePayload | null) {
   if (selected === null) return currentTitle(snap);
   if (!archive) return selected;
-  const m = archive.meta || {};
+  const m = archive.meta ?? {};
   // 封存的 feature 可能是空字串：跳過空的，依序退回 idea、資料夾名稱。
-  const title = [m.feature, m.idea].find((value) => value) ?? archive.name;
+  const title = [m.feature, m.idea].find(Boolean) ?? archive.name;
   return title.split('\n')[0];
 }
 
