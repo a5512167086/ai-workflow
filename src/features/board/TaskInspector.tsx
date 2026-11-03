@@ -51,13 +51,13 @@ function inspectorTitle(id: string, detail: TaskDetail | null, task: Task | unde
 /** 任務內容：用標籤、段落與清單呈現任務欄位，不顯示原始 JSON。 */
 export function TaskContent({ task, implement, done }: Readonly<{ task: Task; implement?: string; done: Set<string> }>) {
   const chipRow = (label: string, items: { text: string; tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info'; title?: string; mono?: boolean }[]) => items.length ? (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div key={label} className="flex flex-wrap items-center gap-1.5">
       <span className="text-[11px] text-muted-foreground">{label}</span>
       {withKeys(items, 'chip-').map(({ key, item }) => <Chip key={key} tone={item.tone} title={item.title} className={cn(item.mono && 'mono')}>{item.text}</Chip>)}
     </div>
   ) : null;
   const section = (title: string, content: React.ReactNode) => content ? (
-    <section className="grid gap-1">
+    <section key={title} className="grid gap-1">
       <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
       {content}
     </section>
