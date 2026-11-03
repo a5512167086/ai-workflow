@@ -228,6 +228,8 @@ pub fn approve_prd(root: &Path, cfg: &Value) -> Result<PathBuf> {
     update_state(root, |s| {
         s["prd"]["status"] = json!("approved");
         s["prd"]["approved_at"] = json!(now_iso());
+        // 核准代表使用者已處理過先前的錯誤，不再顯示。
+        s["prd"]["error"] = json!("");
     })?;
     append_log(root, SCOPE, &format!("PRD 已核准，寫入 {}", target.display()));
     match archive_prd(root, cfg) {
@@ -256,11 +258,16 @@ pub fn save_manual(root: &Path, text: &str, version: &Value, scope: &Value) -> R
         Ok(json!({"ok":true,"version":v}))
     })
 }
+/// 使用者關掉錯誤通知：只清掉錯誤訊息，不改 PRD 狀態或內容。
+pub fn dismiss_error(root: &Path) -> Result<Value> {
+    update_state(root, |s| s["prd"]["error"] = json!(""))?;
+    Ok(json!({ "ok": true }))
+}
 pub fn review_current(root: &Path, cfg: &Value) -> Result<()> {
     guard(root)?;
     with_error_state(root,|| {
         let prd=current_prd(root); if prd.is_empty() { crate::bail!("沒有可審查的 PRD"); }
-        update_state(root,|s|s["prd"]["status"]=json!("reviewing"))?;
+        update_state(root,|s| { s["prd"]["status"]=json!("reviewing"); s["prd"]["error"]=json!(""); })?;
         let round=read_state(root)["prd"]["round"].as_u64().unwrap_or(0)+1;
         let reviews=run_reviews(AgentOpts { root,cfg,provider:"",prompt:prd_review_prompt(root,cfg,&prd,round),write:false,scope:SCOPE,label:"人工版本交叉審查",stage:Some("prd_review"),role:Some("reviewer"),skills:None,saved:vec![] },&["APPROVE"])?;
         let version=read_state(root)["prd"]["version"].clone();

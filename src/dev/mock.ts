@@ -67,6 +67,9 @@ const tasks = [
   { id: 4, title: '匯出紀錄與錯誤提示', status: 'pending', priority: 'low', dependencies: [2, 3], subtasks: [] },
 ];
 
+// 預覽「PRD 錯誤通知」：關掉通知後清掉。
+let prdError = 'PRD 修訂時程序已結束（可能是 App 重新啟動或程序被關閉），已保留目前版本。可按「只重新審查目前版本」或附意見「要求再改」繼續。';
+
 function snapshot(): Snapshot {
   return {
     root: 'C:\\code\\my-app', dataDir: 'C:\\Users\\me\\.ai-workflow\\projects\\0123456789', project: { id: PID, name: 'my-app' },
@@ -88,7 +91,7 @@ function snapshot(): Snapshot {
     },
     permissions: [],
     state: {
-      prd: { status: 'approved', idea: '報表匯出 CSV', version: 3, reviewed_version: 3, reference_scope: 'csv-export', references: ['ref-1'], archive_dir: 'archive/2026-11-01-csv-export', rounds: [
+      prd: { status: 'approved', error: prdError, idea: '報表匯出 CSV', version: 3, reviewed_version: 3, reference_scope: 'csv-export', references: ['ref-1'], archive_dir: 'archive/2026-11-01-csv-export', rounds: [
         { round: 1, kind: 'draft', provider: 'claude', version: 1, text: '初稿內容…' },
         { round: 1, kind: 'review', provider: 'codex', verdict: 'REVISE', version: 1, text: '[必須修正] 缺少時區處理\n[建議] 加入檔名規則' },
         { round: 2, kind: 'revise', provider: 'claude', version: 2, text: '修訂內容…' },
@@ -265,6 +268,7 @@ async function handleApi(method: string, path: string, body: Record<string, unkn
     case 'references/assign': return { ok: true };
     case 'permissions/answer': return { ok: true };
     case 'prd/save': return { ok: true, version: 4 };
+    case 'prd/dismiss_error': prdError = ''; return { ok: true };
     case 'prd/approve': case 'prd/revise': case 'prd/review': case 'prd/new': case 'tasks/generate': case 'tasks/approve': case 'task/save': case 'task/accept': case 'task/rerun': case 'run/start': case 'run/pause': case 'run/continue': return { ok: true };
     case 'skills/import': return { skill: { name: 'imported-skill', compatible: true } };
     case 'skills/save': return { skill: { name: 'my-skill' } };

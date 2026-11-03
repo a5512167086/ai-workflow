@@ -109,7 +109,8 @@ export function PrdPage() {
   }, [prd.status]);
   const layout = useMemo(() => readJson<Record<string, number> | null>(LAYOUT_KEY, null), []);
 
-  const busyText = snap.prdBusy ? 'AI 處理中，可在「紀錄 → Log → PRD」查看輸出' : prd.error ? `上次錯誤：${prd.error}` : '';
+  // 錯誤改由 PrdErrorToast 以可關閉的通知顯示，這裡只顯示處理中。
+  const busyText = snap.prdBusy ? 'AI 處理中，可在「紀錄 → Log → PRD」查看輸出' : '';
   const humanNote = prd.human_edited_at && prd.reviewed_version !== prd.version
     ? '目前含人工修改。可只請不同 AI 審查，保留你的原文；最後仍由你核准。'
     : 'AI 審查提供意見；你可以直接編輯、要求修改，最後由你核准。';
@@ -161,8 +162,8 @@ export function PrdPage() {
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={layout || undefined} onLayoutChanged={(l) => writeJson(LAYOUT_KEY, l)}>
         <ResizablePanel id="prd-main" defaultSize="66" minSize={320} className="flex min-h-0 flex-col" data-reference-drop="feature">
           {busyText && (
-            <Notice tone={!snap.prdBusy && prd.error ? 'bad' : 'info'} className="m-3 mb-0">
-              <LiveSince label={busyText} since={snap.prdBusy ? prd.started_at : null} className={!snap.prdBusy && prd.error ? 'text-danger' : 'text-info'} />
+            <Notice tone="info" className="m-3 mb-0">
+              <LiveSince label={busyText} since={prd.started_at} className="text-info" />
             </Notice>
           )}
           <div className="min-h-0 flex-1 overflow-auto p-4">

@@ -281,6 +281,8 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "backlog/confirm" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::requirements::confirm(root, body) },
         "prd/save" => { crate::core::guards::check(&snap, "prd.edit")?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
         "prd/review" => { crate::core::guards::check(&snap, "prd.review")?; spawn(root, &["prd", "--review"]) },
+        // 關掉錯誤通知不受流程狀態限制。
+        "prd/dismiss_error" => crate::core::prd::dismiss_error(root),
         "task/save" => { if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::guards::check(&snap, "task.edit")?; let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
         // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
         "permissions/answer" => crate::core::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),

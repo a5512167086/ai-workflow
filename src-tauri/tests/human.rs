@@ -277,7 +277,7 @@ fn 人工編輯_prd_存成新版本並撤回任務核准_可只重新審查_核�
 
 #[test]
 fn prd_程序中途被結束時_狀態恢復成可操作_保留目前版本並說明原因() {
-    let (root, _cfg) = fixture();
+    let (root, cfg) = fixture();
     // 一個已經結束的程序 id：啟動後等它結束。
     let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" }).args(if cfg!(windows) { vec!["/c", "exit"] } else { vec![] }).spawn().unwrap();
     let dead = child.id(); child.wait().unwrap();
@@ -298,6 +298,20 @@ fn prd_程序中途被結束時_狀態恢復成可操作_保留目前版本並�
     assert!(state["prd"]["error"].as_str().unwrap().contains("修訂時程序已結束"));
     assert_eq!(prd::current_prd(&root), "# PRD\n第一版");
     assert!(!prd::recover_interrupted(&root).unwrap());
+
+    // 使用者關掉錯誤通知：只清掉錯誤，PRD 狀態與內容不變。
+    prd::dismiss_error(&root).unwrap();
+    let state = read_state(&root);
+    assert_eq!(state["prd"]["error"], "");
+    assert_eq!(state["prd"]["status"], "awaiting_approval");
+    assert_eq!(prd::current_prd(&root), "# PRD\n第一版");
+
+    // 沒關通知就直接核准：核准後不再顯示先前的錯誤。
+    update_state(&root, |s| s["prd"]["error"] = json!("PRD 修訂時程序已結束")).unwrap();
+    prd::approve_prd(&root, &cfg).unwrap();
+    let state = read_state(&root);
+    assert_eq!(state["prd"]["status"], "approved");
+    assert_eq!(state["prd"]["error"], "");
 
     // 起草中就被結束、還沒有 PRD：回到 none。
     fs::remove_file(data_dir(&root).join("prd/current.md")).unwrap();

@@ -15,6 +15,7 @@ import { useReferences } from '@/stores/references';
 import { PermissionDialog } from '@/features/permissions/PermissionDialog';
 import { ReferenceDialogHost, ReferenceDropHost } from '@/features/references/ReferenceWidget';
 import { EmptyState } from '@/components/app/Page';
+import { PrdErrorToast } from '@/features/prd/PrdErrorToast';
 
 export function AppShell() {
   useShortcuts();
@@ -23,6 +24,8 @@ export function AppShell() {
   useEffect(() => { refresh(); connect(); }, [refresh, connect]);
   return (
     <TooltipProvider delayDuration={400}>
+      {/* Toaster 放在最前面：畫面在第一次 render 就發的通知（例如 PRD 錯誤）才不會在 Toaster 訂閱前遺失。 */}
+      <Toaster />
       <div className="flex h-full w-full overflow-hidden">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">
@@ -34,7 +37,6 @@ export function AppShell() {
       </div>
       <CommandPalette />
       <ConfirmHost />
-      <Toaster />
     </TooltipProvider>
   );
 }
@@ -67,6 +69,7 @@ export function ProjectLayout() {
     <>
       <Outlet />
       <PermissionDialog />
+      <PrdErrorToast />
       <ReferenceDialogHost />
       <ReferenceDropHost />
     </>
