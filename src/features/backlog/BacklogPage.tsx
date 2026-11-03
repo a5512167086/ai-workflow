@@ -55,6 +55,7 @@ export function BacklogPage() {
   const [edit, setEdit] = useState({ title: '', detail: '' });
   const [filter, setFilter] = useState<StatusFilter>(readFilter);
   const titleRef = useRef<HTMLInputElement>(null);
+  const editTitleRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
   useReferenceInput(detailRef, () => referenceOptions('backlog-draft'));
@@ -71,7 +72,7 @@ export function BacklogPage() {
   }, [api]);
 
   // 進入畫面、以及 PRD 狀態或輪次改變（需求可能被鎖住或完成）時重讀。
-  useEffect(() => { load(); }, [load, prdStatus, prdRounds]);
+  useEffect(() => { void load(); }, [load, prdStatus, prdRounds]);
 
   // 技能會議「帶入需求待辦」。
   useEffect(() => {
@@ -122,6 +123,8 @@ export function BacklogPage() {
     if (lock) toast.error(lock);
     return !!lock;
   };
+  // 進入編輯時把焦點放在標題。
+  useEffect(() => { if (editingId) editTitleRef.current?.focus(); }, [editingId]);
   const startEdit = (item: BacklogItem) => { if (blocked(item)) return; setEditingId(item.id); setEdit({ title: item.title, detail: item.detail || '' }); };
   const saveEdit = async (item: BacklogItem) => {
     if (blocked(item)) return;
@@ -135,7 +138,7 @@ export function BacklogPage() {
   };
   const references = (item: BacklogItem) => {
     if (blocked(item)) return;
-    openReferenceDialog({ title: `需求參考：${item.title}`, target: 'backlog', id: item.id, ids: item.references || [] }, () => { load(); });
+    openReferenceDialog({ title: `需求參考：${item.title}`, target: 'backlog', id: item.id, ids: item.references || [] }, () => { void load(); });
   };
   const draft = (item: BacklogItem) => { if (blocked(item)) return; openInterview(item.id); };
 
@@ -160,7 +163,7 @@ export function BacklogPage() {
             <div className="flex flex-col gap-2" data-reference-drop="backlog-draft">
               <Label htmlFor="bl-title">標題</Label>
               <Input id="bl-title" ref={titleRef} value={title} maxLength={200} placeholder="例如：報表可以匯出 CSV" onChange={(e) => setTitle(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); add(); } }} />
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void add(); } }} />
               <Label htmlFor="bl-detail" className="mt-1">說明（選填，支援 Markdown）</Label>
               <ReferenceWidget options={referenceOptions('backlog-draft')} />
               <Textarea id="bl-detail" ref={detailRef} rows={5} value={detail} placeholder="先描述你的想法，新增後 AI 會追問需要釐清的資訊…" onChange={(e) => setDetail(e.target.value)} />
@@ -198,7 +201,7 @@ export function BacklogPage() {
                     <li key={item.id} data-id={item.id} className="rounded-md border bg-card p-3">
                       <div className="flex flex-col gap-2">
                         <Label htmlFor="ed-title">標題</Label>
-                        <Input id="ed-title" autoFocus maxLength={200} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+                        <Input id="ed-title" ref={editTitleRef} maxLength={200} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
                         <Label htmlFor="ed-detail">說明（Markdown）</Label>
                         <Textarea id="ed-detail" rows={5} value={edit.detail} onChange={(e) => setEdit({ ...edit, detail: e.target.value })} />
                         <div className="flex justify-end gap-2">

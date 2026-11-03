@@ -67,7 +67,7 @@ export function GraphPage() {
     }
   }, [api]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const s = graph?.stats;
   const building = busy && status.startsWith('正在');

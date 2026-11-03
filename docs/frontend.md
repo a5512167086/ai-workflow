@@ -57,6 +57,8 @@ src/
 - `api(path, body?)`：有 body 是 POST，沒有是 GET；`projectApi(id)` 把 `/api/xxx` 換成 `/api/p/<id>/xxx`（`/api/projects`、`/api/queue` 仍是全域）。
 - `act(api, path, body, okMsg)`：成功 toast、失敗 toast 並回傳 null。`runAction(api, snap, …)`：額度用完時先確認改用另一個 AI。
 - 防呆：`snap.guards[name]` 是不能做的原因（空字串＝可以）；用 `GuardButton guard={reason}` 停用並在 tooltip 顯示原因。
+- 停用但有說明的按鈕（`GuardButton`、參考資料按鈕）用 `aria-disabled` 而不是 `disabled`：仍可用鍵盤聚焦、滑過去看得到原因，點擊會被擋下。測試用 `toBeUsable()`（`src/test/setup.ts`）判斷按得下去，`toBeEnabled()` 分不出 `aria-disabled`。
+- 對話框打開時要聚焦某個元素，加 `data-autofocus`（`DialogContent`／`AlertDialogContent` 會處理），不要用 `autoFocus` 屬性。
 - 事件：`projects`（總覽）、`state-<id>`（整份快照）、`log-<id>`（`{scope, text}` 增量）、`stream-<id>`（`{scope, text}`：AI 正在打的那段回覆的全文，空字串代表已寫完）。
 - 專案圖譜的互動圖（`src-tauri/.../graph/viewer.html`）放在沙箱 iframe：平移用 pointer events＋pointer capture、重畫合併到每個 frame，排版時自己顯示轉圈；讀取 `/api/graph` 時後端會把舊的 graph.html 換上目前的 viewer（資料不變），不必重新建立就能用到修正。
 - 功能封存：`GET /api/archive` 列出、`/api/archive/<名稱>` 讀 PRD／每輪紀錄／任務（含 `taskStates`）、`/api/archive/<名稱>/task/<id>` 讀一個任務當時的內容與實作紀錄（log、審查、test 輸出、diff；`hasRecords` 為 false 表示沒保存）。任務紀錄在開始新功能時移進封存，新功能的任務從空白開始。紀錄頁的「任務」分頁點一列展開（`features/records/ArchivedTask.tsx`）。

@@ -83,7 +83,7 @@ export function PermissionDialog() {
           <span className="flex-1" />
           <Button type="button" variant="outline" disabled={busy} onClick={() => answer('deny')}>拒絕</Button>
           {rule && <Button type="button" variant="outline" disabled={busy} title="只在這次 AI 執行期間有效，不會寫進專案的設定檔" onClick={() => answer('allow_session')}>這次執行都允許 {rule}</Button>}
-          <Button type="button" autoFocus disabled={busy} onClick={() => answer('allow')}>允許這一次</Button>
+          <Button type="button" data-autofocus disabled={busy} onClick={() => answer('allow')}>允許這一次</Button>
         </div>
       </DialogContent>
     </Dialog>

@@ -75,7 +75,7 @@ function MessageList({ session, onSuggest }: { session: ChatSession | null; onSu
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [typing]);
   return (
-    <div ref={host} onScroll={onScroll} role="region" aria-label="對話訊息" tabIndex={0} className="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <div ref={host} onScroll={onScroll} role="region" aria-label="對話訊息" className="min-h-0 flex-1 overflow-auto px-4 py-3">
       {!session?.messages?.length && (
         <div className="mx-auto flex max-w-xl flex-col items-center gap-2 py-10 text-center">
           <Eyebrow>問問題、理解程式、釐清下一步</Eyebrow>
@@ -143,7 +143,7 @@ export function ChatPage() {
   const inputRefValue = useRef(input);
   inputRefValue.current = input;
 
-  useEffect(() => { loadModels(); }, [loadModels]);
+  useEffect(() => { void loadModels(); }, [loadModels]);
   useReferenceInput(inputRef, () => referenceOptions('chat', { chatId: chatIdRef.current }));
   useSkillCommandInput(inputRef);
 
@@ -188,7 +188,7 @@ export function ChatPage() {
   };
 
   // 清單與目前對話的輪詢：有對話在回覆中，或這個畫面開著時每 1.5 秒更新一次。
-  useEffect(() => { loadHome(); }, [loadHome]);
+  useEffect(() => { void loadHome(); }, [loadHome]);
   useEffect(() => {
     let busy = false;
     const timer = setInterval(async () => {
@@ -285,7 +285,7 @@ export function ChatPage() {
                     </button>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem onSelect={async () => { if (c.id !== chatId) await openChat(c.id); rename(); }}><Pencil />改名</ContextMenuItem>
+                    <ContextMenuItem onSelect={async () => { if (c.id !== chatId) await openChat(c.id); void rename(); }}><Pencil />改名</ContextMenuItem>
                     <ContextMenuItem variant="destructive" disabled={chatActive(c)} onSelect={() => remove(c.id, c.title)}><Trash2 />刪除</ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>
@@ -309,7 +309,7 @@ export function ChatPage() {
           <p role="status" className="shrink-0 px-4 pt-2 text-xs text-muted-foreground">
             <LiveSince label={statusText} since={active && !status && !session?.error ? lastUserAt(session) : null} />
           </p>
-          <form data-reference-drop="chat" className="shrink-0 border-t px-4 py-3" onSubmit={(e) => { e.preventDefault(); send(); }}>
+          <form data-reference-drop="chat" className="shrink-0 border-t px-4 py-3" onSubmit={(e) => { e.preventDefault(); void send(); }}>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">AI
                 <Select value={provider} onValueChange={(v) => { setProvider(v as Provider); setModel(''); setEffort(''); }}>
@@ -342,7 +342,7 @@ export function ChatPage() {
               id="chat-input" ref={inputRef} rows={3} maxLength={20000} value={input}
               placeholder="問問目前的進度、執行問題，或請 AI 畫出專案架構圖…"
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
               className="min-h-16 resize-y"
             />
             <div className="mt-2 flex flex-wrap items-center gap-2">

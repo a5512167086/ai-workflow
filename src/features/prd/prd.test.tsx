@@ -82,9 +82,9 @@ describe('PRD 頁', () => {
   test('防呆：按鈕依後端原因停用並顯示原因', () => {
     setup(snapshot({}, { guards: { 'prd.edit': '流程執行中', 'prd.review': '流程執行中', 'prd.approve': '流程執行中', 'prd.revise': '流程執行中', 'tasks.generate': '' } }));
     const approve = screen.getByRole('button', { name: /核准 PRD/ });
-    expect(approve).toBeDisabled();
+    expect(approve).toHaveAttribute('aria-disabled', 'true');
     expect(approve).toHaveAttribute('data-guarded', '1');
-    expect(screen.getByRole('button', { name: /人工編輯/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /人工編輯/ })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByLabelText('附意見要求再改')).toBeDisabled();
     expect(screen.getByLabelText('附意見要求再改')).toHaveAttribute('title', '流程執行中');
   });
@@ -135,7 +135,7 @@ describe('PRD 頁', () => {
     expect(screen.getByRole('heading', { name: '這個功能已完成' })).toBeInTheDocument();
     expect(screen.getByText('功能已完成並通過人工測試')).toBeInTheDocument();
     for (const name of [/只重新審查目前版本/, /核准 PRD/, /要求再改/, /人工編輯/]) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /查看封存紀錄/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /查看封存紀錄/ })).toBeUsable();
     await userEvent.click(screen.getByRole('button', { name: /到需求待辦開始新需求/ }));
     expect(await screen.findByText('需求待辦畫面')).toBeInTheDocument();
   });

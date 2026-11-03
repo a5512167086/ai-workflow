@@ -61,12 +61,12 @@ describe('需求待辦', () => {
     const item = (await screen.findByText('鎖住的需求')).closest('li')!;
     for (const act of ['references', 'edit', 'delete', 'draft']) {
       const button = item.querySelector<HTMLButtonElement>(`[data-act="${act}"]`)!;
-      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('aria-disabled', 'true');
       expect(button.dataset.guarded).toBe('1');
     }
     expect(within(item).getAllByText('這項需求已產生目前的 PRD，不能再修改').length).toBeGreaterThan(0);
     // 排序不受影響
-    expect(item.querySelector<HTMLButtonElement>('[data-act="down"]')).toBeEnabled();
+    expect(item.querySelector<HTMLButtonElement>('[data-act="down"]')).toBeUsable();
     // 就算畫面還沒更新被點到，也不會呼叫後端
     fireEvent.click(item.querySelector('[data-act="delete"]')!);
     expect(calls.some((c) => c.path === '/api/backlog/delete')).toBe(false);

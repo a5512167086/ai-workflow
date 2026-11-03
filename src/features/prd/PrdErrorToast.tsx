@@ -47,7 +47,7 @@ export function PrdErrorToast() {
       closeButton: true,
       action: {
         label: '查看 PRD',
-        onClick: (event) => { event.preventDefault(); navigate(`/p/${projectId}/prd`); },
+        onClick: (event) => { event.preventDefault(); void navigate(`/p/${projectId}/prd`); },
       },
       onDismiss: () => {
         if (programmatic.delete(id)) return;

@@ -26,7 +26,7 @@ export function ModelPicker({ provider, value, onChange, placeholder, className,
   const listId = useId();
   const all = options?.[provider]?.models || [];
 
-  useEffect(() => { if (open) useModels.getState().load(); }, [open]);
+  useEffect(() => { if (open) void useModels.getState().load(); }, [open]);
 
   const items = useMemo<ModelInfo[]>(() => {
     const query = filter ? value.trim().toLowerCase() : '';

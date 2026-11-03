@@ -18,7 +18,7 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const snap = useProject((s) => s.snap);
   const api = useProject((s) => s.api);
-  const go = (to: string) => { setOpen(false); navigate(to); };
+  const go = (to: string) => { setOpen(false); void navigate(to); };
   const run = (fn: () => unknown) => { setOpen(false); void fn(); };
   const guard = (name: string) => snap?.guards?.[name] || '';
   return (

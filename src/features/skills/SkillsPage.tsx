@@ -66,11 +66,18 @@ function SkillPicker({ stage, names, descriptions, onPick, onClose }: { stage: S
   useEffect(() => {
     const onClick = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
     const t = setTimeout(() => document.addEventListener('click', onClick), 0);
-    ref.current?.querySelector('button')?.focus();
+    (ref.current?.querySelector<HTMLElement>('button') ?? ref.current)?.focus();
     return () => { clearTimeout(t); document.removeEventListener('click', onClick); };
   }, [onClose]);
   return (
-    <div ref={ref} role="menu" aria-label={`加入技能到${SKILL_STAGE_LABELS[stage]}`} className="absolute left-0 top-full z-20 mt-1 flex min-w-44 flex-col gap-0.5 rounded-md border bg-popover p-1 shadow-md" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}>
+    <div ref={ref} role="menu" tabIndex={-1} aria-label={`加入技能到${SKILL_STAGE_LABELS[stage]}`} className="absolute left-0 top-full z-20 mt-1 flex min-w-44 flex-col gap-0.5 rounded-md border bg-popover p-1 shadow-md outline-none" onKeyDown={(e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const items = [...(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') || [])];
+      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+    }}>
       {!names.length && <p className="px-2 py-1 text-xs text-muted-foreground">沒有可加入的相容技能</p>}
       {names.map((name) => (
         <button key={name} type="button" role="menuitem" title={descriptions[name] || ''} className="rounded px-2 py-1 text-left font-mono text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none" onClick={() => onPick(name)}>{name}</button>
@@ -227,7 +234,7 @@ export function SkillsPage() {
       `以下是需求釐清／設計會議紀錄。以使用者回答為準，AI 建議仍需區分假設與待決策事項。\n\n${messages.map((m) => `${m.role}: ${m.text}`).join('\n\n')}`,
     );
     toast.success('已帶入需求待辦，確認後按新增');
-    navigate(`/p/${snap.project.id}/backlog`);
+    void navigate(`/p/${snap.project.id}/backlog`);
   });
 
   const saveBindings = handle(async () => {
@@ -409,7 +416,7 @@ export function SkillsPage() {
                       </div>
                     </div>
                   ) : skill && (
-                    <div className="min-h-0 flex-1 overflow-auto p-4" tabIndex={0}>
+                    <div className="min-h-0 flex-1 overflow-auto p-4">
                       <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs" aria-label="frontmatter">
                         {(skillFrontmatter(skill.text).length ? skillFrontmatter(skill.text) : [['name', skill.name], ['description', skill.description || '']] as [string, string][]).map(([key, value]) => {
                           const ext = skill.extensions?.includes(key);
@@ -450,7 +457,7 @@ export function SkillsPage() {
                       <Button type="button" variant="outline" size="sm" disabled={!effectiveRunId} onClick={() => { setRunId(''); setRunFresh(true); inputRef.current?.focus(); }}>新會議</Button>
                       <Button type="button" variant="outline" size="sm" disabled={!run || !effectiveRunId || run.status !== 'done'} onClick={toBacklog}>帶入需求待辦</Button>
                     </div>
-                    <div ref={messagesRef} className="min-h-0 flex-1 overflow-auto p-4" role="log" aria-live="polite" tabIndex={0}>
+                    <div ref={messagesRef} className="min-h-0 flex-1 overflow-auto p-4" role="log" aria-live="polite">
                       {!effectiveRunId || !run ? (
                         <div className="mx-auto max-w-lg py-10 text-center">
                           <Eyebrow>技能會議</Eyebrow>

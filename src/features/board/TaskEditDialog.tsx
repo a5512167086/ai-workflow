@@ -69,7 +69,7 @@ export function TaskEditDialog({ detail, open, onOpenChange, onSaved }: { detail
                     </SelectContent>
                   </Select>
                 ) : type === 'input' || type === 'dependencies' ? (
-                  <Input id={id} value={value} onChange={(e) => set(e.target.value)} autoFocus={key === 'title'} />
+                  <Input id={id} value={value} onChange={(e) => set(e.target.value)} data-autofocus={key === 'title' || undefined} />
                 ) : (
                   <Textarea id={id} rows={3} value={value} onChange={(e) => set(e.target.value)} />
                 )}

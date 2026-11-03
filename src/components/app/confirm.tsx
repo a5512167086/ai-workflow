@@ -75,7 +75,7 @@ export function ConfirmHost() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => finish(false)}>{o.cancelText || '取消'}</AlertDialogCancel>
-            <AlertDialogAction autoFocus className={cn(o.destructive && buttonVariants({ variant: 'destructive' }))} onClick={() => finish(true)}>
+            <AlertDialogAction data-autofocus className={cn(o.destructive && buttonVariants({ variant: 'destructive' }))} onClick={() => finish(true)}>
               {o.confirmText || '確定'}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -92,7 +92,7 @@ export function ConfirmHost() {
             <DialogTitle>{o.title}</DialogTitle>
             {o.description && <DialogDescription>{o.description}</DialogDescription>}
           </DialogHeader>
-          <Input autoFocus value={value} placeholder={o.placeholder} onChange={(e) => setValue(e.target.value)} aria-label={o.title} />
+          <Input data-autofocus value={value} placeholder={o.placeholder} onChange={(e) => setValue(e.target.value)} aria-label={o.title} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => finish(null)}>取消</Button>
             <Button type="submit">{o.confirmText || '確定'}</Button>

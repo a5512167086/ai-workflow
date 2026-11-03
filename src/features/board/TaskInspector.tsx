@@ -138,6 +138,14 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
   const [editing, setEditing] = useState(false);
   const selection = useRef(0);
   const title = useRef<HTMLHeadingElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = panel.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const load = useCallback(async (first = false) => {
     const current = ++selection.current;
@@ -155,7 +163,7 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
     }
   }, [api, id]);
 
-  useEffect(() => { setDetail(null); setError(''); setRevert(false); load(true); }, [id, load]);
+  useEffect(() => { setDetail(null); setError(''); setRevert(false); void load(true); }, [id, load]);
   // 狀態更新後重新讀取詳情（去抖 300ms，與舊版相同）。
   useEffect(() => { const t = setTimeout(() => load(), 300); return () => clearTimeout(t); }, [snap, load]);
   useEffect(() => { if (autoEdit && detail) { setEditing(true); onAutoEditHandled?.(); } }, [autoEdit, detail, onAutoEditHandled]);
@@ -169,15 +177,15 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
   const onAccept = async () => {
     const ok = await confirmDialog({ title: `接受任務 ${id} 目前的實作？`, description: '會重新跑一次驗證指令，通過後不再送審查，直接進入人工驗收。審查意見會保留在「審查意見」分頁。', confirmText: '接受' });
     if (!ok) return;
-    runAction(api, snap, '/api/task/accept', { id }, `任務 ${id} 已接受，重新驗證中`);
+    void runAction(api, snap, '/api/task/accept', { id }, `任務 ${id} 已接受，重新驗證中`);
   };
   const onRerun = async () => {
     if (revert && !(await confirmDialog({ title: '會還原這個任務的變更後重跑，確定？', confirmText: '還原並重跑', destructive: true }))) return;
-    runAction(api, snap, '/api/task/rerun', { id, revert }, `任務 ${id} 重跑中`);
+    void runAction(api, snap, '/api/task/rerun', { id, revert }, `任務 ${id} 重跑中`);
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-task-inspector onKeyDown={(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } }}>
+    <div ref={panel} className="flex h-full min-h-0 flex-col" data-task-inspector>
       <div className="flex shrink-0 items-start gap-2 border-b px-3 py-2">
         <h2 ref={title} tabIndex={-1} className="min-w-0 flex-1 text-[14px] font-semibold leading-5 break-words outline-none">
           {detail ? `#${detail.id} ${task?.title || ''}` : error ? `任務 #${id} 載入失敗` : `載入任務 #${id}`}

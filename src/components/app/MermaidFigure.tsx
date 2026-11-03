@@ -9,7 +9,7 @@ let queue: Promise<unknown> = Promise.resolve();
 let serial = 0;
 
 async function renderMermaid(source: string, dark: boolean): Promise<string> {
-  if (source.length > 30000 || /%%\s*\{|^\s*---/m.test(source)) throw new Error('圖表過大或含自訂設定，請使用下方原始碼');
+  if (source.length > 30000 || /%%\s*\{/.test(source) || /^[ \t]*---/m.test(source)) throw new Error('圖表過大或含自訂設定，請使用下方原始碼');
   const { default: mermaid } = await import('mermaid');
   mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: dark ? 'dark' : 'default', fontFamily: 'Segoe UI, Microsoft JhengHei, sans-serif', flowchart: { htmlLabels: false }, maxTextSize: 30000 });
   const { svg } = await mermaid.render(`chat-diagram-${++serial}`, source);

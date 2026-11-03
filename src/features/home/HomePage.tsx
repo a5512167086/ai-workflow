@@ -1,5 +1,5 @@
 // 所有專案：加入專案、等你處理的專案、專案卡片。佇列資訊在底部狀態列，這裡不重複。
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { AlertTriangle, FolderOpen, MoreHorizontal, Plus, ArrowRight, Trash2 } from 'lucide-react';
@@ -29,19 +29,14 @@ function ProjectCard({ project, onRemove }: { project: ProjectSummary; onRemove:
   const feature = (project.feature || '').split('\n')[0];
   const href = `/p/${project.id}`;
   const open = () => navigate(href);
-  const onKey = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); open(); }
-  };
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <article
-          tabIndex={0}
-          onKeyDown={onKey}
-          onDoubleClick={open}
+          onDoubleClick={() => { void open(); }}
           aria-labelledby={`pc-${project.id}`}
           data-testid="project-card"
-          className={cn('flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring', project.attention && 'border-warn/60')}
+          className={cn('flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 transition-colors focus-within:border-ring', project.attention && 'border-warn/60')}
         >
           <div className="flex items-start justify-between gap-2">
             <h3 className="min-w-0 truncate text-[14px] font-semibold leading-5">
@@ -111,7 +106,7 @@ function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       setPath('');
       onOpenChange(false);
       await refresh();
-      if (res.project?.id) navigate(`/p/${res.project.id}`);
+      if (res.project?.id) void navigate(`/p/${res.project.id}`);
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -137,7 +132,7 @@ function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           <div className="grid gap-1.5">
             <Label htmlFor="add-path">專案資料夾</Label>
             <div className="flex gap-2">
-              <Input id="add-path" ref={inputRef} autoFocus className="mono flex-1" placeholder="例如：C:\code\my-app" spellCheck={false} value={path} onChange={(e) => setPath(e.target.value)} />
+              <Input id="add-path" ref={inputRef} data-autofocus className="mono flex-1" placeholder="例如：C:\code\my-app" spellCheck={false} value={path} onChange={(e) => setPath(e.target.value)} />
               {inTauri && <Button type="button" variant="outline" onClick={pick}><FolderOpen className="size-4" />選擇資料夾</Button>}
             </div>
           </div>

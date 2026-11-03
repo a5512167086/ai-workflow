@@ -49,7 +49,7 @@ export function PrdEditDialog({ onClose }: { onClose: () => void }) {
               spellCheck={false}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              autoFocus
+              data-autofocus
             />
           </ResizablePanel>
           <ResizableHandle withHandle />

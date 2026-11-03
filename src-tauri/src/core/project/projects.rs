@@ -23,8 +23,9 @@ fn key(p: &Path) -> String {
 }
 
 /// sha1(正規化路徑) 的前 10 碼；也是 <home>/projects/<id>/ 的資料夾名稱。
+/// 這只是把路徑變成穩定、簡短的資料夾名稱，不是密碼學用途（沒有驗證、簽章或保密）；換演算法會讓所有既有專案的資料夾對不上。
 pub fn project_id(root: &Path) -> String {
-    hex::encode(Sha1::digest(key(root).as_bytes()))[..10].to_string()
+    hex::encode(Sha1::digest(key(root).as_bytes()))[..10].to_string() // NOSONAR：非安全用途的識別碼，見上方說明
 }
 
 fn load() -> Vec<Value> {

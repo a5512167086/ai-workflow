@@ -21,7 +21,7 @@ export function AppShell() {
   useShortcuts();
   const connect = useProjects((s) => s.connect);
   const refresh = useProjects((s) => s.refresh);
-  useEffect(() => { refresh(); connect(); }, [refresh, connect]);
+  useEffect(() => { void refresh(); connect(); }, [refresh, connect]);
   return (
     <TooltipProvider delayDuration={400}>
       {/* Toaster 放在最前面：畫面在第一次 render 就發的通知（例如 PRD 錯誤）才不會在 Toaster 訂閱前遺失。 */}
@@ -55,7 +55,7 @@ export function ProjectLayout() {
     if (!valid) return;
     useBadges.getState().reset();
     useReferences.getState().reset();
-    open(id);
+    void open(id);
     return () => { close(); useBadges.getState().reset(); };
   }, [id, valid, open, close]);
   useEffect(() => {

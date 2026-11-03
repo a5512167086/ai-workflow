@@ -53,14 +53,23 @@ export function parseLog(text: string | null | undefined): LogItem[] {
 
 /** 區塊裡的行：🔧 開頭是工具呼叫，其餘連續的文字行合併成一段。 */
 export type LogSegment = { kind: 'tool'; name: string; arg: string } | { kind: 'text'; text: string; warn: boolean };
+/** 「🔧 名稱 參數」這種工具呼叫行（名稱是第一段非空白，參數是之後的全部）。 */
+function toolCall(line: string): { name: string; arg: string } | null {
+  if (!line.startsWith('🔧 ')) return null;
+  const rest = line.slice('🔧 '.length);
+  const space = rest.search(/\s/);
+  if (space === 0 || !rest) return null;
+  return space < 0 ? { name: rest, arg: '' } : { name: rest.slice(0, space), arg: rest.slice(space + 1) };
+}
+
 export function segmentLines(lines: LogLine[]): LogSegment[] {
   const out: LogSegment[] = [];
   let text: Extract<LogSegment, { kind: 'text' }> | null = null;
   for (const l of lines) {
-    const tool = l.text.match(/^🔧 (\S+)\s?(.*)$/);
+    const tool = toolCall(l.text);
     if (tool) {
       text = null;
-      out.push({ kind: 'tool', name: tool[1], arg: tool[2] });
+      out.push({ kind: 'tool', ...tool });
     } else if (!text) {
       text = { kind: 'text', text: l.text, warn: l.text.startsWith('⚠') || l.text.startsWith('✖') };
       out.push(text);

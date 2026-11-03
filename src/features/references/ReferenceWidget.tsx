@@ -7,9 +7,8 @@
 //   <ReferenceChips ids remove? />          訊息裡的附件 chips
 import { toast } from 'sonner';
 import { Plus, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Hint } from '@/components/app/Page';
+import { GuardButton } from '@/components/app/GuardButton';
 import { errorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useReferences, referenceName } from '@/stores/references';
@@ -46,21 +45,13 @@ export function ReferenceChips({ ids, remove, className }: { ids: string[]; remo
 
 export function ReferenceWidget({ options, className }: { options: ReferenceOptions; className?: string }) {
   const lock = options.lock;
-  const button = (
-    <Button type="button" variant="outline" size="sm" disabled={!!lock} aria-label={`加入參考：${options.title}`} onClick={() => openReferenceDialog(options)}>
-      <Plus className="size-3" />加入參考
-    </Button>
-  );
   return (
     <div className={cn('flex flex-col gap-1.5', lock && 'opacity-90', className)} data-reference-widget={options.key || options.target}>
       <div className="flex flex-wrap items-center gap-2">
         <Hint>{options.title}</Hint>
-        {lock ? (
-          <Tooltip>
-            <TooltipTrigger asChild><span className="inline-flex" tabIndex={0}>{button}</span></TooltipTrigger>
-            <TooltipContent className="max-w-xs">{lock}</TooltipContent>
-          </Tooltip>
-        ) : button}
+        <GuardButton type="button" variant="outline" size="sm" guard={lock} aria-label={`加入參考：${options.title}`} onClick={() => openReferenceDialog(options)}>
+          <Plus className="size-3" />加入參考
+        </GuardButton>
       </div>
       <ReferenceChips ids={options.ids} remove={lock ? undefined : (id) => saveReferenceSelection(options, options.ids.filter((value) => value !== id)).catch((err) => toast.error(errorMessage(err)))} />
       {lock && <Hint>{lock}</Hint>}

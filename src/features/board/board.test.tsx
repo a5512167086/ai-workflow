@@ -15,13 +15,13 @@ describe('任務看板', () => {
     }));
     renderBoard(<BoardPage />);
     const start = screen.getByRole('button', { name: /開始/ });
-    expect(start).toBeDisabled();
+    expect(start).toHaveAttribute('aria-disabled', 'true');
     const approve = screen.getByRole('button', { name: '檢視後核准任務' });
-    expect(approve).toBeEnabled();
+    expect(approve).toBeUsable();
     await userEvent.click(approve);
     await waitFor(() => expect(api.calls.some((c) => c.path === '/api/tasks/approve' && (c.body as { revision: string }).revision === 'r1')).toBe(true));
-    await waitFor(() => expect(screen.getByRole('button', { name: /開始/ })).toBeEnabled());
-    expect(screen.getByRole('button', { name: '任務已核准' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /開始/ })).toBeUsable());
+    expect(screen.getByRole('button', { name: '任務已核准' })).toHaveAttribute('aria-disabled', 'true');
     expect(useProject.getState().snap?.state.task_approval?.revision).toBe('r1');
   });
 
@@ -95,7 +95,7 @@ describe('任務看板', () => {
     const api = setupProject(makeSnapshot({ guards: { 'run.start': '流程等待人工' } }, { pipeline: { status: 'waiting' } }));
     renderBoard(<BoardPage />);
     const cont = screen.getByRole('button', { name: '我測完了，繼續' });
-    expect(cont).toBeEnabled();
+    expect(cont).toBeUsable();
     expect(cont).toHaveAttribute('data-variant', 'default');
     expect(screen.getByRole('button', { name: /開始/ })).toHaveAttribute('data-variant', 'outline');
     await userEvent.click(cont);

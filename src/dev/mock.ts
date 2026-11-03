@@ -266,7 +266,7 @@ async function handleApi(method: string, path: string, body: Record<string, unkn
     case 'doctor': return { lines: ['Windows', '  claude 2.1.0（已登入）', '  codex 0.60（已登入）', 'WSL', '  未安裝'] };
     case 'usage/refresh': return snapshot().usage;
     case 'graph/build': return handleApi('GET', path.replace('graph/build', 'graph'), null);
-    case 'backlog/add': { const item: BacklogItem = { id: Math.random().toString(16).slice(2, 12), title: String(b.title), detail: String(b.detail || ''), status: 'open', references: (b.references as string[]) || [], created_at: now(), updated_at: now() }; backlog.push(item); return { item }; }
+    case 'backlog/add': { const item: BacklogItem = { id: crypto.randomUUID().replace(/-/g, '').slice(0, 10), title: String(b.title), detail: String(b.detail || ''), status: 'open', references: (b.references as string[]) || [], created_at: now(), updated_at: now() }; backlog.push(item); return { item }; }
     case 'backlog/update': { const item = backlog.find((i) => i.id === b.id); if (item) Object.assign(item, { title: b.title, detail: b.detail, updated_at: now() }); return { item }; }
     case 'backlog/delete': { const i = backlog.findIndex((x) => x.id === b.id); if (i >= 0) backlog.splice(i, 1); return { items: [...backlog] }; }
     case 'backlog/reorder': { const ids = b.ids as string[]; backlog.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id)); return { items: [...backlog] }; }

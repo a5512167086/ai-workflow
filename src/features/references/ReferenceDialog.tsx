@@ -68,7 +68,7 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
     importingRef.current = false; setImporting(false);
   };
   useEffect(() => {
-    importPaths = (paths) => runJobs(paths.map((p) => () => importReference({ path: p })));
+    importPaths = (paths) => { void runJobs(paths.map((p) => () => importReference({ path: p }))); };
     return () => { importPaths = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -86,7 +86,7 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
       if (dir) await runJobs([() => importReference({ path: dir })]);
     } catch (err) { setStatus(`${errorMessage(err)}；也可以貼上完整路徑。`); }
   };
-  const addPath = () => { const p = path.trim(); if (p) runJobs([() => importReference({ path: p })]); };
+  const addPath = () => { const p = path.trim(); if (p) void runJobs([() => importReference({ path: p })]); };
   const apply = async () => {
     try {
       if (chosen.size > MAX_REFERENCES) throw new Error(`最多選取 ${MAX_REFERENCES} 份參考資料`);
@@ -98,7 +98,7 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
   const items = [...catalog.values()];
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !importingRef.current) close(); }}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-xl" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); runJobs([...e.dataTransfer.files].map((f) => () => uploadReference(f))); }} onEscapeKeyDown={(e) => { if (importingRef.current) e.preventDefault(); }}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-3 sm:max-w-xl" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); void runJobs([...e.dataTransfer.files].map((f) => () => uploadReference(f))); }} onEscapeKeyDown={(e) => { if (importingRef.current) e.preventDefault(); }}>
         <DialogHeader>
           <DialogTitle>{options.title}</DialogTitle>
           <DialogDescription>加入檔案、圖片、PDF 或資料夾。資料會保存為專案內的快照，來源更新後請重新加入。可拖放到這個視窗。</DialogDescription>
@@ -106,7 +106,7 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" disabled={importing} onClick={pickFiles}>選擇檔案</Button>
           <Button type="button" variant="outline" disabled={importing} onClick={pickFolder}>選擇資料夾</Button>
-          <input ref={fileInput} type="file" multiple hidden aria-hidden="true" onChange={(e) => { const files = [...(e.target.files || [])]; e.target.value = ''; runJobs(files.map((f) => () => uploadReference(f))); }} />
+          <input ref={fileInput} type="file" multiple hidden onChange={(e) => { const files = [...(e.target.files || [])]; e.target.value = ''; void runJobs(files.map((f) => () => uploadReference(f))); }} />
         </div>
         <div className="flex gap-2">
           <Input value={path} disabled={importing} aria-label="參考檔案或資料夾路徑" placeholder="貼上檔案或資料夾完整路徑" className="mono" onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); addPath(); } }} />

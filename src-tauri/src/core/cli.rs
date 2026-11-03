@@ -124,7 +124,20 @@ fn confirm_prompt(question: &str) -> bool {
 }
 
 /// 執行一個子指令；回傳 process 的結束碙。
+/// 執行一個子指令。PRD 核准、繼續、重跑之後要接著跑流程時（forward），以迴圈改跑新的參數，不遞迴呼叫自己。
 pub fn main(argv: &[String]) -> Result<i32> {
+    let mut argv = argv.to_vec();
+    loop {
+        let mut forward = None;
+        let code = command(&argv, &mut forward)?;
+        match forward {
+            Some(next) => argv = next,
+            None => return Ok(code),
+        }
+    }
+}
+
+fn command(argv: &[String], forward: &mut Option<Vec<String>>) -> Result<i32> {
     let args = parse_args(argv);
     let cmd = args.positional.first().map(String::as_str);
     let rest: Vec<String> = args.positional.iter().skip(1).cloned().collect();
@@ -135,9 +148,10 @@ pub fn main(argv: &[String]) -> Result<i32> {
         prepare_project(root);
     }
 
-    let forward_run = |mut forwarded: Vec<String>| {
+    let mut forward_run = |mut forwarded: Vec<String>| -> Result<i32> {
         if let Some(p) = args.get("use_provider") { forwarded.extend(["--use-provider".into(), p.into()]); }
-        main(&forwarded)
+        *forward = Some(forwarded);
+        Ok(0)
     };
 
     match cmd {

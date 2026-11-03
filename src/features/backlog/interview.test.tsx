@@ -60,7 +60,7 @@ describe('需求釐清會議', () => {
     await userEvent.click(screen.getByRole('button', { name: '確認需求摘要' }));
     await waitFor(() => expect(calls.find((c) => c.path === '/api/backlog/confirm')?.body).toEqual({ id: 'bbb', sessionId: 'req-1', turn: 't1', summary: '# 摘要\n- 匯出 CSV' }));
     expect(await screen.findByRole('button', { name: '已確認' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '開始寫 PRD' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '開始寫 PRD' })).toBeUsable();
     expect(calls.some((c) => c.path === '/api/backlog/draft')).toBe(false);
   });
 
@@ -69,13 +69,13 @@ describe('需求釐清會議', () => {
     renderApp(<InterviewDialog id="bbb" onClose={() => {}} />);
     expect(await screen.findByRole('button', { name: '已確認' })).toBeDisabled();
     const draft = screen.getByRole('button', { name: '開始寫 PRD' });
-    expect(draft).toBeEnabled();
+    expect(draft).toBeUsable();
 
     await userEvent.click(screen.getByRole('radio', { name: '編輯' }));
     await typeInto(screen.getByLabelText('需求摘要 Markdown'), '\n- 多一項');
     expect(screen.getByText('摘要已修改，請重新確認。')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新確認摘要' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: '開始寫 PRD' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重新確認摘要' })).toBeUsable();
+    expect(screen.getByRole('button', { name: '開始寫 PRD' })).toHaveAttribute('aria-disabled', 'true');
     expect(calls.some((c) => c.path === '/api/backlog/confirm')).toBe(false);
   });
 
@@ -96,7 +96,7 @@ describe('需求釐清會議', () => {
     seedProject(makeSnapshot({ guards: { 'backlog.draft': '流程執行中，結束後才能起草' } }));
     renderApp(<InterviewDialog id="bbb" onClose={() => {}} />);
     const draft = await screen.findByRole('button', { name: '開始寫 PRD' });
-    expect(draft).toBeDisabled();
+    expect(draft).toHaveAttribute('aria-disabled', 'true');
     expect(draft.dataset.guarded).toBe('1');
   });
 

@@ -29,7 +29,7 @@ describe('任務詳情', () => {
       ] }),
     }));
     renderInspector('2');
-    expect(await screen.findByRole('button', { name: '接受目前結果' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: '接受目前結果' })).toBeUsable();
     expect(screen.getByText('卡住原因：審查未通過')).toBeInTheDocument();
     expect(screen.getByText('補上測試')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: '審查意見' }));

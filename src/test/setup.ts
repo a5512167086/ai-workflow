@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterEach, vi } from 'vitest';
+import { afterEach, expect, vi } from 'vitest';
 
 afterEach(() => cleanup());
 
@@ -20,3 +20,15 @@ if (!window.ResizeObserver) {
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
 if (!Element.prototype.hasPointerCapture) Element.prototype.hasPointerCapture = () => false;
 if (!Element.prototype.releasePointerCapture) Element.prototype.releasePointerCapture = () => {};
+
+// 按得下去：沒有 disabled，也沒有 aria-disabled（GuardButton 停用但有說明時用 aria-disabled，toBeEnabled 分不出來）。
+expect.extend({
+  toBeUsable(received: HTMLElement) {
+    const disabled = received.matches(':disabled') || received.getAttribute('aria-disabled') === 'true';
+    return { pass: !disabled, message: () => `expected element ${this.isNot ? 'not ' : ''}to be usable (no disabled / aria-disabled)` };
+  },
+});
+declare module 'vitest' {
+  interface Assertion { toBeUsable(): void }
+  interface AsymmetricMatchersContaining { toBeUsable(): void }
+}

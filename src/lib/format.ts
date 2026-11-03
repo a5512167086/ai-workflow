@@ -3,7 +3,7 @@ import type { ModelOptions, Provider, Snapshot, Task, TaskState, Column, Subtask
 
 /** AI 工作中的持續時間文字，例如「1 分 23 秒」；時間無效回傳空字串。 */
 export function elapsedText(since?: string | null, now = Date.now()): string {
-  const ms = since ? now - new Date(since).getTime() : NaN;
+  const ms = since ? now - new Date(since).getTime() : Number.NaN;
   if (!Number.isFinite(ms) || ms < 0) return '';
   const s = Math.floor(ms / 1000);
   return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${Math.floor(s / 3600)} 小時 ${Math.floor((s % 3600) / 60)} 分`;
@@ -17,7 +17,7 @@ export const dateTime = (value?: string | null) => (value ? new Date(value).toLo
 
 /** 審查意見最後一個 VERDICT。 */
 export function verdictOf(text: unknown): string {
-  return [...String(text || '').matchAll(/VERDICT\s*\**\s*[:：]\s*\**\s*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
+  return [...String(text || '').matchAll(/VERDICT[\s*]*[:：][\s*]*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
 }
 /** Codex 有時用自己的 P0–P3：P0/P1 算必須修正，P2/P3 算建議（與後端 only_suggestions 相同）。 */
 export function reviewCounts(text: string) {
@@ -28,13 +28,18 @@ export function reviewCounts(text: string) {
 
 /** SKILL.md 最上面 YAML frontmatter 的頂層欄位（只為顯示，解析在後端）。 */
 export function skillFrontmatter(text: unknown): [string, string][] {
-  const match = String(text || '').replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) return [];
+  // 逐行找開頭的 --- 與下一個 ---（不用跨行的正規表示式，避免大量回溯）。
+  const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/);
+  if (lines[0] !== '---') return [];
+  const end = lines.indexOf('---', 1);
+  if (end < 0) return [];
   const fields: [string, string][] = [];
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
-    if (field) fields.push([field[1], /^[|>][-+]?$/.test(field[2]) ? '' : field[2]]);
-    else if (fields.length && /^\s+\S/.test(line)) fields[fields.length - 1][1] = `${fields[fields.length - 1][1]} ${line.trim()}`.trim();
+  for (const line of lines.slice(1, end)) {
+    // 正規表示式只比對鍵名；值是冒號後面的其餘部分（避免 \s*(.*) 這種會回溯的寫法）。
+    const key = /^[A-Za-z_][\w-]*:/.exec(line);
+    const value = key ? line.slice(key[0].length).trimStart() : '';
+    if (key) fields.push([key[0].slice(0, -1), /^[|>][-+]?$/.test(value) ? '' : value]);
+    else if (fields.length && line.trim() && line.trimStart() !== line) fields[fields.length - 1][1] = `${fields[fields.length - 1][1]} ${line.trim()}`.trim();
   }
   return fields;
 }

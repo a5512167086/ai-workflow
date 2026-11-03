@@ -70,9 +70,11 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
   const [provider, setProvider] = useState<Provider>(() => (snap?.config?.roles?.interviewer || snap?.config?.roles?.author || 'claude') as Provider);
   const [summary, setSummary] = useState('');
   const [summaryView, setSummaryView] = useState<'preview' | 'edit'>('preview');
+  useEffect(() => { if (summaryView === 'edit') summaryRef.current?.focus(); }, [summaryView]);
   const [summaryNote, setSummaryNote] = useState<string | null>(null);
   const summaryTurn = useRef<string | undefined>(undefined);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const closed = useRef(false);
   useSkillCommandInput(inputRef);
@@ -113,7 +115,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
   // 開啟：讀目前會議；還沒有會議就用需求內容啟動第一輪。
   useEffect(() => {
     closed.current = false;
-    (async () => {
+    void (async () => {
       const first = await load();
       if (first && !first.session && !closed.current) {
         setPending(true);
@@ -284,7 +286,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
                   <Hint role="status" className={cn(summaryNote && 'text-danger')}>{noteText}</Hint>
                   <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card p-3">
                     {summaryView === 'edit'
-                      ? <Textarea className="mono h-full min-h-full resize-none" aria-label="需求摘要 Markdown" spellCheck={false} value={summary} onChange={(e) => { setSummary(e.target.value); setSummaryNote(null); }} autoFocus />
+                      ? <Textarea ref={summaryRef} className="mono h-full min-h-full resize-none" aria-label="需求摘要 Markdown" spellCheck={false} value={summary} onChange={(e) => { setSummary(e.target.value); setSummaryNote(null); }} />
                       : <Markdown text={summary} />}
                   </div>
                   <div className="flex shrink-0 justify-end gap-2">

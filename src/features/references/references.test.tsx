@@ -60,7 +60,7 @@ describe('ReferenceWidget 與 chips', () => {
     render(<TooltipProvider><ReferenceWidget options={referenceOptions('feature')} /></TooltipProvider>);
     expect(screen.queryAllByLabelText('移除參考：spec.md')).toHaveLength(1); // 只有第一個（未鎖）widget 有移除鈕
     const locked = screen.getAllByRole('button', { name: /加入參考/ }).at(-1)!;
-    expect(locked).toBeDisabled();
+    expect(locked).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getAllByText('流程執行中').length).toBeGreaterThan(0);
   });
   it('ReferenceChips 顯示名稱並可移除', () => {

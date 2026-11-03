@@ -127,7 +127,7 @@ export function UsagePage() {
     }
   }, [api]);
 
-  useEffect(() => { if (Date.now() - lastUsageRefresh > 60000) refresh(); }, [refresh]);
+  useEffect(() => { if (Date.now() - lastUsageRefresh > 60000) void refresh(); }, [refresh]);
 
   if (!usage) return <Page><PageHeader title="Token 用量與訂閱額度" /><Loading label="讀取用量…" /></Page>;
   return (

@@ -21,15 +21,15 @@ export function useShortcuts() {
         useUi.getState().setPaletteOpen(!useUi.getState().paletteOpen);
         return;
       }
-      if (key === ',' ) { e.preventDefault(); navigate('/settings'); return; }
+      if (key === ',' ) { e.preventDefault(); void navigate('/settings'); return; }
       if (key === 'b' && !typing) { e.preventDefault(); const ui = useUi.getState(); ui.setSidebarCollapsed(!ui.sidebarCollapsed); return; }
-      if (key === 'o' && e.shiftKey) { e.preventDefault(); navigate('/'); return; }
+      if (key === 'o' && e.shiftKey) { e.preventDefault(); void navigate('/'); return; }
       const n = Number(e.key);
       if (!e.shiftKey && !e.altKey && n >= 1 && n <= PROJECT_VIEWS.length) {
         const id = useProject.getState().id;
         if (!id) return;
         e.preventDefault();
-        navigate(`/p/${id}/${PROJECT_VIEWS[n - 1].key}`);
+        void navigate(`/p/${id}/${PROJECT_VIEWS[n - 1].key}`);
       }
     };
     window.addEventListener('keydown', onKey);

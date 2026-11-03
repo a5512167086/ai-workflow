@@ -176,7 +176,7 @@ export function RecordsPage() {
 
   const prdStatus = snap.state.prd.status;
   const prdRounds = snap.state.prd.rounds.length;
-  useEffect(() => { loadHistory(); }, [loadHistory, prdStatus, prdRounds]);
+  useEffect(() => { void loadHistory(); }, [loadHistory, prdStatus, prdRounds]);
 
   const scopes = useMemo(() => logScopes(snap, logs), [snap, logs]);
   useEffect(() => { if (!scopes.includes(scope)) setScope('runner'); }, [scopes, scope]);

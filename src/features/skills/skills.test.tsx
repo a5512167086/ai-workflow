@@ -125,7 +125,7 @@ describe('Skills 頁', () => {
     await user.click(within(menu).getByRole('menuitem', { name: 'tdd' }));
     expect(within(prdRow).getByText('tdd')).toBeInTheDocument();
     expect(screen.getByText('有未儲存的變更。')).toBeInTheDocument();
-    expect(save).toBeEnabled();
+    expect(save).toBeUsable();
     await user.click(within(rows[4]).getByRole('button', { name: '從實作移除 tdd' }));
     expect(within(rows[4]).queryByText('tdd')).not.toBeInTheDocument();
     await user.click(save);
