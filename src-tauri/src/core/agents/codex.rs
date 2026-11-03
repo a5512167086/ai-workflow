@@ -21,6 +21,9 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
     let approval = if write { cfg["codex"]["approval_policy"].as_str().filter(|p| ["on-request", "untrusted", "never"].contains(p)).unwrap_or("on-request") } else { "never" };
     let mut thread_params = json!({ "cwd": spec.to_path(root)?, "sandbox": if write { "workspace-write" } else { "read-only" }, "approvalPolicy": approval, "ephemeral": true });
     if !model.is_empty() { thread_params["model"] = json!(model); }
+    // Windows 上 Codex 用 Windows PowerShell 5.1 跑指令：Get-Content 會把沒有 BOM 的 UTF-8 當成系統編碼讀成亂碼，
+    // 輸出接到管線時又用 IBM437，中文變成「?」。AI 讀到亂碼會誤判，所以每次都提醒它用 rg 或明確指定 UTF-8。
+    let prompt = if spec.runtime == "windows" { format!("{prompt}{WINDOWS_SHELL_NOTE}") } else { prompt.to_string() };
     let mut input = vec![json!({ "type": "text", "text": prompt })];
     for image in &references.images { input.push(json!({ "type": "localImage", "path": spec.to_path(image)? })); }
     let mut turn_params = json!({ "input": input });
@@ -77,7 +80,7 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
                         last_message = item["text"].as_str().unwrap_or("").to_string();
                         append_log(root, scope, &last_message);
                     }
-                    Some("commandExecution") => append_log(root, scope, &format!("$ {}\n{}", item["command"].as_str().unwrap_or(""), item["aggregatedOutput"].as_str().unwrap_or(""))),
+                    Some("commandExecution") => append_log(root, scope, &format!("$ {}\n{}", item["command"].as_str().unwrap_or(""), clip_output(item["aggregatedOutput"].as_str().unwrap_or("")))),
                     Some("fileChange") => {
                         let paths: Vec<&str> = item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect();
                         append_log(root, scope, &format!("✎ {}", paths.join("、")));
@@ -108,7 +111,7 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
     let res = {
         let mut on_out = |d: &str| buffer.push(d, &mut handle);
         // app-server 的 stderr 是除錯紀錄（含顏色碼），只留錯誤等級的行。
-        let mut on_err = |d: &str| { let clean = ANSI.replace_all(d, ""); for line in clean.lines().filter(|l| l.contains("ERROR")) { append_log(root, scope, line.trim()); } };
+        let mut on_err = |d: &str| { let clean = ANSI.replace_all(d, ""); for line in clean.lines().filter(|l| l.contains("ERROR")) { append_log(root, scope, &clip_error_line(line)); } };
         run(&spec, &args, RunOpts { cwd: Some(root), input: Some(&format!("{initialize}\n")), timeout_sec: timeout, cancel_file: scope.strip_prefix("chat-").and_then(|turn| crate::core::chat::cancel_file(root, turn)), on_stdout: Some(&mut on_out), on_stderr: Some(&mut on_err), stdin_rx: Some(stdin_rx), ..Default::default() })
     };
     finished.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -128,5 +131,7 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
     }
     Ok(CliOutcome { ok: true, text, error: None })
 }
+
+const WINDOWS_SHELL_NOTE: &str = "\n\n## Windows 指令注意\n- 這裡的 shell 是 Windows PowerShell 5.1：`Get-Content` 不加 `-Encoding utf8` 會把 UTF-8 檔案讀成亂碼，輸出中文也可能變成「?」。\n- 讀檔與搜尋優先用 `rg`（例如 `rg -n \"\" 檔案` 讀整個檔案、`rg --files` 列檔案）。\n- 一定要用 PowerShell 讀檔時，先執行 `[Console]::OutputEncoding = [Text.Encoding]::UTF8`，再用 `Get-Content -Encoding utf8`。\n- 看到亂碼或一排「?」時，代表編碼讀錯了，請換上面的方法重讀，不要依亂碼內容下判斷。";
 
 static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*m").unwrap());

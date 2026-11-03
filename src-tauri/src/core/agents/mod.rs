@@ -271,10 +271,51 @@ pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> 
     Ok(reviews)
 }
 
-/// 審查判 FAIL，但所有意見都標成 [建議]、沒有任何 [必須修正]：依審查規則應該是通過。
+/// 審查意見的等級標記。Codex 習慣用自己的 P0–P3：P0/P1 是要擋下的問題，P2/P3 是之後再改也可以的。
+const MUST_FIX_TAGS: [&str; 3] = ["[必須修正]", "[P0]", "[P1]"];
+const SUGGESTION_TAGS: [&str; 3] = ["[建議]", "[P2]", "[P3]"];
+
+/// 審查判 FAIL，但所有意見都標成 [建議]（或 P2/P3）、沒有任何 [必須修正]（或 P0/P1）：依審查規則應該是通過。
 /// 沒有標等級的舊格式回覆維持原判（保守）。
 pub fn only_suggestions(text: &str) -> bool {
-    text.contains("[建議]") && !text.contains("[必須修正]")
+    SUGGESTION_TAGS.iter().any(|t| text.contains(t)) && !MUST_FIX_TAGS.iter().any(|t| text.contains(t))
+}
+
+/// 卡住時給使用者看的審查問題：優先列 [必須修正]／P0／P1 的條目；沒有標等級時列出所有條列項目。
+pub fn blocking_items(text: &str) -> Vec<String> {
+    let items: Vec<&str> = text.lines().map(str::trim)
+        .filter(|l| l.starts_with("- ") || l.starts_with("* ") || l.split_once(". ").is_some_and(|(n, _)| n.parse::<u32>().is_ok()))
+        .collect();
+    let must: Vec<&str> = items.iter().copied().filter(|l| MUST_FIX_TAGS.iter().any(|t| l.contains(t))).collect();
+    let picked = if must.is_empty() { items } else { must };
+    picked.into_iter().take(8).map(|l| {
+        let l = l.trim_start_matches(['-', '*', ' ']);
+        if l.chars().count() > 300 { format!("{}…", l.chars().take(300).collect::<String>()) } else { l.to_string() }
+    }).collect()
+}
+
+/// 寫進 Log 的指令輸出：太長時只留前後幾行，完整內容 AI 自己看得到，Log 只是讓人知道它做了什麼。
+pub fn clip_output(text: &str) -> String {
+    const HEAD: usize = 20;
+    const TAIL: usize = 10;
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    let clipped = if lines.len() > HEAD + TAIL + 5 {
+        format!("{}\n…（省略 {} 行）\n{}", lines[..HEAD].join("\n"), lines.len() - HEAD - TAIL, lines[lines.len() - TAIL..].join("\n"))
+    } else {
+        lines.join("\n")
+    };
+    prompts::clip(&clipped, 4000)
+}
+
+/// 寫進 Log 的錯誤行：去掉夾帶的 HTML 錯誤頁（例如被 Cloudflare 擋下的 403），太長就截斷。
+pub fn clip_error_line(line: &str) -> String {
+    let (line, html) = match line.find("<html").or_else(|| line.find("<!DOCTYPE")) {
+        Some(at) => (&line[..at], true),
+        None => (line, false),
+    };
+    let mut out: String = line.trim().chars().take(300).collect();
+    if html { out.push_str("…（HTML 錯誤頁已省略）"); } else if line.trim().chars().count() > 300 { out.push('…'); }
+    out
 }
 
 /// 給修訂者看的審查意見：雙人審查時依 AI 分段。
@@ -326,5 +367,32 @@ mod tests {
         assert_eq!(parse_verdict("範例 VERDICT: PASS\n...\nVERDICT: FAIL", &["PASS"]), (false, "FAIL".into()));
         assert_eq!(parse_verdict("**VERDICT:** APPROVE", &["APPROVE"]), (true, "APPROVE".into()));
         assert!(!parse_verdict("沒有結論", &["PASS"]).0);
+    }
+
+    #[test]
+    fn 審查等級_認得_codex_的_p0_到_p3() {
+        assert!(only_suggestions("- [建議] 改名\nVERDICT: FAIL"));
+        assert!(only_suggestions("- [P2] 測試可以更完整\n- [P3] 命名\nVERDICT: FAIL"));
+        assert!(!only_suggestions("- [P1] 沒做到驗收條件\n- [P2] 測試\nVERDICT: FAIL"));
+        assert!(!only_suggestions("- [P0] 安全問題"));
+        assert!(!only_suggestions("- 沒有標等級的意見\nVERDICT: FAIL"));
+    }
+
+    #[test]
+    fn 卡住原因_優先列必須修正_沒標等級就列全部() {
+        let text = "我會檢查介面。\n- [P1] `a.ts:3`：沒做到 AC-02\n- [P2] `b.ts:9`：測試不夠\n\nVERDICT: FAIL";
+        assert_eq!(blocking_items(text), vec!["[P1] `a.ts:3`：沒做到 AC-02"]);
+        assert_eq!(blocking_items("1. 少了錯誤處理\n2. 少了測試\nVERDICT: FAIL"), vec!["1. 少了錯誤處理", "2. 少了測試"]);
+        assert!(blocking_items("VERDICT: FAIL").is_empty());
+    }
+
+    #[test]
+    fn log_的指令輸出與錯誤行會截短() {
+        let long: String = (1..=100).map(|i| format!("line {i}\n")).collect();
+        let out = clip_output(&long);
+        assert!(out.starts_with("line 1\n") && out.contains("…（省略 70 行）") && out.ends_with("line 100"));
+        assert_eq!(clip_output("a\nb\n"), "a\nb");
+        let err = clip_error_line("ERROR rmcp: HTTP 403: <html>\n<head>很長的網頁</head></html>");
+        assert_eq!(err, "ERROR rmcp: HTTP 403:…（HTML 錯誤頁已省略）");
     }
 }

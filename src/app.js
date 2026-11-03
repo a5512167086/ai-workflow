@@ -560,6 +560,7 @@ function renderDetail() {
   if (snap.guards) { applyGuard($('#d-rerun'), guardOf('task.rerun')); applyGuard($('#d-revert'), guardOf('task.rerun')); }
   else $('#d-rerun').disabled = snap.runnerAlive;
   renderAcceptButton(ts);
+  renderStuckReason(ts);
   $('#d-revert').parentElement.title = ts.commit ? `會 git revert ${ts.commit.slice(0, 8)}` : '手動模式沒有 commit：會把這個任務改過的檔案還原到任務開始前（之後任務對同檔案的修改也會一起還原）';
   renderTaskGates(t, ts);
   for (const b of $$('[data-sub]')) {
@@ -598,6 +599,24 @@ function renderAcceptButton(ts) {
   const { show, reason } = acceptReason(ts);
   button.hidden = !show;
   if (show) applyGuard(button, reason);
+}
+
+/** 卡住的任務：在詳情最上面寫出原因；審查卡住時列出最後一次審查要求修正的項目。 */
+function renderStuckReason(ts) {
+  const box = $('#d-stuck');
+  if (!box) return;
+  box.hidden = ts.phase !== 'stuck' || !ts.error;
+  if (box.hidden) return box.replaceChildren();
+  const title = document.createElement('strong');
+  title.textContent = `卡住原因：${ts.error}`;
+  box.replaceChildren(title);
+  const reasons = Array.isArray(ts.stuck_reasons) ? ts.stuck_reasons : [];
+  if (!reasons.length) return;
+  const intro = document.createElement('p');
+  intro.textContent = '最後一次審查要求修正的項目（完整內容在「審查意見」分頁）：';
+  const list = document.createElement('ul');
+  for (const reason of reasons) list.append(Object.assign(document.createElement('li'), { textContent: reason }));
+  box.append(intro, list);
 }
 
 function renderTaskGates(task, state) {
@@ -739,8 +758,9 @@ function reviewsView(reviews) {
       who.textContent = PROVIDER_LABEL[r.provider] || '審查者';
       if (r.provider) who.classList.add(r.provider);
       head.querySelector('.chip').textContent = verdict || '未判定';
-      const must = (r.text.match(/\[必須修正\]/g) || []).length;
-      const suggest = (r.text.match(/\[建議\]/g) || []).length;
+      // Codex 有時用自己的 P0–P3：P0/P1 算必須修正，P2/P3 算建議（與後端 only_suggestions 相同）。
+      const must = (r.text.match(/\[(必須修正|P0|P1)\]/g) || []).length;
+      const suggest = (r.text.match(/\[(建議|P2|P3)\]/g) || []).length;
       if (must || suggest) {
         const counts = document.createElement('span');
         counts.className = 'review-counts';

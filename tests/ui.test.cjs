@@ -35,7 +35,7 @@ function page() {
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
     taskContentView, logScopes, renderLogSelect, renderLog,
-    renderAcceptButton, acceptReason,
+    renderAcceptButton, acceptReason, renderStuckReason,
     setLog(scope, text) { logs[scope] = text; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
@@ -1141,5 +1141,24 @@ test('任務內容列出人工驗收清單；審查意見標出必須修正與�
   const holder = dom.window.document.createElement('div');
   holder.append(reviews);
   assert.equal(holder.querySelector('.review-counts').textContent, '必須修正 2・建議 1');
+  dom.window.close();
+});
+
+test('卡住的任務在詳情最上面列出原因與審查要求修正的項目；Codex 的 P0–P3 也會計入數量', () => {
+  const { dom, ui, doc } = page();
+  ui.setSnap(snapshot());
+  const box = doc.querySelector('#d-stuck');
+  ui.renderStuckReason({ phase: 'stuck', error: '審查未通過且修正輪數已用盡（3）', stuck_reasons: ['[P1] `a.ts:3`：沒做到 AC-02'] });
+  assert.equal(box.hidden, false);
+  assert.match(box.querySelector('strong').textContent, /卡住原因：審查未通過/);
+  assert.deepEqual([...box.querySelectorAll('li')].map(li => li.textContent), ['[P1] `a.ts:3`：沒做到 AC-02']);
+  ui.renderStuckReason({ phase: 'stuck', error: '實作 AI 失敗：逾時' });
+  assert.equal(box.querySelectorAll('li').length, 0);
+  assert.match(box.textContent, /逾時/);
+  ui.renderStuckReason({ phase: 'awaiting_test', error: '' });
+  assert.equal(box.hidden, true);
+  const holder = doc.createElement('div');
+  holder.append(ui.reviewsView([{ round: 1, provider: 'codex', text: '- [P1] a\n- [P2] b\n- [P3] c\nVERDICT: FAIL' }]));
+  assert.equal(holder.querySelector('.review-counts').textContent, '必須修正 1・建議 2');
   dom.window.close();
 });

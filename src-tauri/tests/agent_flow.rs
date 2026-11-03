@@ -680,6 +680,8 @@ fn 審查分級_上一輪交接與人工接受目前結果() {
     assert_eq!(reviews.len(), 2);
     assert!(!reviews[0].contains("上一輪審查與修正者的回覆"));
     assert!(reviews[1].contains("上一輪審查與修正者的回覆") && reviews[1].contains("不改：手動驗收要由使用者做") && reviews[1].contains("手動驗收結果空白"));
+    // 卡住時把最後一次審查要求修正的項目存起來，任務詳情直接顯示，不用翻 Log。
+    assert_eq!(read_state(&root)["tasks"]["1"]["stuck_reasons"], json!(["[必須修正] `docs/check.md:1` 手動驗收結果空白"]));
 
     // 使用者接受目前結果：重新驗證，通過後不再審查，進入人工驗收。
     let snap = ai_workflow::core::api::snapshot(&root).unwrap();

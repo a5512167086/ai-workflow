@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::core::agents::{combine_reviews, only_suggestions, run_agent, run_reviews, AgentOpts};
+use crate::core::agents::{blocking_items, combine_reviews, only_suggestions, run_agent, run_reviews, AgentOpts};
 use crate::core::archive::archive_tasks;
 use crate::core::backlog::update_item;
 use crate::core::config::{cfg_str, load_config};
@@ -164,7 +164,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         for (k, v) in [
             ("title", json!(title)), ("phase", json!("implementing")), ("step", json!(if verify_only { "重新驗證" } else { "實作中" })),
             ("fix_round", json!(0)), ("attempts", json!(attempts)), ("base_tree", json!(base_tree)), ("started_at", json!(now_iso())),
-            ("finished_at", Value::Null), ("error", json!("")), ("review_verdict", Value::Null), ("last_check_ok", Value::Null), ("review_override", Value::Null),
+            ("finished_at", Value::Null), ("error", json!("")), ("review_verdict", Value::Null), ("last_check_ok", Value::Null), ("review_override", Value::Null), ("stuck_reasons", Value::Null),
         ] {
             t[k] = v;
         }
@@ -250,6 +250,15 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
             break;
         }
         if round >= max_fix {
+            // 卡住時把最後一次審查的問題列出來，使用者不用去 Log 裡翻。
+            let reasons: Vec<String> = reviews.iter().filter(|r| !r.pass).flat_map(|r| {
+                let items = blocking_items(&r.text);
+                if reviews.len() > 1 { items.into_iter().map(|i| format!("{}：{i}", crate::core::agents::provider_name(&r.provider))).collect() } else { items }
+            }).collect();
+            set_task(root, id, json!({ "stuck_reasons": reasons }))?;
+            if !reasons.is_empty() {
+                append_log(root, scope, &format!("最後一次審查的問題：\n{}", reasons.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n")));
+            }
             return Err(TaskError::Stuck(format!("審查未通過且修正輪數已用盡（{max_fix}）")));
         }
         round += 1;
