@@ -1,6 +1,6 @@
 # ai-workflow UI 設計系統
 
-本文件是 ai-workflow 桌面 app 介面（`src/`）的設計依據。方向由 `ui-ux-pro-max` skill 查詢產生：
+本文件是 ai-workflow 桌面 app 介面（`src/`）的設計依據：色票、字級、間距與元件準則。0.5 起畫面改用 React + Tailwind + shadcn/ui，版面（側欄、狀態列、檢視面板、快捷鍵）與目錄結構見 [frontend.md](frontend.md)；本文的色票以 CSS 變數掛在 `src/index.css`。方向由 `ui-ux-pro-max` skill 查詢產生：
 
 ```
 search.py "developer tool dashboard kanban CLI pipeline monitoring" --design-system -p ai-workflow --density 7 --variance 3 --motion 3
@@ -10,7 +10,7 @@ search.py "<kanban / live status / log viewer / dark mode / confirm dialog / tab
 
 ## 限制
 
-- 純 HTML / CSS / JS，不用框架、不從 CDN 載入任何資源（離線工具）。
+- 不從 CDN 載入任何資源（離線工具）；所有相依套件由 Vite 打包進 `dist/`。
 - 字型一律用系統字型堆疊；skill 建議的 JetBrains Mono / IBM Plex Sans 只在使用者本機已安裝時才會被用到，不下載。
 - 圖示用內嵌 SVG（線條風格，1.75px stroke，近似 Lucide），不用 emoji。
 - 介面文字為繁體中文。
@@ -92,7 +92,7 @@ skill 建議內文 16px；這是高密度工具，內文定為 14px，最小字�
 
 ## Monstrare 介面參考
 
-任務看板參考 [Monstrare](https://github.com/pjwang2022/Monstrare) 的車道資訊層級、風險側條、依賴與人工核准標記、階層藍圖，以及詳情檢查清單。ai-workflow 將側條用於既有的任務優先度，並沿用自己的狀態引擎與淺／深色主題；沒有把人工拖曳任務狀態或參考專案的流程政策加進執行引擎。來源版本為 `a187710a3e3f3495003707d4f69eee873373df03`，MIT 授權與作者聲明隨程式保存在 `src/THIRD_PARTY_NOTICES.txt`。
+任務看板參考 [Monstrare](https://github.com/pjwang2022/Monstrare) 的車道資訊層級、風險側條、依賴與人工核准標記、階層藍圖，以及詳情檢查清單。ai-workflow 將側條用於既有的任務優先度，並沿用自己的狀態引擎與淺／深色主題；沒有把人工拖曳任務狀態或參考專案的流程政策加進執行引擎。來源版本為 `a187710a3e3f3495003707d4f69eee873373df03`，MIT 授權與作者聲明隨程式保存在 `THIRD_PARTY_NOTICES.txt`。
 
 ## 專案對話
 

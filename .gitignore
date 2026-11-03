@@ -2,3 +2,4 @@ node_modules/
 .aipipe/
 *.log
 src/vendor/
+dist/

@@ -57,7 +57,7 @@ ai-workflow doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是�
 
 ## 設定（全域一份）
 
-設定只有一份，所有專案共用，從總覽右上角的「設定」進入；專案卡片與專案頁都沒有設定入口，也不需要先選專案。內容：
+設定只有一份，所有專案共用，從左側欄最下方的「設定」（或 `Ctrl+,`）進入，不需要先選專案。內容：
 
 - **工作流程模式**與**全域同時執行上限**放在最上方同一個區塊（左右各半）。
 - **AI 角色與模型**：需求釐清、PRD 作者、PRD 審查、拆任務、實作、修正、程式碼審查、Handover、專案對話九個角色排成 3×3 格子，每格選 AI（claude／codex，兩個審查角色多一個「雙人審查」）、模型與推理強度；視窗窄時退成 2 欄或 1 欄。模型欄位是下拉選單，也可以直接輸入模型 ID。清單直接向 CLI 查詢：Claude 用 stream-json 的 initialize 控制請求（不送訊息、不耗額度，結果快取 10 分鐘），Codex 用 app-server 的 `model/list`；所以清單就是這個帳號在 CLI 模型選單看得到的模型，推理強度選項也跟著所選模型。CLI 查不到時改列建議清單並顯示原因。
@@ -71,7 +71,7 @@ ai-workflow doctor          # 檢查 Windows／WSL 的 Claude Code、Codex 是�
 
 Claude Pro 訂閱不包含 Fable 的用量；Claude Code 可選 Fable，但需額外 usage credits，詳見[官方方案說明](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan)。帳號看得到 Fable 時清單會列出，使用前請確認方案。
 
-「紀錄」整合目前功能的可展開 Log、PRD、每輪紀錄及任務，也可切換歷史功能查看封存。任務看板可搜尋、依狀態篩選，或切換「任務藍圖」查看任務與子任務完成度；此部分介面的資訊層級參考 MIT 授權的 [Monstrare](https://github.com/pjwang2022/Monstrare)，來源與授權詳見 [UI 設計系統](docs/design-system.md) 及 [第三方聲明](src/THIRD_PARTY_NOTICES.txt)。
+「紀錄」整合目前功能的可展開 Log、PRD、每輪紀錄及任務，也可切換歷史功能查看封存。任務看板可搜尋、依狀態篩選，或切換「任務藍圖」查看任務與子任務完成度；此部分介面的資訊層級參考 MIT 授權的 [Monstrare](https://github.com/pjwang2022/Monstrare)，來源與授權詳見 [UI 設計系統](docs/design-system.md) 及 [第三方聲明](THIRD_PARTY_NOTICES.txt)。
 
 同樣的流程也可以全用命令列：
 
@@ -99,7 +99,7 @@ ai-workflow queue --max 2                        # 同時最多跑 2 個專案�
 
 ## 多專案總覽
 
-桌面 app 的首頁是總覽：每個專案一張卡片，顯示目前狀態（閒置、PRD 起草中、等待核准、排隊中、執行中、等待測試、功能待測試、需要人工處理…）、目前的功能、任務進度，點進去就是單一專案畫面。需要你處理的專案會標出來，頂列顯示有幾個在等你。
+桌面 app 的首頁是總覽：每個專案一張卡片，顯示目前狀態（閒置、PRD 起草中、等待核准、排隊中、執行中、等待測試、功能待測試、需要人工處理…）、目前的功能、任務進度，點進去就是單一專案畫面；之後用左側欄最上方的專案切換器（或 `Ctrl+K` 指令面板）直接換專案，不必回總覽。需要你處理的專案會標出來，底部狀態列顯示有幾個在等你。
 
 專案清單存在 `~/.ai-workflow/projects.json`，依最近開啟排序。從總覽或 `ai-workflow projects add` 加入；資料夾還不是 git repo 時，總覽會問你要不要 `git init`（除了 `.git` 以外不會在專案裡新增任何檔案）。移除只是移出清單，不會刪任何檔案。
 
@@ -144,7 +144,7 @@ archive/2026-11-01-匯出-csv/
 - 核准 PRD 時建立；同一個功能重新核准會更新同一個資料夾。
 - 產生任務後、每次 `ai-workflow run` 結束時、功能完成時更新 `tasks.json`。
 - 開始下一個功能（起草新的 PRD）時一定建新資料夾；同一天同名的功能會加 `-2`、`-3`，不會覆蓋。
-- UI 的「紀錄」分頁可以瀏覽每個封存的 PRD（Markdown 渲染）、每輪紀錄與任務清單。
+- UI 的「紀錄」畫面可以瀏覽每個封存的 PRD（Markdown 渲染）、每輪紀錄與任務清單。
 
 ### 每個功能一個任務群組
 
@@ -178,7 +178,7 @@ AI 在一個 session 裡每發一次請求，都會把整份 prompt 與之前的
 
 各專案的「用量」頁會顯示估計省下的 tokens、目前開了哪些項目，以及依階段（實作、程式碼審查、修正、handover…）分開的次數、用量、占比與平均。估計值＝每次請求少送的 tokens（中文一字約一個、英文四字元約一個）× 請求次數；Codex 不回報請求次數，以 1 次計，所以是下限。精簡回覆與專案圖譜無法直接估算，請比較開關前後各階段的平均用量。
 
-精簡回覆的想法來自 [caveman](https://github.com/juliusbrussee/caveman)，專案圖譜的設計參考 [graphify](https://github.com/Graphify-Labs/graphify)；ai-workflow 沒有使用它們的程式碼或文字，規則與實作都是自己寫的（見 `src/THIRD_PARTY_NOTICES.txt`）。
+精簡回覆的想法來自 [caveman](https://github.com/juliusbrussee/caveman)，專案圖譜的設計參考 [graphify](https://github.com/Graphify-Labs/graphify)；ai-workflow 沒有使用它們的程式碼或文字，規則與實作都是自己寫的（見 `THIRD_PARTY_NOTICES.txt`）。
 
 ## 專案圖譜
 
@@ -190,7 +190,7 @@ AI 在大型專案裡常常一路搜尋、逐檔讀程式，同樣的內容讀�
   - `graph.json`：node-link 格式（`nodes`、`links`、`graph.schema_version`、`built_at_commit`），每個節點、每條關係各佔一行，AI 用搜尋工具找符號名稱就能看到誰呼叫它、它依賴誰。
   - `GRAPH_REPORT.md`：語料檢查、摘要（各信心度比例）、圖譜新鮮度、分群導覽、核心節點（連接最多的定義）、意外的關聯、循環匯入（JavaScript／TypeScript／Python 等）、各分群與凝聚度、不確定的關聯、知識缺口、建議問題。分群用 Louvain 演算法，以連接最多的成員命名。
   - `graph.html`：離線可用的互動圖，可以搜尋、點節點看位置與相鄰節點、依分群顯示或隱藏、切換淺色／深色；推斷或不確定的關係畫成虛線。超過 3,000 個節點時改畫檔案層級。
-- **更新**：每個實作與修正前自動重建，內容沒變的檔案沿用快取（以檔案內容雜湊判斷），本專案約 100 個檔案、1,100 個節點約 1 秒。專案頁的「架構圖」分頁可以檢視報告與互動圖，也可以手動重新建立。
+- **更新**：每個實作與修正前自動重建，內容沒變的檔案沿用快取（以檔案內容雜湊判斷），本專案約 100 個檔案、1,100 個節點約 1 秒。專案頁的「架構圖」畫面可以檢視報告與互動圖，也可以手動重新建立。
 - **給 AI 的內容**：實作用任務的標題、說明、細節與驗收條件，修正另外加上失敗輸出或審查意見，用 graphify 的查詢方式（名稱完全相符 1000、開頭相符 100、包含 1、檔案路徑 0.5 分，乘上詞的稀有度；最多 3 個起點、往外走 2 層、不展開大型樞紐）查出相關的子圖，加上前 5 個核心節點與完整檔案的路徑，約 1,500 tokens。內容沒有對到圖譜裡的名稱時，只附核心節點與路徑。
 
 命令列也可以查（對應 graphify 的 `update`、`query`、`path`、`explain`）：
@@ -263,7 +263,7 @@ tree-sitter 與各語言的 grammar 是 MIT 授權，會讓桌面版執行檔變
 
 **程式碼審查怎麼判定**
 
-- 審查者把每條意見標成「[必須修正]」或「[建議]」。只有 [必須修正] 會判 FAIL、消耗修正輪數；只有 [建議] 時視為通過，意見仍保留在「審查意見」分頁，並標出兩種的數量。Codex 有時會用自己的 P0–P3：P0、P1 算 [必須修正]，P2、P3 算 [建議]。
+- 審查者把每條意見標成「[必須修正]」或「[建議]」。只有 [必須修正] 會判 FAIL、消耗修正輪數；只有 [建議] 時視為通過，意見仍保留在「審查意見」頁籤，並標出兩種的數量。Codex 有時會用自己的 P0–P3：P0、P1 算 [必須修正]，P2、P3 算 [建議]。
 - 修正輪數用完而卡住時，任務詳情最上面會寫出卡住原因，並列出最後一次審查要求修正的項目，不用去 Log 裡找。
 - 修正者對每條 [必須修正] 要嘛修好，要嘛說明為什麼不改。下一次審查會看到上一輪的意見和修正者的回覆：已修好的不再提，理由合理的就接受。
 - 只有人能做的檢查（在真的瀏覽器操作、跨瀏覽器驗收、目測 375px 版面）放在任務的「人工驗收」清單（manualChecks）。拆任務時 AI 會把這類項目放到這裡；實作者不用做，審查者也不會因為它們還沒做而判 FAIL。你可以在「人工編輯任務」調整這份清單，人工驗收時照著測。
@@ -413,7 +413,7 @@ tree-sitter 與各語言的 grammar 是 MIT 授權，會讓桌面版執行檔變
 
 ## 桌面版（Windows）
 
-標準的 Tauri 2 專案：`src/` 是前端（原生 HTML／JS，不需要打包工具），`src-tauri/` 是 Rust 後端。
+標準的 Tauri 2 專案：`src/` 是前端（React 19 + TypeScript + Vite 7 + Tailwind v4 + shadcn/ui，設計說明見 [docs/frontend.md](docs/frontend.md)），`src-tauri/` 是 Rust 後端。
 
 - **全部在 Rust**：PRD 流程、內建任務引擎、執行器、git、WSL、用量追蹤都在 `src-tauri/src/core/`，依領域分資料夾：`agents/`（Claude、Codex CLI 與權限請求）、`workflow/`（需求、PRD、任務、執行流程）、`project/`（設定、狀態、專案清單、佇列）、`skills/`、`system/`（子程序、WSL、git）。Tauri 的組裝在 `lib.rs`，前端呼叫的 commands 在 `commands/`，系統匣與通知在 `tray.rs`、`notifications.rs`，`main.rs` 只負責分流命令列或開 App。前端透過 Tauri command `api`（路徑和格式沿用舊版 HTTP API，例如 `/api/p/<id>/state`、全域設定用 `/api/config`）呼叫，狀態與 log 的變化以 Tauri 事件推送。
 - **同一支 exe 也是 CLI**：帶子指令執行時不開視窗（從終端機執行會接到目前的主控台）。UI 按鈕啟動的流程也是用這個方式另開背景程序，關掉 app 不會中斷。
@@ -421,7 +421,7 @@ tree-sitter 與各語言的 grammar 是 MIT 授權，會讓桌面版執行檔變
 
 安裝：執行 `ai-workflow_<版本>_x64-setup.exe`（NSIS，裝在目前使用者，不需要系統管理員）。更新前請從系統匣選「結束 ai-workflow」；點視窗關閉只會縮到系統匣。
 
-自己建置（需要 Rust stable、VS 2022 C++ Build Tools、Node 20+（只用來跑 Tauri CLI）；WebView2 Windows 11 內建）：
+自己建置（需要 Rust stable、VS 2022 C++ Build Tools、Node 22+（Vite 與 Tauri CLI；有 `.nvmrc`，用 nvm 的話先 `nvm use 22`）；WebView2 Windows 11 內建）：
 
 ```bash
 npm install
@@ -447,15 +447,16 @@ npm run build        # tauri build
 
 ## 開發
 
-本機開發不需要安裝 `ai-workflow_<版本>_x64-setup.exe`：裝好 Rust stable、VS 2022 C++ Build Tools 與 Node 20+ 後，`npm install` 再 `npm run dev` 就會以開發模式開桌面視窗（Tauri dev，改前端檔案會即時重載）。命令列版用 `cargo run --manifest-path src-tauri/Cargo.toml -- <指令>`（例如 `-- status`、`-- doctor`）或 `src-tauri/target/debug/ai-workflow-desktop.exe <指令>`。`npm run build` 只有要產生安裝檔時才需要。
+本機開發不需要安裝 `ai-workflow_<版本>_x64-setup.exe`：裝好 Rust stable、VS 2022 C++ Build Tools 與 Node 22+ 後，`npm install` 再 `npm run dev` 就會以開發模式開桌面視窗（Tauri dev 會先啟動 Vite，改前端檔案會即時重載）。只看畫面不碰 Rust 時，`npm run dev:web` 以假後端在瀏覽器開 http://localhost:1420。命令列版用 `cargo run --manifest-path src-tauri/Cargo.toml -- <指令>`（例如 `-- status`、`-- doctor`）或 `src-tauri/target/debug/ai-workflow-desktop.exe <指令>`。`npm run build` 只有要產生安裝檔時才需要。
 
 ```bash
 npm test     # cargo test：不呼叫任何 AI；CLI 由 src-tauri/examples/fake_cli.rs 扮演，全域資料寫到暫存的 AI_WORKFLOW_HOME
 npm run lint # cargo clippy -D warnings
-npm run test:ui  # 只跑前端 jsdom 測試，不需要 Rust
+npm run test:ui  # 只跑前端 Vitest 測試（jsdom），不需要 Rust
+npm run typecheck # tsc
 ```
 
-介面設計規範在 [docs/design-system.md](docs/design-system.md)。
+介面設計規範在 [docs/design-system.md](docs/design-system.md)，前端架構與桌面 UI/UX 的設計理由在 [docs/frontend.md](docs/frontend.md)。
 
 
 ### 檔案與資料夾參考

@@ -1,0 +1,123 @@
+import { CLAUDE_EFFORTS } from '@/lib/constants';
+import type { ModelOptions, Provider, Snapshot, Task, TaskState, Column, Subtask } from '@/types/api';
+
+/** AI 工作中的持續時間文字，例如「1 分 23 秒」；時間無效回傳空字串。 */
+export function elapsedText(since?: string | null, now = Date.now()): string {
+  const ms = since ? now - new Date(since).getTime() : NaN;
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${Math.floor(s / 3600)} 小時 ${Math.floor((s % 3600) / 60)} 分`;
+}
+
+export const tokenNumber = (value: unknown) => (typeof value === 'number' ? value.toLocaleString('zh-TW') : '未知');
+export const usageTime = (value?: string | null) => (value ? new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + '（台北）' : '未提供');
+export const shortTime = (value?: string | null) => (value ? new Date(value).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }) : '');
+export const shortDate = (value?: string | null) => (value ? new Date(value).toLocaleDateString('zh-TW') : '');
+export const dateTime = (value?: string | null) => (value ? new Date(value).toLocaleString('zh-TW') : '—');
+
+/** 審查意見最後一個 VERDICT。 */
+export function verdictOf(text: unknown): string {
+  return [...String(text || '').matchAll(/VERDICT\s*\**\s*[:：]\s*\**\s*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
+}
+/** Codex 有時用自己的 P0–P3：P0/P1 算必須修正，P2/P3 算建議（與後端 only_suggestions 相同）。 */
+export function reviewCounts(text: string) {
+  const must = (text.match(/\[(必須修正|P0|P1)\]/g) || []).length;
+  const suggest = (text.match(/\[(建議|P2|P3)\]/g) || []).length;
+  return { must, suggest };
+}
+
+/** SKILL.md 最上面 YAML frontmatter 的頂層欄位（只為顯示，解析在後端）。 */
+export function skillFrontmatter(text: unknown): [string, string][] {
+  const match = String(text || '').replace(/^﻿/, '').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return [];
+  const fields: [string, string][] = [];
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (field) fields.push([field[1], /^[|>][-+]?$/.test(field[2]) ? '' : field[2]]);
+    else if (fields.length && /^\s+\S/.test(line)) fields[fields.length - 1][1] = `${fields[fields.length - 1][1]} ${line.trim()}`.trim();
+  }
+  return fields;
+}
+
+/** 游標前面是不是訊息開頭的 `/技能` 片段（前面可以已經有其他 `/技能 `）；是就回傳要替換的範圍。 */
+export function skillCommandToken(text: string, caret: number): { start: number; end: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const match = before.match(/^\s*(?:\/[a-z0-9-]+\s+)*\/([a-z0-9-]*)$/);
+  return match ? { start: before.length - match[1].length - 1, end: caret, query: match[1] } : null;
+}
+
+/** 這個模型支援的推理強度。Claude：CLI 回報了就用它的（可能是空的），否則列出全部；Codex：找該模型或預設模型。 */
+export function effortsFor(options: ModelOptions | null | undefined, provider: Provider, model: string): string[] {
+  if (provider === 'claude') return options?.claude?.models?.find((m) => m.id === model)?.efforts ?? CLAUDE_EFFORTS;
+  const list = options?.codex?.models || [];
+  const found = list.find((m) => m.id === model) || list.find((m) => m.default);
+  return found?.efforts?.length ? found.efforts : [...new Set(list.flatMap((m) => m.efforts || []))];
+}
+
+// ---------- 任務看板 ----------
+export type FlatTask = (Task | Subtask) & { id: string; dependencies?: (string | number)[] };
+
+export function childTasks(task: Task): FlatTask[] {
+  return (task.subtasks || []).map((sub) => ({
+    ...sub,
+    id: `${task.id}.${sub.id}`,
+    dependencies: [
+      ...(task.dependencies || []),
+      ...(sub.dependencies || []).map((id) => (String(id).includes('.') ? String(id) : `${task.id}.${id}`)),
+    ],
+  }));
+}
+
+/** 流程自己記錄的階段優先；沒跑過的任務才看任務引擎的狀態。 */
+export function column(task: { status?: string }, ts?: TaskState | null): Column {
+  const phase = ts?.phase;
+  if (phase === 'awaiting_test') return 'test';
+  if (phase === 'reviewing') return 'review';
+  if (phase === 'implementing' || phase === 'stuck') return 'doing';
+  if (phase === 'done' || task.status === 'done') return 'done';
+  if (task.status === 'review') return 'review';
+  if (task.status === 'in-progress') return 'doing';
+  return 'todo';
+}
+
+export type BoardFilter = 'all' | 'attention' | 'blocked' | 'active' | 'done';
+export interface BoardFacts {
+  all: FlatTask[];
+  stateFor: (task: { id: string | number }) => TaskState;
+  done: Set<string>;
+  unmet: (task: { dependencies?: (string | number)[] }) => (string | number)[];
+  attention: (task: FlatTask | Task) => boolean;
+  matches: (task: FlatTask | Task) => boolean;
+  visible: Task[];
+  filtered: boolean;
+  counts: Record<Column, number>;
+}
+
+/** 搜尋與篩選只影響顯示；完成度及總數以完整資料計算。 */
+export function boardFacts(snap: Pick<Snapshot, 'tasks' | 'state'>, query: string, filter: BoardFilter): BoardFacts {
+  const all: FlatTask[] = snap.tasks.flatMap((task) => [task as FlatTask, ...childTasks(task)]);
+  const stateFor = (task: { id: string | number }): TaskState => snap.state.tasks[String(task.id)] || {};
+  const done = new Set(all.filter((task) => column(task, stateFor(task)) === 'done').map((task) => String(task.id)));
+  const unmet = (task: { dependencies?: (string | number)[] }) => (task.dependencies || []).filter((id) => !done.has(String(id)));
+  const attention = (task: FlatTask | Task) => stateFor(task).phase === 'stuck' || task.status === 'blocked' || column(task, stateFor(task)) === 'test';
+  const q = query.trim().toLocaleLowerCase();
+  const matches = (task: FlatTask | Task) => {
+    const state = stateFor(task), stage = column(task, state);
+    const text = `${task.id} ${task.title || ''} ${task.description || ''} ${state.step || ''}`.toLocaleLowerCase();
+    return (!q || text.includes(q)) && (filter === 'all'
+      || (filter === 'attention' && attention(task))
+      || (filter === 'blocked' && stage !== 'done' && unmet(task).length > 0)
+      || (filter === 'active' && ['doing', 'review'].includes(stage))
+      || (filter === 'done' && stage === 'done'));
+  };
+  const counts: Record<Column, number> = { todo: 0, doing: 0, review: 0, test: 0, done: 0 };
+  for (const t of snap.tasks) counts[column(t, stateFor(t))]++;
+  return {
+    all, stateFor, done, unmet, attention, matches,
+    visible: snap.tasks.filter((task) => [task, ...childTasks(task)].some(matches)),
+    filtered: !!q || filter !== 'all',
+    counts,
+  };
+}
+
+export const isDesktop = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
