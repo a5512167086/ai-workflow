@@ -133,7 +133,7 @@ pub const REVIEW_ROLES: [&str; 2] = ["reviewer", "code_reviewer"];
 /// 角色實際要跑的 AI：both 展開成兩個。
 pub fn role_providers(cfg: &Value, role: &str) -> Vec<String> {
     match cfg["roles"][role].as_str().unwrap_or("claude") {
-        "both" => PROVIDERS.iter().map(|p| p.to_string()).collect(),
+        "both" => PROVIDERS.iter().map(ToString::to_string).collect(),
         p => vec![p.to_string()],
     }
 }
@@ -188,8 +188,17 @@ fn int_in(value: Option<&Value>, lo: i64, hi: i64) -> bool {
 /// 檢查合併後的設定。
 pub fn validate_config(cfg: &Value) -> Vec<String> {
     let mut errors = Vec::new();
-    let s = |k: &str| cfg.get(k).and_then(Value::as_str);
-    if !s("mode").is_some_and(|m| MODES.contains(&m)) {
+    validate_modes(cfg, &mut errors);
+    validate_roles(cfg, &mut errors);
+    validate_limits(cfg, &mut errors);
+    validate_skills(cfg, &mut errors);
+    validate_environment(cfg, &mut errors);
+    errors
+}
+
+/// 流程模式與兩個 CLI 的權限設定。
+fn validate_modes(cfg: &Value, errors: &mut Vec<String>) {
+    if !cfg.get("mode").and_then(Value::as_str).is_some_and(|m| MODES.contains(&m)) {
         errors.push(format!("mode 必須是 {}", MODES.join(" / ")));
     }
     if !cfg["claude"]["write_permission_mode"].as_str().is_none_or(|m| ["auto", "acceptEdits"].contains(&m)) {
@@ -201,19 +210,16 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
     if !cfg["codex"]["network_access"].is_null() && !cfg["codex"]["network_access"].is_boolean() {
         errors.push("codex.network_access 必須是 true / false".into());
     }
+}
+
+/// 各角色用的 AI，以及角色與全域的模型、推理強度。
+fn validate_roles(cfg: &Value, errors: &mut Vec<String>) {
     for role in ROLES {
         let review = REVIEW_ROLES.contains(&role);
         if !cfg["roles"].get(role).and_then(Value::as_str).is_some_and(|p| PROVIDERS.contains(&p) || (review && p == "both")) {
             errors.push(format!("roles.{role} 必須是 {}{}", PROVIDERS.join(" / "), if review { " / both" } else { "" }));
         }
-        for provider in PROVIDERS {
-            for key in ["model", "effort"] {
-                let v = &cfg["models"][role][provider][key];
-                if !(v.is_null() || v.as_str().is_some_and(safe_token)) {
-                    errors.push(format!("models.{role}.{provider}.{key} 格式不正確"));
-                }
-            }
-        }
+        validate_role_models(cfg, role, errors);
     }
     for provider in PROVIDERS {
         for key in ["model", "effort"] {
@@ -222,6 +228,21 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
             }
         }
     }
+}
+
+fn validate_role_models(cfg: &Value, role: &str, errors: &mut Vec<String>) {
+    for provider in PROVIDERS {
+        for key in ["model", "effort"] {
+            let v = &cfg["models"][role][provider][key];
+            if !(v.is_null() || v.as_str().is_some_and(safe_token)) {
+                errors.push(format!("models.{role}.{provider}.{key} 格式不正確"));
+            }
+        }
+    }
+}
+
+/// 回合數、省 token 開關與同時執行上限。
+fn validate_limits(cfg: &Value, errors: &mut Vec<String>) {
     for key in ["max_fix_rounds", "max_prd_rounds"] {
         if !int_in(cfg.get(key), 1, 10) {
             errors.push(format!("{key} 必須是 1–10 的整數"));
@@ -240,6 +261,10 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
     if cfg.get("max_concurrent_runs").is_some_and(|v| !int_in(Some(v), 1, 8)) {
         errors.push("max_concurrent_runs 必須是 1–8 的整數".into());
     }
+}
+
+/// 各階段綁定的 Skills。
+fn validate_skills(cfg: &Value, errors: &mut Vec<String>) {
     match cfg.get("skills").and_then(Value::as_object) {
         None => errors.push("skills 必須是階段與技能名稱陣列的物件".into()),
         Some(map) => {
@@ -252,18 +277,21 @@ pub fn validate_config(cfg: &Value) -> Vec<String> {
             }
         }
     }
+}
+
+/// 執行環境、WSL distro 與額外的 context 檔案。
+fn validate_environment(cfg: &Value, errors: &mut Vec<String>) {
     for name in CLI_NAMES {
         if !cfg["runtime"].get(name).and_then(Value::as_str).is_some_and(|r| RUNTIMES.contains(&r)) {
             errors.push(format!("runtime.{name} 必須是 {}", RUNTIMES.join(" / ")));
         }
     }
-    if !s("wsl_distro").is_some_and(|d| d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))) {
+    if !cfg.get("wsl_distro").and_then(Value::as_str).is_some_and(|d| d.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))) {
         errors.push("wsl_distro 只能包含英數字、底線、點與連字號".into());
     }
     if cfg.get("context_files").is_some_and(|v| !v.as_array().is_some_and(|a| a.iter().all(|f| f.as_str().is_some_and(|s| !s.trim().is_empty())))) {
         errors.push("context_files 必須是檔案路徑陣列".into());
     }
-    errors
 }
 
 fn read_raw(file: &Path) -> Result<Value> {

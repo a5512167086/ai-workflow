@@ -49,8 +49,8 @@ impl Skill {
 fn list_files(dir: &Path) -> Vec<Value> {
     fn walk(current: &Path, rel: &Path, out: &mut Vec<Value>) {
         let Ok(entries) = fs::read_dir(current) else { return };
-        let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-        entries.sort_by_key(|e| e.file_name());
+        let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
+        entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
             if out.len() >= 500 {
                 return;
@@ -142,7 +142,7 @@ pub fn list_skills(root: &Path) -> Vec<Value> {
         (name.to_string(), s.to_json())
     }).collect();
     if let Ok(entries) = fs::read_dir(library(root)) {
-        let mut names: Vec<String> = entries.filter_map(|e| e.ok())
+        let mut names: Vec<String> = entries.filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| valid_skill_name(n))
@@ -348,7 +348,7 @@ pub fn skill_run_file(root: &Path, id: &str) -> Result<PathBuf> {
 
 pub fn list_skill_runs(root: &Path) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(runs_dir(root)) else { return vec![] };
-    let mut runs: Vec<Value> = entries.filter_map(|e| e.ok())
+    let mut runs: Vec<Value> = entries.filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().strip_suffix(".json").is_some_and(valid_run_id))
         .filter_map(|e| crate::core::util::read_json(e.path()))
         .collect();

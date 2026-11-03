@@ -73,7 +73,7 @@ fn prompt_of(root: &Path, marker: &str) -> String {
 
 fn session_of(root: &Path, stage: &str) -> Value {
     let dir = data_dir(root).join("sessions");
-    fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).unwrap()).unwrap()).find(|s| s["stage"] == stage).unwrap()
+    fs::read_dir(dir).unwrap().filter_map(Result::ok).map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).unwrap()).unwrap()).find(|s| s["stage"] == stage).unwrap()
 }
 
 fn features(session: &Value) -> Vec<String> {

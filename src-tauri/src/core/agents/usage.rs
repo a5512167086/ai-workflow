@@ -169,79 +169,101 @@ impl Telemetry {
     }
 
     pub fn accept(&mut self, event: &Value) -> Value {
-        let ty = event["type"].as_str().unwrap_or("");
         if self.provider == "claude" {
-            if ty == "assistant" && event["message"]["usage"].is_object() {
-                self.last_request = normalize_tokens("claude", &event["message"]["usage"]);
-                self.last_model = event["message"]["model"].clone();
-                if let (Some(id), Some(req)) = (event["message"]["id"].as_str().filter(|s| !s.is_empty()), self.last_request.clone()) {
-                    match self.messages.iter_mut().find(|(k, _)| k == id) {
-                        Some(slot) => slot.1 = req,
-                        None => self.messages.push((id.to_string(), req)),
-                    }
-                    let sum = |f: fn(&Tokens) -> Option<f64>| -> Option<f64> {
-                        self.messages.iter().map(|(_, t)| f(t)).try_fold(0.0, |acc, v| v.map(|v| acc + v))
-                    };
-                    self.tokens = Some(Tokens {
-                        input: sum(|t| t.input), output: sum(|t| t.output), cache_read: sum(|t| t.cache_read),
-                        cache_write: sum(|t| t.cache_write), total: sum(|t| t.total), provisional: true,
-                    });
-                }
-            }
-            if ty == "result" {
-                if let Some(t) = normalize_tokens("claude", &event["usage"]) {
-                    self.tokens = Some(t);
-                }
-                let models = event["modelUsage"].as_object().cloned().unwrap_or_default();
-                let model = self.last_model.as_str().and_then(|m| models.get(m)).cloned()
-                    .or_else(|| (models.len() == 1).then(|| models.values().next().cloned()).flatten());
-                let capacity = model.as_ref().and_then(|m| number(&m["contextWindow"]));
-                if let (Some(used), Some(cap)) = (self.last_request.as_ref().and_then(|r| r.total), capacity.filter(|c| *c > 0.0)) {
-                    self.set_context(Some(self.last_model.clone()), used, cap, true);
-                }
-            }
-            if ty == "rate_limit_event" && event["rate_limit_info"].is_object() {
-                let info = &event["rate_limit_info"];
-                let used = number(&info["utilization"]).filter(|r| *r <= 1.0).map(|r| r * 100.0);
-                let name = claude_window_name(info["rateLimitType"].as_str().filter(|s| !s.is_empty()).unwrap_or("Claude 訂閱視窗"));
-                let window = json!({
-                    "name": name, "usedPercent": opt(used), "remainingPercent": opt(used.map(|u| 100.0 - u)),
-                    "resetsAt": epoch(&info["resetsAt"]), "status": info["status"], "source": "claude-cli-event",
-                });
-                self.limits.retain(|w| w["name"] != name.as_str());
-                self.limits.push(window);
-            }
+            self.accept_claude(event);
         } else {
-            if ty == "turn.completed" {
-                if let Some(t) = normalize_tokens("codex", &event["usage"]) {
-                    self.tokens = Some(t);
-                }
-            }
-            if ty == "event_msg" && event["payload"]["type"] == "token_count" {
-                let info = &event["payload"]["info"];
-                if let (Some(cap), Some(used)) = (number(&info["model_context_window"]).filter(|c| *c > 0.0), number(&info["last_token_usage"]["total_tokens"])) {
-                    self.set_context(None, used, cap, false);
-                }
-            }
-            // app-server 的通知（JSON-RPC，用 method 區分）：累計 tokens、最近一次請求占用的 context、訂閱額度。
-            match event["method"].as_str() {
-                Some("thread/tokenUsage/updated") => {
-                    let usage = &event["params"]["tokenUsage"];
-                    let total = &usage["total"];
-                    let snake = json!({ "input_tokens": total["inputTokens"], "output_tokens": total["outputTokens"], "cached_input_tokens": total["cachedInputTokens"] });
-                    if let Some(t) = normalize_tokens("codex", &snake) { self.tokens = Some(t); }
-                    if let (Some(cap), Some(used)) = (number(&usage["modelContextWindow"]).filter(|c| *c > 0.0), number(&usage["last"]["totalTokens"])) {
-                        self.set_context(None, used, cap, false);
-                    }
-                }
-                Some("account/rateLimits/updated") => {
-                    let windows = normalize_codex_limits(&event["params"]);
-                    if !windows.is_empty() { self.limits = windows; }
-                }
-                _ => {}
-            }
+            self.accept_codex(event);
         }
         self.snapshot()
+    }
+
+    /// Claude 的 stream-json 事件：assistant（每次請求的用量）、result（整個 session 的用量與 context）、rate_limit_event（訂閱額度）。
+    fn accept_claude(&mut self, event: &Value) {
+        let ty = event["type"].as_str().unwrap_or("");
+        if ty == "assistant" && event["message"]["usage"].is_object() {
+            self.claude_assistant_usage(&event["message"]);
+        }
+        if ty == "result" {
+            self.claude_result_usage(event);
+        }
+        if ty == "rate_limit_event" && event["rate_limit_info"].is_object() {
+            self.claude_rate_limit(&event["rate_limit_info"]);
+        }
+    }
+
+    fn claude_assistant_usage(&mut self, message: &Value) {
+        self.last_request = normalize_tokens("claude", &message["usage"]);
+        self.last_model = message["model"].clone();
+        let (Some(id), Some(req)) = (message["id"].as_str().filter(|s| !s.is_empty()), self.last_request.clone()) else { return };
+        match self.messages.iter_mut().find(|(k, _)| k == id) {
+            Some(slot) => slot.1 = req,
+            None => self.messages.push((id.to_string(), req)),
+        }
+        let sum = |f: fn(&Tokens) -> Option<f64>| -> Option<f64> {
+            self.messages.iter().map(|(_, t)| f(t)).try_fold(0.0, |acc, v| v.map(|v| acc + v))
+        };
+        self.tokens = Some(Tokens {
+            input: sum(|t| t.input), output: sum(|t| t.output), cache_read: sum(|t| t.cache_read),
+            cache_write: sum(|t| t.cache_write), total: sum(|t| t.total), provisional: true,
+        });
+    }
+
+    fn claude_result_usage(&mut self, event: &Value) {
+        if let Some(t) = normalize_tokens("claude", &event["usage"]) {
+            self.tokens = Some(t);
+        }
+        let models = event["modelUsage"].as_object().cloned().unwrap_or_default();
+        let model = self.last_model.as_str().and_then(|m| models.get(m)).cloned()
+            .or_else(|| (models.len() == 1).then(|| models.values().next().cloned()).flatten());
+        let capacity = model.as_ref().and_then(|m| number(&m["contextWindow"]));
+        if let (Some(used), Some(cap)) = (self.last_request.as_ref().and_then(|r| r.total), capacity.filter(|c| *c > 0.0)) {
+            self.set_context(Some(self.last_model.clone()), used, cap, true);
+        }
+    }
+
+    fn claude_rate_limit(&mut self, info: &Value) {
+        let used = number(&info["utilization"]).filter(|r| *r <= 1.0).map(|r| r * 100.0);
+        let name = claude_window_name(info["rateLimitType"].as_str().filter(|s| !s.is_empty()).unwrap_or("Claude 訂閱視窗"));
+        let window = json!({
+            "name": name, "usedPercent": opt(used), "remainingPercent": opt(used.map(|u| 100.0 - u)),
+            "resetsAt": epoch(&info["resetsAt"]), "status": info["status"], "source": "claude-cli-event",
+        });
+        self.limits.retain(|w| w["name"] != name.as_str());
+        self.limits.push(window);
+    }
+
+    /// Codex 的事件：exec 的 JSONL 事件，以及 app-server 的 JSON-RPC 通知。
+    fn accept_codex(&mut self, event: &Value) {
+        let ty = event["type"].as_str().unwrap_or("");
+        if ty == "turn.completed" {
+            if let Some(t) = normalize_tokens("codex", &event["usage"]) {
+                self.tokens = Some(t);
+            }
+        }
+        if ty == "event_msg" && event["payload"]["type"] == "token_count" {
+            let info = &event["payload"]["info"];
+            if let (Some(cap), Some(used)) = (number(&info["model_context_window"]).filter(|c| *c > 0.0), number(&info["last_token_usage"]["total_tokens"])) {
+                self.set_context(None, used, cap, false);
+            }
+        }
+        // app-server 的通知（JSON-RPC，用 method 區分）：累計 tokens、最近一次請求占用的 context、訂閱額度。
+        match event["method"].as_str() {
+            Some("thread/tokenUsage/updated") => self.codex_token_usage(&event["params"]["tokenUsage"]),
+            Some("account/rateLimits/updated") => {
+                let windows = normalize_codex_limits(&event["params"]);
+                if !windows.is_empty() { self.limits = windows; }
+            }
+            _ => {}
+        }
+    }
+
+    fn codex_token_usage(&mut self, usage: &Value) {
+        let total = &usage["total"];
+        let snake = json!({ "input_tokens": total["inputTokens"], "output_tokens": total["outputTokens"], "cached_input_tokens": total["cachedInputTokens"] });
+        if let Some(t) = normalize_tokens("codex", &snake) { self.tokens = Some(t); }
+        if let (Some(cap), Some(used)) = (number(&usage["modelContextWindow"]).filter(|c| *c > 0.0), number(&usage["last"]["totalTokens"])) {
+            self.set_context(None, used, cap, false);
+        }
     }
 
     pub fn snapshot(&self) -> Value {

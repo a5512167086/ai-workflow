@@ -121,7 +121,7 @@ fn text_field(body: &Value, key: &str) -> String {
 }
 
 fn spawn(root: &Path, args: &[&str]) -> Result<Value> {
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let args: Vec<String> = args.iter().map(ToString::to_string).collect();
     Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
 }
 
@@ -160,22 +160,7 @@ fn spawn_run(root: &Path, args: &[&str], body: &Value) -> Result<Value> {
 /// 全域設定的修改：runtime／models／mode／skills 綁定。root 給 skills 綁定檢查技能存在用（總覽沒有專案時用 None）。
 fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Value> {
     let patch = match action {
-        "config/runtime" => {
-            let mut runtime = json!({});
-            for name in CLI_NAMES {
-                if let Some(v) = body["runtime"].get(name).filter(|v| !v.is_null()) {
-                    if !v.as_str().is_some_and(|r| RUNTIMES.contains(&r)) {
-                        return Err(http(400, format!("{name} 的 runtime 不正確")));
-                    }
-                    runtime[name] = v.clone();
-                }
-            }
-            let mut patch = json!({ "runtime": runtime });
-            if !body["wsl_distro"].is_null() && body.get("wsl_distro").is_some() {
-                patch["wsl_distro"] = json!(text_field(body, "wsl_distro").trim());
-            }
-            patch
-        }
+        "config/runtime" => runtime_patch(body)?,
         "config/models" => {
             // roles 與 models 一起存；validate 會擋掉不合法的值。
             let mut patch = json!({});
@@ -192,48 +177,9 @@ fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Valu
             }
             json!({ "mode": body["mode"] })
         }
-        "config/limits" => {
-            let mut patch = json!({});
-            for key in ["max_fix_rounds", "max_prd_rounds", "num_tasks", "command_timeout_sec", "agent_timeout_sec"] {
-                if let Some(v) = body.get(key).filter(|v| v.is_i64() || v.is_u64()) {
-                    patch[key] = v.clone();
-                }
-            }
-            if let Some(prefix) = body["branch_prefix"].as_str() {
-                let prefix = prefix.trim();
-                if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || "/_-.".contains(c)) {
-                    return Err(http(400, "分支前綴只能包含英數字、/、_、- 與 ."));
-                }
-                patch["branch_prefix"] = json!(prefix);
-            }
-            patch
-        }
-        "config/token_saving" => {
-            // 只收已知的開關；值的型別由 validate_config 檢查。
-            let body = &body["token_saving"];
-            let mut saving = json!({});
-            for key in crate::core::config::TOKEN_SAVING_SWITCHES {
-                if !body[key].is_null() { saving[key] = body[key].clone(); }
-            }
-            for role in crate::core::config::TERSE_ROLES {
-                if !body["terse"][role].is_null() { saving["terse"][role] = body["terse"][role].clone(); }
-            }
-            json!({ "token_saving": saving })
-        }
-        "skills/config" => {
-            for (stage, names) in body["skills"].as_object().into_iter().flatten() {
-                let Some(names) = names.as_array().filter(|_| SKILL_STAGES.contains(&stage.as_str())) else {
-                    return Err(http(400, "Skill 階段設定不正確"));
-                };
-                for name in names {
-                    let skill = load_skill(root.unwrap_or(&app_home()), name.as_str().unwrap_or(""))?;
-                    if !skill.extensions.is_empty() {
-                        return Err(http(400, format!("{} 含執行器專屬設定", skill.name)));
-                    }
-                }
-            }
-            json!({ "skills": body["skills"], crate::core::config::SKILLS_CUSTOMIZED: true })
-        }
+        "config/limits" => limits_patch(body)?,
+        "config/token_saving" => token_saving_patch(&body["token_saving"]),
+        "skills/config" => skills_patch(body, root)?,
         _ => return Err(http(404, "未知操作")),
     };
     let config = match root {
@@ -243,162 +189,116 @@ fn config_action(action: &str, body: &Value, root: Option<&Path>) -> Result<Valu
     Ok(json!({ "config": config }))
 }
 
+/// config/runtime：各 CLI 的執行環境與 WSL distro。
+fn runtime_patch(body: &Value) -> Result<Value> {
+    let mut runtime = json!({});
+    for name in CLI_NAMES {
+        let Some(v) = body["runtime"].get(name).filter(|v| !v.is_null()) else { continue };
+        if !v.as_str().is_some_and(|r| RUNTIMES.contains(&r)) {
+            return Err(http(400, format!("{name} 的 runtime 不正確")));
+        }
+        runtime[name] = v.clone();
+    }
+    let mut patch = json!({ "runtime": runtime });
+    if !body["wsl_distro"].is_null() && body.get("wsl_distro").is_some() {
+        patch["wsl_distro"] = json!(text_field(body, "wsl_distro").trim());
+    }
+    Ok(patch)
+}
+
+/// config/limits：回合數、逾時等整數設定與分支前綴。
+fn limits_patch(body: &Value) -> Result<Value> {
+    let mut patch = json!({});
+    for key in ["max_fix_rounds", "max_prd_rounds", "num_tasks", "command_timeout_sec", "agent_timeout_sec"] {
+        if let Some(v) = body.get(key).filter(|v| v.is_i64() || v.is_u64()) {
+            patch[key] = v.clone();
+        }
+    }
+    if let Some(prefix) = body["branch_prefix"].as_str() {
+        let prefix = prefix.trim();
+        if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || "/_-.".contains(c)) {
+            return Err(http(400, "分支前綴只能包含英數字、/、_、- 與 ."));
+        }
+        patch["branch_prefix"] = json!(prefix);
+    }
+    Ok(patch)
+}
+
+/// config/token_saving：只收已知的開關；值的型別由 validate_config 檢查。
+fn token_saving_patch(body: &Value) -> Value {
+    let mut saving = json!({});
+    for key in crate::core::config::TOKEN_SAVING_SWITCHES {
+        if !body[key].is_null() { saving[key] = body[key].clone(); }
+    }
+    for role in crate::core::config::TERSE_ROLES {
+        if !body["terse"][role].is_null() { saving["terse"][role] = body["terse"][role].clone(); }
+    }
+    json!({ "token_saving": saving })
+}
+
+/// skills/config：各階段綁定的 Skills；技能必須存在且不含執行器專屬設定。
+fn skills_patch(body: &Value, root: Option<&Path>) -> Result<Value> {
+    for (stage, names) in body["skills"].as_object().into_iter().flatten() {
+        let Some(names) = names.as_array().filter(|_| SKILL_STAGES.contains(&stage.as_str())) else {
+            return Err(http(400, "Skill 階段設定不正確"));
+        };
+        for name in names {
+            let skill = load_skill(root.unwrap_or(&app_home()), name.as_str().unwrap_or(""))?;
+            if !skill.extensions.is_empty() {
+                return Err(http(400, format!("{} 含執行器專屬設定", skill.name)));
+            }
+        }
+    }
+    Ok(json!({ "skills": body["skills"], crate::core::config::SKILLS_CUSTOMIZED: true }))
+}
+
+/// 專案的操作：依路徑的第一段（references、backlog、prd …）分給各組處理。
 fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
     let snap = snapshot(root)?;
+    match action.split_once('/').map_or(action, |(group, _)| group) {
+        "references" => references_action(root, action, body, &snap),
+        "backlog" => backlog_action(root, action, body, &snap),
+        "prd" => prd_action(root, action, body, &snap),
+        "task" | "tasks" | "run" => task_action(root, action, body, &snap),
+        "chat" => chat_action(root, action, body),
+        "config" => {
+            if action == "config/project" { project_config_action(root, body, &snap) } else { config_action(action, body, Some(root)) }
+        }
+        "skills" => skills_action(root, action, body, &snap),
+        _ => other_action(root, action, body, &snap),
+    }
+}
+
+fn references_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
     match action {
         "references/suggest" => crate::core::references::suggest(root, &text_field(body, "query")),
         "references/import" => crate::core::references::import(root, body),
-        "references/assign" => {
-            let refs = json!(crate::core::references::ids(root, &body["references"])?);
-            match body["target"].as_str().unwrap_or("") {
-                "feature" => { crate::core::guards::check(&snap, "prd.references")?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } crate::core::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; crate::core::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
-                "group" => { crate::core::guards::check(&snap, "tasks.references")?; crate::core::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
-                "task" => {
-                    if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); }
-                    let task = crate::core::tasks::find_task(root, &text_field(body, "id"))?.ok_or_else(|| http(404, "找不到這個任務"))?;
-                    if let Some(why) = crate::core::guards::task_references(&snap, &task) { return Err(http(409, why)); }
-                    crate::core::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
-                "backlog" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
-                _ => return Err(http(400, "參考資料目標不正確")),
-            }
-            Ok(json!({ "ok": true }))
-        }
+        "references/assign" => assign_references(root, body, snap),
+        _ => Err(http(404, "未知操作")),
+    }
+}
+
+/// 把參考資料指定給目前功能、任務群組、單一任務或需求。
+fn assign_references(root: &Path, body: &Value, snap: &Value) -> Result<Value> {
+    let refs = json!(crate::core::references::ids(root, &body["references"])?);
+    match body["target"].as_str().unwrap_or("") {
+        "feature" => { crate::core::guards::check(snap, "prd.references")?; if body["featureScope"] != snap["state"]["prd"]["reference_scope"] { return Err(http(409, "目前功能已變更，請重新選取參考資料")); } crate::core::tasks::update_feature_references(root, &snap["state"]["prd"]["archive_dir"], &refs)?; crate::core::state::update_state(root, |s| s["prd"]["references"] = refs)?; },
+        "group" => { crate::core::guards::check(snap, "tasks.references")?; crate::core::tasks::assign_references(root, "", &text_field(body, "tag"), refs)?; },
+        "task" => {
+            if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); }
+            let task = crate::core::tasks::find_task(root, &text_field(body, "id"))?.ok_or_else(|| http(404, "找不到這個任務"))?;
+            if let Some(why) = crate::core::guards::task_references(snap, &task) { return Err(http(409, why)); }
+            crate::core::tasks::assign_references(root, &text_field(body, "id"), &text_field(body, "tag"), refs)?; },
+        "backlog" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::backlog::update_item(root, &text_field(body, "id"), &json!({ "references": refs }))?; },
+        _ => return Err(http(400, "參考資料目標不正確")),
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn backlog_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
+    match action {
         "backlog/interview" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::requirements::start(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])) },
         "backlog/confirm" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; crate::core::requirements::confirm(root, body) },
-        "prd/save" => { crate::core::guards::check(&snap, "prd.edit")?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
-        "prd/review" => { crate::core::guards::check(&snap, "prd.review")?; spawn(root, &["prd", "--review"]) },
-        // 關掉錯誤通知不受流程狀態限制。
-        "prd/dismiss_error" => crate::core::prd::dismiss_error(root),
-        "task/save" => { if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::guards::check(&snap, "task.edit")?; let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
-        // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
-        "permissions/answer" => crate::core::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
-        "tasks/approve" => { crate::core::guards::check(&snap, "tasks.approve")?; crate::core::human::approve_tasks(root, &text_field(body, "revision")) },
-        "chat/send" => crate::core::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
-        "chat/cancel" => crate::core::chat::cancel_turn(root, &text_field(body, "chatId")),
-        "chat/rename" => crate::core::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
-        "chat/delete" => { crate::core::chat::delete_chat(root, &text_field(body, "chatId"))?; Ok(json!({ "ok": true })) },
-        "prd/new" => {
-            busy_guard(&snap)?;
-            let idea = text_field(body, "idea").trim().to_string();
-            if idea.is_empty() {
-                return Err(http(400, "請輸入想法"));
-            }
-            spawn(root, &["prd", &idea])
-        }
-        "prd/approve" => {
-            crate::core::guards::check(&snap, "prd.approve")?;
-            if body.get("version").is_some() && (body["version"] != snap["state"]["prd"]["version"] || body["scope"] != snap["state"]["prd"]["reference_scope"]) { return Err(http(409, "PRD 已更新，請重新閱讀後核准")); }
-            approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
-        }
-        "prd/revise" => {
-            crate::core::guards::check(&snap, "prd.revise")?;
-            let feedback = text_field(body, "feedback").trim().to_string();
-            if feedback.is_empty() {
-                return Err(http(400, "請輸入修改意見"));
-            }
-            spawn(root, &["prd", "--revise", &feedback])
-        }
-        "tasks/generate" => {
-            crate::core::guards::check(&snap, "tasks.generate")?;
-            spawn(root, &["tasks"])
-        }
-        "run/start" => {
-            crate::core::guards::check(&snap, "run.start")?;
-            spawn_run(root, &["run"], body)
-        }
-        "run/pause" => {
-            request_pause(root)?;
-            Ok(json!({ "ok": true }))
-        }
-        "run/continue" => {
-            busy_guard(&snap)?;
-            spawn_run(root, &["continue"], body)
-        }
-        "task/accept" => {
-            let id = text_field(body, "id");
-            if !is_task_id(&id) {
-                return Err(http(400, "任務 id 不正確"));
-            }
-            if let Some(why) = crate::core::guards::task_accept(&snap, &id) {
-                return Err(http(409, why));
-            }
-            let verdict = crate::core::util::js_string(&snap["state"]["tasks"][&id]["review_verdict"]);
-            crate::core::state::update_state(root, |s| { crate::core::state::task_state(s, &id)["review_override"] = json!(true); })?;
-            crate::core::state::append_log(root, &format!("task-{id}"), &format!("使用者接受目前結果（審查 {verdict}），重新驗證後進入人工驗收"));
-            spawn_run(root, &["run", "--task", &id, "--verify"], body)
-        }
-        "task/rerun" => {
-            // 先檢查輸入格式（400），再檢查流程狀態（409）。
-            let id = text_field(body, "id");
-            if !is_task_id(&id) {
-                return Err(http(400, "任務 id 不正確"));
-            }
-            crate::core::guards::check(&snap, "task.rerun")?;
-            if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
-        }
-        "config/runtime" | "config/models" | "config/mode" | "config/limits" | "config/token_saving" => config_action(action, body, Some(root)),
-        "config/project" => {
-            crate::core::guards::check(&snap, "project.settings")?;
-            // 只有 build/test/lint、feature、context_files 屬於專案。
-            let mut patch = json!({});
-            if let Some(commands) = body["commands"].as_object() {
-                let mut cmds = json!({});
-                for key in ["build", "test", "lint"] {
-                    if let Some(v) = commands.get(key) {
-                        cmds[key] = json!(v.as_str().unwrap_or("").trim());
-                    }
-                }
-                patch["commands"] = cmds;
-            }
-            if let Some(feature) = body["feature"].as_str() {
-                patch["feature"] = json!(feature.trim());
-            }
-            if let Some(files) = body["context_files"].as_array() {
-                patch["context_files"] = json!(files.iter().filter_map(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>());
-            }
-            Ok(json!({ "config": patch_config(root, &patch)? }))
-        }
-        "doctor" => doctor_report(root),
-        "usage/refresh" => refresh_usage_limits(root, &snap["config"]),
-        "graph/build" => { crate::core::graph::build(root)?; Ok(crate::core::graph::summary(root)) },
-        "skills/import" => {
-            busy_guard(&snap)?;
-            Ok(json!({ "skill": import_skill(root, &text_field(body, "path"))?.to_json() }))
-        }
-        "skills/save" => {
-            busy_guard(&snap)?;
-            let name = body["name"].as_str();
-            Ok(json!({ "skill": save_skill(root, &text_field(body, "text"), name)?.to_json() }))
-        }
-        "skills/delete" => {
-            busy_guard(&snap)?;
-            crate::core::skills::delete_skill(root, &text_field(body, "name"))
-        }
-        "skills/config" => {
-            busy_guard(&snap)?;
-            config_action(action, body, Some(root))
-        }
-        "skills/run" => {
-            busy_guard(&snap)?;
-            let name = text_field(body, "name");
-            load_skill(root, &name)?;
-            let input = text_field(body, "input");
-            if input.trim().is_empty() {
-                return Err(http(400, "請輸入需求或回答"));
-            }
-            let mut args: Vec<String> = ["skills", "run", &name, "--input", &input].map(String::from).to_vec();
-            if let Some(provider) = body["provider"].as_str().filter(|p| !p.is_empty()) {
-                if !["claude", "codex"].contains(&provider) {
-                    return Err(http(400, "provider 不正確"));
-                }
-                args.extend(["--provider".into(), provider.into()]);
-            }
-            let previous = text_field(body, "previousId");
-            if !previous.is_empty() {
-                args.extend(["--session".into(), previous]);
-            }
-            Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
-        }
         "backlog/add" => Ok(json!({ "item": crate::core::backlog::add_item_with_references(root, body.get("title"), body.get("detail"), &body["references"])? })),
         "backlog/update" => {
             let mut patch = json!({});
@@ -413,12 +313,173 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
         "backlog/delete" => { crate::core::guards::check_backlog(&snap["state"], &get_item(root, &text_field(body, "id"))?)?; Ok(json!({ "items": delete_item(root, &text_field(body, "id"))? })) },
         "backlog/reorder" => Ok(json!({ "items": reorder_items(root, &body["ids"])? })),
         "backlog/draft" => {
-            busy_guard(&snap)?;
+            busy_guard(snap)?;
             let item = get_item(root, &text_field(body, "id"))?;
             crate::core::guards::check_backlog(&snap["state"], &item)?;
             crate::core::requirements::prd_input(root, &item)?;
             spawn(root, &["prd", "--backlog", item["id"].as_str().unwrap_or("")])
         }
+        _ => Err(http(404, "未知操作")),
+    }
+}
+
+fn prd_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
+    match action {
+        "prd/save" => { crate::core::guards::check(snap, "prd.edit")?; crate::core::prd::save_manual(root, &text_field(body, "text"), &body["version"], &body["scope"]) },
+        "prd/review" => { crate::core::guards::check(snap, "prd.review")?; spawn(root, &["prd", "--review"]) },
+        // 關掉錯誤通知不受流程狀態限制。
+        "prd/dismiss_error" => crate::core::prd::dismiss_error(root),
+        "prd/new" => {
+            busy_guard(snap)?;
+            let idea = text_field(body, "idea").trim().to_string();
+            if idea.is_empty() {
+                return Err(http(400, "請輸入想法"));
+            }
+            spawn(root, &["prd", &idea])
+        }
+        "prd/approve" => {
+            crate::core::guards::check(snap, "prd.approve")?;
+            if body.get("version").is_some() && (body["version"] != snap["state"]["prd"]["version"] || body["scope"] != snap["state"]["prd"]["reference_scope"]) { return Err(http(409, "PRD 已更新，請重新閱讀後核准")); }
+            approve_and_generate(root, &snap["config"], &|root| spawn(root, &["tasks"]))
+        }
+        "prd/revise" => {
+            crate::core::guards::check(snap, "prd.revise")?;
+            let feedback = text_field(body, "feedback").trim().to_string();
+            if feedback.is_empty() {
+                return Err(http(400, "請輸入修改意見"));
+            }
+            spawn(root, &["prd", "--revise", &feedback])
+        }
+        _ => Err(http(404, "未知操作")),
+    }
+}
+
+fn chat_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
+    match action {
+        "chat/send" => crate::core::chat::start_turn(root, body, &|id, turn| spawn_detached_cli(root, &["chat".into(), "--id".into(), id.into(), "--turn".into(), turn.into()])),
+        "chat/cancel" => crate::core::chat::cancel_turn(root, &text_field(body, "chatId")),
+        "chat/rename" => crate::core::chat::rename_chat(root, &text_field(body, "chatId"), &text_field(body, "title")),
+        "chat/delete" => { crate::core::chat::delete_chat(root, &text_field(body, "chatId"))?; Ok(json!({ "ok": true })) },
+        _ => Err(http(404, "未知操作")),
+    }
+}
+
+/// 任務與流程：編輯任務、核准與產生任務、開始／暫停／繼續流程、接受結果與重跑。
+fn task_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
+    match action {
+        "task/save" => { if !is_task_id(&text_field(body, "id")) { return Err(http(400, "任務 id 不正確")); } crate::core::guards::check(snap, "task.edit")?; let result = crate::core::tasks::edit_task(root, &text_field(body, "id"), &text_field(body, "tag"), &text_field(body, "revision"), &body["task"])?; let _ = crate::core::archive::archive_tasks(root, json!({})); Ok(result) },
+        "tasks/approve" => { crate::core::guards::check(snap, "tasks.approve")?; crate::core::human::approve_tasks(root, &text_field(body, "revision")) },
+        "tasks/generate" => {
+            crate::core::guards::check(snap, "tasks.generate")?;
+            spawn(root, &["tasks"])
+        }
+        "run/start" => {
+            crate::core::guards::check(snap, "run.start")?;
+            spawn_run(root, &["run"], body)
+        }
+        "run/pause" => {
+            request_pause(root)?;
+            Ok(json!({ "ok": true }))
+        }
+        "run/continue" => {
+            busy_guard(snap)?;
+            spawn_run(root, &["continue"], body)
+        }
+        "task/accept" => {
+            let id = text_field(body, "id");
+            if !is_task_id(&id) {
+                return Err(http(400, "任務 id 不正確"));
+            }
+            if let Some(why) = crate::core::guards::task_accept(snap, &id) {
+                return Err(http(409, why));
+            }
+            let verdict = crate::core::util::js_string(&snap["state"]["tasks"][&id]["review_verdict"]);
+            crate::core::state::update_state(root, |s| { crate::core::state::task_state(s, &id)["review_override"] = json!(true); })?;
+            crate::core::state::append_log(root, &format!("task-{id}"), &format!("使用者接受目前結果（審查 {verdict}），重新驗證後進入人工驗收"));
+            spawn_run(root, &["run", "--task", &id, "--verify"], body)
+        }
+        "task/rerun" => {
+            // 先檢查輸入格式（400），再檢查流程狀態（409）。
+            let id = text_field(body, "id");
+            if !is_task_id(&id) {
+                return Err(http(400, "任務 id 不正確"));
+            }
+            crate::core::guards::check(snap, "task.rerun")?;
+            if truthy(body.get("revert")) { spawn_run(root, &["rerun", &id, "--revert"], body) } else { spawn_run(root, &["rerun", &id], body) }
+        }
+        _ => Err(http(404, "未知操作")),
+    }
+}
+
+/// config/project：只有 build/test/lint、feature、context_files 屬於專案。
+fn project_config_action(root: &Path, body: &Value, snap: &Value) -> Result<Value> {
+    crate::core::guards::check(snap, "project.settings")?;
+    let mut patch = json!({});
+    if let Some(commands) = body["commands"].as_object() {
+        let mut cmds = json!({});
+        for key in ["build", "test", "lint"] {
+            if let Some(v) = commands.get(key) {
+                cmds[key] = json!(v.as_str().unwrap_or("").trim());
+            }
+        }
+        patch["commands"] = cmds;
+    }
+    if let Some(feature) = body["feature"].as_str() {
+        patch["feature"] = json!(feature.trim());
+    }
+    if let Some(files) = body["context_files"].as_array() {
+        patch["context_files"] = json!(files.iter().filter_map(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+    }
+    Ok(json!({ "config": patch_config(root, &patch)? }))
+}
+
+fn skills_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
+    if !matches!(action, "skills/import" | "skills/save" | "skills/delete" | "skills/config" | "skills/run") {
+        return Err(http(404, "未知操作"));
+    }
+    busy_guard(snap)?;
+    match action {
+        "skills/import" => Ok(json!({ "skill": import_skill(root, &text_field(body, "path"))?.to_json() })),
+        "skills/save" => {
+            let name = body["name"].as_str();
+            Ok(json!({ "skill": save_skill(root, &text_field(body, "text"), name)?.to_json() }))
+        }
+        "skills/delete" => crate::core::skills::delete_skill(root, &text_field(body, "name")),
+        "skills/config" => config_action(action, body, Some(root)),
+        _ => run_skill_action(root, body),
+    }
+}
+
+/// skills/run：在背景啟動一次 Skill 執行（可指定 AI 與接續的 session）。
+fn run_skill_action(root: &Path, body: &Value) -> Result<Value> {
+    let name = text_field(body, "name");
+    load_skill(root, &name)?;
+    let input = text_field(body, "input");
+    if input.trim().is_empty() {
+        return Err(http(400, "請輸入需求或回答"));
+    }
+    let mut args: Vec<String> = ["skills", "run", &name, "--input", &input].map(String::from).to_vec();
+    if let Some(provider) = body["provider"].as_str().filter(|p| !p.is_empty()) {
+        if !["claude", "codex"].contains(&provider) {
+            return Err(http(400, "provider 不正確"));
+        }
+        args.extend(["--provider".into(), provider.into()]);
+    }
+    let previous = text_field(body, "previousId");
+    if !previous.is_empty() {
+        args.extend(["--session".into(), previous]);
+    }
+    Ok(json!({ "pid": spawn_detached_cli(root, &args)? }))
+}
+
+/// 不屬於上面各組的操作：權限回答、環境檢查、額度更新、程式碼圖。
+fn other_action(root: &Path, action: &str, body: &Value, snap: &Value) -> Result<Value> {
+    match action {
+        // 權限請求不受 busy_guard 限制：流程正在執行時才會有請求要回答。
+        "permissions/answer" => crate::core::permissions::answer(root, &text_field(body, "id"), &text_field(body, "decision"), &text_field(body, "message")),
+        "doctor" => doctor_report(root),
+        "usage/refresh" => refresh_usage_limits(root, &snap["config"]),
+        "graph/build" => { crate::core::graph::build(root)?; Ok(crate::core::graph::summary(root)) },
         _ => Err(http(404, "未知操作")),
     }
 }

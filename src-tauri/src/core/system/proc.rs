@@ -574,7 +574,7 @@ pub fn query_codex_rpc_with(spec: &CliSpec, cwd: &Path, method: &str, params: Op
 /// Claude Code 的 stream-json 控制面：只送 initialize（不送任何使用者訊息，不會呼叫模型、不耗額度），
 /// 回傳 CLI 的初始化資訊，其中 `models` 是這個帳號在 CLI 模型選單看得到的模型與各自支援的推理強度。
 pub fn query_claude_initialize(spec: &CliSpec, cwd: &Path, timeout_sec: u64) -> Result<Value> {
-    let args: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"].iter().map(|s| s.to_string()).collect();
+    let args: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"].iter().map(ToString::to_string).collect();
     let mut cmd = build_command(Some(spec), &args, Some(cwd), None)?;
     cmd.env_clear().envs(clean_env());
     // stderr 可能有帳號資訊，不收。

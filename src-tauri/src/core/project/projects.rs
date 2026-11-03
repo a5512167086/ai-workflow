@@ -120,17 +120,6 @@ pub fn touch_project(id: &str) -> Result<()> {
     })
 }
 
-#[cfg(all(test, windows))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn project_id_與舊版相同() {
-        assert_eq!(project_id(Path::new("C:/codebase-win/ai-workflow")), "717d44b62a");
-        assert_eq!(project_id(Path::new("C:/Users/x/My Proj/")), "9c415ea475");
-    }
-}
-
 /// 總覽用的狀態摘要。attention 為 true 表示流程停下來等使用者（核准 PRD、測試、處理卡住）。
 /// status：missing | idle | drafting | awaiting_approval | generating | awaiting_tasks | ready | queued | running |
 ///         paused | waiting | feature_test | stuck | error | complete
@@ -214,4 +203,15 @@ pub fn project_summary(project: &Value) -> Value {
         "updated_at": state["pipeline"]["updated_at"],
     }));
     out
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_id_與舊版相同() {
+        assert_eq!(project_id(Path::new("C:/codebase-win/ai-workflow")), "717d44b62a");
+        assert_eq!(project_id(Path::new("C:/Users/x/My Proj/")), "9c415ea475");
+    }
 }

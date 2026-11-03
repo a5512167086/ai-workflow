@@ -97,7 +97,7 @@ pub fn expire_scope(root: &Path, scope: &str) {
 
 fn list(root: &Path) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(dir(root)) else { return vec![] };
-    let mut out: Vec<Value> = entries.filter_map(|e| e.ok())
+    let mut out: Vec<Value> = entries.filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
         .filter_map(|e| read_json(e.path()))
         .collect();

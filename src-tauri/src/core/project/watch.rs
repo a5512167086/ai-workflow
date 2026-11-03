@@ -38,12 +38,12 @@ impl ProjectWatcher {
 
     fn log_sizes(&self) -> Vec<(String, u64)> {
         let dir = data_dir(&self.root).join("logs");
-        fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.metadata().ok()?.len()))).filter(|(name, _)| name.ends_with(".log")).collect()).unwrap_or_default()
+        fs::read_dir(dir).map(|d| d.filter_map(Result::ok).filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.metadata().ok()?.len()))).filter(|(name, _)| name.ends_with(".log")).collect()).unwrap_or_default()
     }
 
     fn stream_sizes(&self) -> HashMap<String, u64> {
         let dir = data_dir(&self.root).join("logs");
-        fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| {
+        fs::read_dir(dir).map(|d| d.filter_map(Result::ok).filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             Some((name.strip_suffix(".stream")?.to_string(), e.metadata().ok()?.len()))
         }).collect()).unwrap_or_default()

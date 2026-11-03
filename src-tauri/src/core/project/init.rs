@@ -144,28 +144,7 @@ pub fn migrate_legacy(root: &Path) -> Result<Vec<String>> {
     fs::create_dir_all(&target)?;
     let mut moved = Vec::new();
     if legacy_cfg.exists() {
-        // 專案欄位進 project.json；全域欄位只在全域設定還沒有該欄位時補上（第一個搬過來的專案成為全域預設）。
-        let mut project = load_project(root).unwrap_or(json!({}));
-        let mut global = json!({});
-        let existing = read_json(global_config_path()).filter(Value::is_object).unwrap_or(json!({}));
-        for (k, v) in raw_cfg.as_object().into_iter().flatten() {
-            if PROJECT_KEYS.contains(&k.as_str()) {
-                project[k] = v.clone();
-            } else if !["handover_path", "prd_path", "backlog_path", "archive_dir", "taskmaster", "task_master"].contains(&k.as_str()) && existing.get(k).is_none() {
-                global[k] = v.clone();
-            }
-        }
-        if project["context_files"] == json!(["docs/ai-context.md", "docs/index.md"]) {
-            // 舊版 init 的範本；只保留真的存在的檔案。
-            let kept: Vec<Value> = project["context_files"].as_array().unwrap().iter().filter(|f| f.as_str().is_some_and(|f| root.join(f).exists())).cloned().collect();
-            project["context_files"] = json!(kept);
-        }
-        if save_project(root, &project).is_ok() {
-            moved.push(format!("{LEGACY_CONFIG} → project.json（專案欄位）"));
-        }
-        if global.as_object().is_some_and(|m| !m.is_empty()) && patch_global(&global).is_ok() {
-            moved.push(format!("{LEGACY_CONFIG} → 全域設定（{}）", global.as_object().unwrap().keys().cloned().collect::<Vec<_>>().join("、")));
-        }
+        migrate_legacy_config(root, &raw_cfg, &mut moved);
     }
     if legacy_dir.is_dir() {
         let count = copy_tree(&legacy_dir, &target, &["tmp", "locks", "calls.jsonl"])?;
@@ -178,31 +157,62 @@ pub fn migrate_legacy(root: &Path) -> Result<Vec<String>> {
         }
     }
     if archive.is_dir() {
-        let dest = target.join("archive");
-        fs::create_dir_all(&dest)?;
-        let mut count = 0;
-        for entry in fs::read_dir(&archive)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() && entry.path().join("prd.md").exists() {
-                let to = dest.join(entry.file_name());
-                fs::create_dir_all(&to)?;
-                copy_tree(&entry.path(), &to, &[])?;
-                count += 1;
-            }
-        }
-        if count > 0 {
-            moved.push(format!("{} → archive/（{count} 個功能封存）", archive.display()));
-            let prefix = format!("{}/", archive.strip_prefix(root).unwrap_or(&archive).to_string_lossy().replace('\\', "/"));
-            let state = read_state(root);
-            if let Some(rest) = state["prd"]["archive_dir"].as_str().and_then(|d| d.strip_prefix(prefix.as_str())) {
-                let next = format!("archive/{rest}");
-                update_state(root, move |s| s["prd"]["archive_dir"] = json!(next))?;
-            }
-        }
+        migrate_legacy_archive(root, &archive, &target, &mut moved)?;
     }
     write_json(&marker, &json!({ "at": now_iso(), "from": root.to_string_lossy(), "moved": moved }))?;
     if !moved.is_empty() {
         append_log(root, "process", &format!("已把專案資料夾裡的舊資料搬到 {}：\n{}\n舊檔沒有刪除，確認後可以自行清理 {LEGACY_CONFIG}、{LEGACY_DIR}/、docs/aipipe/、docs/prd/ 與 docs/handovers/。", target.display(), moved.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n")));
     }
     Ok(moved)
+}
+
+/// 舊版設定檔：專案欄位進 project.json；全域欄位只在全域設定還沒有該欄位時補上（第一個搬過來的專案成為全域預設）。
+fn migrate_legacy_config(root: &Path, raw_cfg: &Value, moved: &mut Vec<String>) {
+    let mut project = load_project(root).unwrap_or(json!({}));
+    let mut global = json!({});
+    let existing = read_json(global_config_path()).filter(Value::is_object).unwrap_or(json!({}));
+    for (k, v) in raw_cfg.as_object().into_iter().flatten() {
+        if PROJECT_KEYS.contains(&k.as_str()) {
+            project[k] = v.clone();
+        } else if !["handover_path", "prd_path", "backlog_path", "archive_dir", "taskmaster", "task_master"].contains(&k.as_str()) && existing.get(k).is_none() {
+            global[k] = v.clone();
+        }
+    }
+    if project["context_files"] == json!(["docs/ai-context.md", "docs/index.md"]) {
+        // 舊版 init 的範本；只保留真的存在的檔案。
+        let kept: Vec<Value> = project["context_files"].as_array().unwrap().iter().filter(|f| f.as_str().is_some_and(|f| root.join(f).exists())).cloned().collect();
+        project["context_files"] = json!(kept);
+    }
+    if save_project(root, &project).is_ok() {
+        moved.push(format!("{LEGACY_CONFIG} → project.json（專案欄位）"));
+    }
+    if global.as_object().is_some_and(|m| !m.is_empty()) && patch_global(&global).is_ok() {
+        moved.push(format!("{LEGACY_CONFIG} → 全域設定（{}）", global.as_object().unwrap().keys().cloned().collect::<Vec<_>>().join("、")));
+    }
+}
+
+/// 舊版的功能封存：只搬含 prd.md 的資料夾，並把目前 PRD 指向的封存路徑改成新位置。
+fn migrate_legacy_archive(root: &Path, archive: &Path, target: &Path, moved: &mut Vec<String>) -> Result<()> {
+    let dest = target.join("archive");
+    fs::create_dir_all(&dest)?;
+    let mut count = 0;
+    for entry in fs::read_dir(archive)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && entry.path().join("prd.md").exists() {
+            let to = dest.join(entry.file_name());
+            fs::create_dir_all(&to)?;
+            copy_tree(&entry.path(), &to, &[])?;
+            count += 1;
+        }
+    }
+    if count > 0 {
+        moved.push(format!("{} → archive/（{count} 個功能封存）", archive.display()));
+        let prefix = format!("{}/", archive.strip_prefix(root).unwrap_or(archive).to_string_lossy().replace('\\', "/"));
+        let state = read_state(root);
+        if let Some(rest) = state["prd"]["archive_dir"].as_str().and_then(|d| d.strip_prefix(prefix.as_str())) {
+            let next = format!("archive/{rest}");
+            update_state(root, move |s| s["prd"]["archive_dir"] = json!(next))?;
+        }
+    }
+    Ok(())
 }

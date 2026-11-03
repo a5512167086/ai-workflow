@@ -35,7 +35,7 @@ fn fixture(providers: &[&str], scenario: Value) -> (PathBuf, Value) {
 
 fn sessions(root: &Path) -> Vec<Value> {
     let dir = data_dir(root).join("sessions");
-    fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).map(|e| serde_json::from_str(&fs::read_to_string(e.path()).unwrap()).unwrap()).collect()).unwrap_or_default()
+    fs::read_dir(dir).map(|d| d.filter_map(Result::ok).map(|e| serde_json::from_str(&fs::read_to_string(e.path()).unwrap()).unwrap()).collect()).unwrap_or_default()
 }
 
 fn agent<'a>(root: &'a Path, cfg: &'a Value, provider: &'a str, write: bool, stage: Option<&'a str>) -> AgentOpts<'a> {

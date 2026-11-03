@@ -148,123 +148,15 @@ fn command(argv: &[String], forward: &mut Option<Vec<String>>) -> Result<i32> {
         prepare_project(root);
     }
 
-    let mut forward_run = |mut forwarded: Vec<String>| -> Result<i32> {
-        if let Some(p) = args.get("use_provider") { forwarded.extend(["--use-provider".into(), p.into()]); }
-        *forward = Some(forwarded);
-        Ok(0)
-    };
-
     match cmd {
-        Some("chat") => {
-            let id = args.get("id").ok_or_else(|| crate::core::AppError::new("請指定對話 id"))?;
-            let turn = args.get("turn").ok_or_else(|| crate::core::AppError::new("請指定對話回合"))?;
-            let chat = crate::core::chat::run_turn(root, id, turn)?;
-            if chat["status"] != "done" { crate::bail!("{}", chat["error"].as_str().unwrap_or("對話未完成")); }
-        }
-        Some("init") => {
-            let mut git_init = args.flag("git_init");
-            if !git_init && std::io::stdin().is_terminal() && !is_git_repo(root)? {
-                git_init = confirm_prompt(&format!("{} 不是 git repo（ai-workflow 用 git 追蹤、審查與還原 AI 的變更）。要幫你執行 git init 嗎？[Y/n] ", root.display()));
-            }
-            let roles = ROLES.iter().filter_map(|r| args.get(r).map(|v| (r.to_string(), v.to_string()))).collect();
-            let r = init_project(root, &InitOptions {
-                force: args.flag("force"), git_init, mode: args.get("mode").map(String::from), feature: args.get("feature").map(String::from), roles,
-            })?;
-            if r.git_initialized {
-                println!("已在 {} 執行 git init", root.display());
-            }
-            let p = add_project(root, None)?;
-            println!("已加入 {}（id {}，模式：{}）；流程資料放在 {}，專案資料夾不會新增檔案", root.display(), p["id"].as_str().unwrap_or(""), cfg_str(&r.cfg, "mode"), r.data_dir.display());
-            let c = |k: &str| r.cfg["commands"][k].as_str().filter(|s| !s.is_empty()).unwrap_or("-").to_string();
-            println!("偵測到的指令：build={} test={} lint={}", c("build"), c("test"), c("lint"));
-            for item in &r.migrated {
-                println!("已搬移舊資料：{item}");
-            }
-            println!("下一步：ai-workflow doctor 確認 CLI 登入狀態，然後 ai-workflow prd \"<想法>\" 或開啟桌面 app");
-        }
+        Some("chat") => chat_command(root, &args)?,
+        Some("init") => init_command(root, &args)?,
         // 專案圖譜（對應 graphify 的 update／query／path／explain）。
-        Some("graph") => {
-            let words = rest.iter().skip(1).cloned().collect::<Vec<_>>();
-            match rest.first().map(String::as_str) {
-                None | Some("build") => {
-                    let built = crate::core::graph::build(root)?;
-                    println!("已建立專案圖譜：{} 個節點、{} 條關係", built.graph.nodes.len(), built.graph.edges.len());
-                    println!("{}", crate::core::graph::report_file(root).display());
-                }
-                Some("query") => {
-                    let (g, a) = crate::core::graph::load(root)?;
-                    let budget = args.get("budget").and_then(|b| b.parse().ok()).unwrap_or(2000);
-                    println!("{}", crate::core::graph::query::query(&g, &a, &words.join(" "), budget).unwrap_or_else(|| "沒有找到相關的節點".into()));
-                }
-                Some("path") if words.len() == 2 => {
-                    let (g, a) = crate::core::graph::load(root)?;
-                    println!("{}", crate::core::graph::query::path(&g, &a, &words[0], &words[1]));
-                }
-                Some("explain") if !words.is_empty() => {
-                    let (g, a) = crate::core::graph::load(root)?;
-                    println!("{}", crate::core::graph::query::explain(&g, &a, &words.join(" ")));
-                }
-                _ => crate::bail!("用法：ai-workflow graph [build | query <問題> [--budget N] | path <A> <B> | explain <名稱>]"),
-            }
-        }
-        Some("doctor") => {
-            let report = doctor_report(root)?;
-            for line in report["lines"].as_array().into_iter().flatten() {
-                println!("{}", line.as_str().unwrap_or(""));
-            }
-            return Ok(if report["bad"] == 0 { 0 } else { 1 });
-        }
-        Some("prd") => {
-            let cfg = load_config(root)?;
-            ensure_dirs(root)?;
-            if args.flag("approve") {
-                let file = approve_prd(root, &cfg)?;
-                println!("PRD 已核准：{}\n下一步：ai-workflow tasks", file.display());
-                return Ok(0);
-            }
-            if args.flag("review") {
-                crate::core::prd::review_current(root, &cfg)?;
-            } else if let Some(feedback) = args.get("revise") {
-                revise_prd(root, &cfg, feedback)?;
-            } else if let Some(id) = args.get("backlog") {
-                let item = get_item(root, id)?;
-                // 先確認需求釐清已由使用者確認，再把待辦標成進行中，失敗時不改狀態。
-                crate::core::requirements::prd_input(root, &item)?;
-                update_item(root, id, &json!({ "status": "in_progress" }))?;
-                draft_prd(root, &cfg, &idea_for(&item), Some(id))?;
-            } else {
-                let idea = rest.join(" ").trim().to_string();
-                if idea.is_empty() {
-                    crate::bail!("請提供想法，例如：ai-workflow prd \"加入匯出 CSV 功能\"");
-                }
-                draft_prd(root, &cfg, &idea, None)?;
-            }
-            println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 ai-workflow prd --approve");
-        }
-        Some("tasks") => {
-            if args.flag("approve") { crate::core::human::approve_tasks(root, &tasks::revision(root)?)?; println!("任務已人工核准，可執行 ai-workflow run"); return Ok(0); }
-            let count = generate_tasks(root)?;
-            println!("已產生 {count} 個任務，下一步：ai-workflow run 或在 UI 按「開始」");
-        }
-        Some("skills") => match rest.first().map(String::as_str) {
-            None | Some("list") => {
-                for s in list_skills(root) {
-                    let detail = if s["compatible"] == true { s["description"].as_str() } else { s["error"].as_str().or(Some("含執行器專屬設定")) };
-                    println!("{}：{}", s["name"].as_str().unwrap_or(""), detail.unwrap_or(""));
-                }
-            }
-            Some("import") => {
-                let Some(dir) = rest.get(1) else { crate::bail!("請指定 Skill 資料夾") };
-                println!("已匯入 {}", import_skill(root, dir)?.name);
-            }
-            Some("run") => {
-                let name = rest.get(1).cloned().unwrap_or_default();
-                let run = run_skill(root, &name, args.get("input").unwrap_or(""), args.get("provider"), args.get("session"))?;
-                let text = run["messages"].as_array().and_then(|m| m.last()).and_then(|m| m["text"].as_str()).unwrap_or("");
-                println!("{text}\n\nSkill session: {}", run["id"].as_str().unwrap_or(""));
-            }
-            _ => crate::bail!("用法：skills list|import|run"),
-        },
+        Some("graph") => graph_command(root, &args, &rest)?,
+        Some("doctor") => return doctor_command(root),
+        Some("prd") => prd_command(root, &args, &rest)?,
+        Some("tasks") => tasks_command(root, &args)?,
+        Some("skills") => skills_command(root, &args, &rest)?,
         Some("run") => {
             let result = run_pipeline_with_provider(root, args.get("task"), args.flag("verify"), args.get("use_provider"))?;
             let reason = read_state(root)["pipeline"]["reason"].as_str().unwrap_or("").to_string();
@@ -274,49 +166,194 @@ fn command(argv: &[String], forward: &mut Option<Vec<String>>) -> Result<i32> {
             request_pause(root)?;
             println!("已要求暫停，目前任務結束後停下");
         }
-        Some("continue") => match acknowledge(root)? {
-            Next::Run if !args.flag("no_run") => return forward_run(strings(&["run", "--cwd", &root.to_string_lossy()])),
-            Next::Verify(id) => return forward_run(strings(&["run", "--cwd", &root.to_string_lossy(), "--task", &id, "--verify"])),
-            Next::Done => println!("功能已完成"),
-            Next::Run => {}
-        },
-        Some("rerun") => {
-            let Some(id) = rest.first() else { crate::bail!("請指定任務 id") };
-            prepare_rerun(root, id, args.flag("revert"))?;
-            if !args.flag("no_run") {
-                return forward_run(strings(&["run", "--cwd", &root.to_string_lossy(), "--task", id]));
-            }
-        }
-        Some("mode") => {
-            let mode = rest.first().map(String::as_str).unwrap_or("");
-            if !MODES.contains(&mode) {
-                crate::bail!("模式必須是 {}", MODES.join(" / "));
-            }
-            crate::core::config::patch_global(&json!({ "mode": mode }))?;
-            println!("已切換為 {mode} 模式（全域設定）");
-        }
+        Some("continue") => return continue_command(root, &args, forward),
+        Some("rerun") => return rerun_command(root, &args, &rest, forward),
+        Some("mode") => mode_command(&rest)?,
         Some("status") => print_status(root)?,
         Some("projects") => projects_command(&rest, root)?,
-        Some("queue") => {
-            if let Some(max) = args.get("max") {
-                set_max_concurrent(&json!(max))?;
-            }
-            let q = queue_snapshot();
-            println!("同時執行上限：{}", q["max"]);
-            let running: Vec<String> = q["running"].as_array().into_iter().flatten().map(|e| format!("{}（pid {}）", e["root"].as_str().unwrap_or(""), e["pid"])).collect();
-            println!("執行中：{}", if running.is_empty() { "無".to_string() } else { running.join("、") });
-            for e in q["waiting"].as_array().into_iter().flatten() {
-                println!("  排隊 #{}：{}（pid {}）", e["position"], e["root"].as_str().unwrap_or(""), e["pid"]);
-            }
-        }
+        Some("queue") => queue_command(&args)?,
         None | Some("help") | Some("--help") => println!("{HELP}"),
         Some(other) => crate::bail!("未知指令：{other}\n\n{HELP}"),
     }
     Ok(0)
 }
 
+/// 交給 main 的迴圈接著跑另一個子指令（沿用 --use-provider）。
+fn forward_run(args: &Args, forward: &mut Option<Vec<String>>, mut forwarded: Vec<String>) -> Result<i32> {
+    if let Some(p) = args.get("use_provider") { forwarded.extend(["--use-provider".into(), p.into()]); }
+    *forward = Some(forwarded);
+    Ok(0)
+}
+
+fn chat_command(root: &Path, args: &Args) -> Result<()> {
+    let id = args.get("id").ok_or_else(|| crate::core::AppError::new("請指定對話 id"))?;
+    let turn = args.get("turn").ok_or_else(|| crate::core::AppError::new("請指定對話回合"))?;
+    let chat = crate::core::chat::run_turn(root, id, turn)?;
+    if chat["status"] != "done" { crate::bail!("{}", chat["error"].as_str().unwrap_or("對話未完成")); }
+    Ok(())
+}
+
+fn init_command(root: &Path, args: &Args) -> Result<()> {
+    let mut git_init = args.flag("git_init");
+    if !git_init && std::io::stdin().is_terminal() && !is_git_repo(root)? {
+        git_init = confirm_prompt(&format!("{} 不是 git repo（ai-workflow 用 git 追蹤、審查與還原 AI 的變更）。要幫你執行 git init 嗎？[Y/n] ", root.display()));
+    }
+    let roles = ROLES.iter().filter_map(|r| args.get(r).map(|v| (r.to_string(), v.to_string()))).collect();
+    let r = init_project(root, &InitOptions {
+        force: args.flag("force"), git_init, mode: args.get("mode").map(String::from), feature: args.get("feature").map(String::from), roles,
+    })?;
+    if r.git_initialized {
+        println!("已在 {} 執行 git init", root.display());
+    }
+    let p = add_project(root, None)?;
+    println!("已加入 {}（id {}，模式：{}）；流程資料放在 {}，專案資料夾不會新增檔案", root.display(), p["id"].as_str().unwrap_or(""), cfg_str(&r.cfg, "mode"), r.data_dir.display());
+    let c = |k: &str| r.cfg["commands"][k].as_str().filter(|s| !s.is_empty()).unwrap_or("-").to_string();
+    println!("偵測到的指令：build={} test={} lint={}", c("build"), c("test"), c("lint"));
+    for item in &r.migrated {
+        println!("已搬移舊資料：{item}");
+    }
+    println!("下一步：ai-workflow doctor 確認 CLI 登入狀態，然後 ai-workflow prd \"<想法>\" 或開啟桌面 app");
+    Ok(())
+}
+
+fn graph_command(root: &Path, args: &Args, rest: &[String]) -> Result<()> {
+    let words = rest.iter().skip(1).cloned().collect::<Vec<_>>();
+    match rest.first().map(String::as_str) {
+        None | Some("build") => {
+            let built = crate::core::graph::build(root)?;
+            println!("已建立專案圖譜：{} 個節點、{} 條關係", built.graph.nodes.len(), built.graph.edges.len());
+            println!("{}", crate::core::graph::report_file(root).display());
+        }
+        Some("query") => {
+            let (g, a) = crate::core::graph::load(root)?;
+            let budget = args.get("budget").and_then(|b| b.parse().ok()).unwrap_or(2000);
+            println!("{}", crate::core::graph::query::query(&g, &a, &words.join(" "), budget).unwrap_or_else(|| "沒有找到相關的節點".into()));
+        }
+        Some("path") if words.len() == 2 => {
+            let (g, a) = crate::core::graph::load(root)?;
+            println!("{}", crate::core::graph::query::path(&g, &a, &words[0], &words[1]));
+        }
+        Some("explain") if !words.is_empty() => {
+            let (g, a) = crate::core::graph::load(root)?;
+            println!("{}", crate::core::graph::query::explain(&g, &a, &words.join(" ")));
+        }
+        _ => crate::bail!("用法：ai-workflow graph [build | query <問題> [--budget N] | path <A> <B> | explain <名稱>]"),
+    }
+    Ok(())
+}
+
+fn doctor_command(root: &Path) -> Result<i32> {
+    let report = doctor_report(root)?;
+    for line in report["lines"].as_array().into_iter().flatten() {
+        println!("{}", line.as_str().unwrap_or(""));
+    }
+    Ok(if report["bad"] == 0 { 0 } else { 1 })
+}
+
+fn prd_command(root: &Path, args: &Args, rest: &[String]) -> Result<()> {
+    let cfg = load_config(root)?;
+    ensure_dirs(root)?;
+    if args.flag("approve") {
+        let file = approve_prd(root, &cfg)?;
+        println!("PRD 已核准：{}\n下一步：ai-workflow tasks", file.display());
+        return Ok(());
+    }
+    if args.flag("review") {
+        crate::core::prd::review_current(root, &cfg)?;
+    } else if let Some(feedback) = args.get("revise") {
+        revise_prd(root, &cfg, feedback)?;
+    } else if let Some(id) = args.get("backlog") {
+        let item = get_item(root, id)?;
+        // 先確認需求釐清已由使用者確認，再把待辦標成進行中，失敗時不改狀態。
+        crate::core::requirements::prd_input(root, &item)?;
+        update_item(root, id, &json!({ "status": "in_progress" }))?;
+        draft_prd(root, &cfg, &idea_for(&item), Some(id))?;
+    } else {
+        let idea = rest.join(" ").trim().to_string();
+        if idea.is_empty() {
+            crate::bail!("請提供想法，例如：ai-workflow prd \"加入匯出 CSV 功能\"");
+        }
+        draft_prd(root, &cfg, &idea, None)?;
+    }
+    println!("PRD 已完成審查，等待核准：在 UI 按「核准」或執行 ai-workflow prd --approve");
+    Ok(())
+}
+
+fn tasks_command(root: &Path, args: &Args) -> Result<()> {
+    if args.flag("approve") { crate::core::human::approve_tasks(root, &tasks::revision(root)?)?; println!("任務已人工核准，可執行 ai-workflow run"); return Ok(()); }
+    let count = generate_tasks(root)?;
+    println!("已產生 {count} 個任務，下一步：ai-workflow run 或在 UI 按「開始」");
+    Ok(())
+}
+
+fn skills_command(root: &Path, args: &Args, rest: &[String]) -> Result<()> {
+    match rest.first().map(String::as_str) {
+        None | Some("list") => {
+            for s in list_skills(root) {
+                let detail = if s["compatible"] == true { s["description"].as_str() } else { s["error"].as_str().or(Some("含執行器專屬設定")) };
+                println!("{}：{}", s["name"].as_str().unwrap_or(""), detail.unwrap_or(""));
+            }
+        }
+        Some("import") => {
+            let Some(dir) = rest.get(1) else { crate::bail!("請指定 Skill 資料夾") };
+            println!("已匯入 {}", import_skill(root, dir)?.name);
+        }
+        Some("run") => {
+            let name = rest.get(1).cloned().unwrap_or_default();
+            let run = run_skill(root, &name, args.get("input").unwrap_or(""), args.get("provider"), args.get("session"))?;
+            let text = run["messages"].as_array().and_then(|m| m.last()).and_then(|m| m["text"].as_str()).unwrap_or("");
+            println!("{text}\n\nSkill session: {}", run["id"].as_str().unwrap_or(""));
+        }
+        _ => crate::bail!("用法：skills list|import|run"),
+    }
+    Ok(())
+}
+
+fn continue_command(root: &Path, args: &Args, forward: &mut Option<Vec<String>>) -> Result<i32> {
+    match acknowledge(root)? {
+        Next::Run if !args.flag("no_run") => return forward_run(args, forward, strings(&["run", "--cwd", &root.to_string_lossy()])),
+        Next::Verify(id) => return forward_run(args, forward, strings(&["run", "--cwd", &root.to_string_lossy(), "--task", &id, "--verify"])),
+        Next::Done => println!("功能已完成"),
+        Next::Run => {}
+    }
+    Ok(0)
+}
+
+fn rerun_command(root: &Path, args: &Args, rest: &[String], forward: &mut Option<Vec<String>>) -> Result<i32> {
+    let Some(id) = rest.first() else { crate::bail!("請指定任務 id") };
+    prepare_rerun(root, id, args.flag("revert"))?;
+    if !args.flag("no_run") {
+        return forward_run(args, forward, strings(&["run", "--cwd", &root.to_string_lossy(), "--task", id]));
+    }
+    Ok(0)
+}
+
+fn mode_command(rest: &[String]) -> Result<()> {
+    let mode = rest.first().map(String::as_str).unwrap_or("");
+    if !MODES.contains(&mode) {
+        crate::bail!("模式必須是 {}", MODES.join(" / "));
+    }
+    crate::core::config::patch_global(&json!({ "mode": mode }))?;
+    println!("已切換為 {mode} 模式（全域設定）");
+    Ok(())
+}
+
+fn queue_command(args: &Args) -> Result<()> {
+    if let Some(max) = args.get("max") {
+        set_max_concurrent(&json!(max))?;
+    }
+    let q = queue_snapshot();
+    println!("同時執行上限：{}", q["max"]);
+    let running: Vec<String> = q["running"].as_array().into_iter().flatten().map(|e| format!("{}（pid {}）", e["root"].as_str().unwrap_or(""), e["pid"])).collect();
+    println!("執行中：{}", if running.is_empty() { "無".to_string() } else { running.join("、") });
+    for e in q["waiting"].as_array().into_iter().flatten() {
+        println!("  排隊 #{}：{}（pid {}）", e["position"], e["root"].as_str().unwrap_or(""), e["pid"]);
+    }
+    Ok(())
+}
+
 fn strings(items: &[&str]) -> Vec<String> {
-    items.iter().map(|s| s.to_string()).collect()
+    items.iter().map(ToString::to_string).collect()
 }
 
 /// 用作者 AI 依核准的 PRD 拆任務，交給內建任務引擎。回傳任務數。
