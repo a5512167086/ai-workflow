@@ -104,7 +104,9 @@ fn markdown_section(text: &str, keys: &[&str]) -> Option<String> {
     (!body.is_empty()).then_some(body)
 }
 
-/// 精簡輸出規則（參考 caveman 的想法，文字自己寫）：只約束回覆文字，不影響寫進檔案的內容與規定格式。
+/// 精簡輸出規則：只約束回覆文字，不影響寫進檔案的內容與規定格式。
+/// 改寫自 caveman（https://github.com/juliusbrussee/caveman，Copyright 2026 Julius Brussee，Apache-2.0）的回覆規則：
+/// 濃縮成五條、翻成繁體中文，並限定在回覆文字。授權全文見 THIRD_PARTY_NOTICES.txt。
 pub const TERSE_RULES: &str = "## 回覆風格：精簡
 - 結論先行；不寒暄、不重述題目或任務內容、不寫結語。
 - 用短句條列，一句一個重點；可以省略贅字，但不要自創縮寫。

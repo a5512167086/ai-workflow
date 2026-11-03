@@ -17,6 +17,8 @@
     "test": "npm run test:ui && cargo test --manifest-path src-tauri/Cargo.toml",
     "test:ui": "vitest run",
     "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "licenses": "node scripts/third-party-licenses.mjs",
+    "licenses:check": "node scripts/third-party-licenses.mjs --check",
     "icons": "tauri icon src-tauri/icons/icon.svg -o src-tauri/icons",
     "tauri": "tauri"
   },

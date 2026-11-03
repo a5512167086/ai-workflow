@@ -1,7 +1,7 @@
 //! 內建的共用 Skills，直接編進執行檔，不需要外部資源。
 //!
 //! grill-me、to-spec、to-tickets、tdd 改寫自 Matt Pocock 的 skills（https://github.com/mattpocock/skills，MIT 授權，
-//! 授權全文見 src/THIRD_PARTY_NOTICES.txt），配合 ai-workflow 的流程：需求釐清 → PRD → 拆任務 → 逐一實作。
+//! 授權全文見專案根目錄的 THIRD_PARTY_NOTICES.txt），配合 ai-workflow 的流程：需求釐清 → PRD → 拆任務 → 逐一實作。
 //! 流程各階段的提示詞已經內含同樣的規則；這些技能讓使用者在 Skills 頁看得到、可以綁到其他階段或單獨開會議。
 
 pub const BUILTIN_SKILLS: &[(&str, &str)] = &[

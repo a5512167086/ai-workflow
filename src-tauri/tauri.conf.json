@@ -49,6 +49,13 @@
         ],
         "displayLanguageSelector": false
       }
+    },
+    "copyright": "Copyright (c) 2026 a5512167086. MIT License.",
+    "license": "MIT",
+    "resources": {
+      "../LICENSE": "licenses/LICENSE.txt",
+      "../THIRD_PARTY_NOTICES.txt": "licenses/THIRD_PARTY_NOTICES.txt",
+      "licenses/THIRD_PARTY_LICENSES.txt": "licenses/THIRD_PARTY_LICENSES.txt"
     }
   }
 }

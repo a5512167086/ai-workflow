@@ -51,6 +51,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # 安裝包附的第三方授權清單要跟著依賴更新：改了 package-lock.json 或 Cargo.lock 就要跑 npm run licenses。
+      - name: Third-party licenses up to date
+        run: npm run licenses:check
+
       - name: Frontend tests
         run: npm run test:ui
 

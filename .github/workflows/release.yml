@@ -49,6 +49,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # 安裝包會附上 src-tauri/licenses/THIRD_PARTY_LICENSES.txt，發布前確認它和依賴一致。
+      - name: Third-party licenses up to date
+        run: npm run licenses:check
+
       # beforeBuildCommand 會先做 tsc -b 與 vite build；bundle 目標在 tauri.conf.json（nsis）。
       - name: Build installer
         run: npm run build

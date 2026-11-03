@@ -296,7 +296,7 @@ AI 在一個 session 裡每發一次請求，都會把整份 prompt 與之前的
 
 「用量」頁顯示估計省下的 tokens，以及依階段分開的次數、用量與平均；CLI 回報的訂閱額度剩餘百分比與重設時間也在這裡。詳見 [Token 與額度顯示](usage.md)。
 
-精簡回覆的想法來自 [caveman](https://github.com/juliusbrussee/caveman)，專案圖譜參考 [graphify](https://github.com/Graphify-Labs/graphify)；ai-workflow 沒有使用它們的程式碼或文字。
+精簡回覆的規則改寫自 [caveman](https://github.com/juliusbrussee/caveman)（Apache-2.0，濃縮並翻成中文）；專案圖譜只參考 [graphify](https://github.com/Graphify-Labs/graphify) 的設計，沒有使用它的程式碼或文字。來源與授權見 [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt)。
 
 ## 專案圖譜
 

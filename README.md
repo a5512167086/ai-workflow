@@ -153,7 +153,9 @@ git push origin v0.1.0
 
 [MIT](LICENSE)。
 
-內建的 grill-me、to-spec、to-tickets、tdd 技能改寫自 [Matt Pocock 的 skills](https://github.com/mattpocock/skills)（MIT）；任務看板的資訊層級參考 [Monstrare](https://github.com/pjwang2022/Monstrare)（MIT）；精簡回覆的想法來自 [caveman](https://github.com/juliusbrussee/caveman)，專案圖譜參考 [graphify](https://github.com/Graphify-Labs/graphify)。授權全文見 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
+內建的 grill-me、to-spec、to-tickets、tdd 技能改寫自 [Matt Pocock 的 skills](https://github.com/mattpocock/skills)（MIT）；介面元件來自 [shadcn/ui](https://github.com/shadcn-ui/ui)（MIT）；精簡回覆的規則改寫自 [caveman](https://github.com/juliusbrussee/caveman)（Apache-2.0）；任務看板的資訊層級參考 [Monstrare](https://github.com/pjwang2022/Monstrare)（MIT），專案圖譜的設計參考 [graphify](https://github.com/Graphify-Labs/graphify)。授權全文見 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
+
+安裝包裡的第三方套件（Tauri、React、Mermaid、tree-sitter…）各自的授權全文在 [src-tauri/licenses/THIRD_PARTY_LICENSES.txt](src-tauri/licenses/THIRD_PARTY_LICENSES.txt)，安裝後也會放在安裝目錄的 `licenses` 資料夾。這個檔案由 `npm run licenses` 產生，CI 會檢查它有沒有跟著依賴更新。
 
 ---
 
