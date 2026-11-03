@@ -13,8 +13,8 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
   .app { display: flex; height: 100%; }
   aside { width: var(--aside, 300px); flex: none; min-width: 0; overflow-x: hidden; overflow-y: auto; background: var(--panel); padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow-wrap: anywhere; }
-  /* 分隔線：看得到的是 1px 邊線，可以抓的範圍往畫布那邊多 8px（不蓋住側欄的捲軸）。 */
-  .splitter { flex: none; width: 9px; margin-right: -8px; position: relative; z-index: 1; cursor: col-resize; touch-action: none; background: linear-gradient(to right, var(--border) 1px, transparent 1px); }
+  /* 分隔線：看得到的是 1px 邊線，可以抓的範圍往畫布那邊多 8px（不蓋住側欄的捲軸）。用按鈕才能用鍵盤聚焦，所以去掉按鈕的外觀。 */
+  .splitter { flex: none; width: 9px; margin: 0 -8px 0 0; padding: 0; border: 0; border-radius: 0; appearance: none; -webkit-appearance: none; position: relative; z-index: 1; cursor: col-resize; touch-action: none; background: linear-gradient(to right, var(--border) 1px, transparent 1px); }
   .splitter:hover, .splitter.dragging, .splitter:focus-visible { background: linear-gradient(to right, var(--hl) 3px, transparent 3px); outline: none; }
   body.resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
   body.resizing canvas { pointer-events: none; }
@@ -70,12 +70,12 @@
       <ul id="legend" class="legend"></ul>
     </div>
   </aside>
-  <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="調整側欄寬度" tabindex="0"></div>
+  <button id="splitter" class="splitter" type="button" aria-label="調整側欄寬度（左右方向鍵調整，Home／End 最窄／最寬，雙擊還原）"></button>
   <main>
     <canvas id="canvas" tabindex="0" aria-label="專案圖譜（方向鍵平移、+／- 縮放、0 重新置中）"></canvas>
     <div id="banner" class="banner" hidden></div>
     <div class="hint">拖曳平移 · 滾輪縮放 · 雙擊重新置中 · 點節點看細節 · 虛線是推斷或不確定的關係</div>
-    <div id="loading" class="loading" role="status"><span class="spin" aria-hidden="true"></span><span id="loading-text">正在排版…</span></div>
+    <output id="loading" class="loading"><span class="spin" aria-hidden="true"></span><span id="loading-text">正在排版…</span></output>
   </main>
 </div>
 <script>
@@ -108,7 +108,6 @@ let asideWidth = 300;
 function setAside(width, report) {
   asideWidth = Math.round(Math.min(asideMax(), Math.max(ASIDE_MIN, width)));
   document.documentElement.style.setProperty('--aside', asideWidth + 'px');
-  $('#splitter').setAttribute('aria-valuenow', String(asideWidth));
   if (report && window.parent !== window) window.parent.postMessage({ type: 'ai-workflow-graph-aside', width: asideWidth }, '*');
 }
 window.addEventListener('message', e => {
@@ -118,7 +117,6 @@ window.addEventListener('message', e => {
 });
 {
   const bar = $('#splitter');
-  $('#splitter').setAttribute('aria-valuemin', String(ASIDE_MIN));
   let resize = null;
   bar.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
@@ -151,44 +149,81 @@ const radius = n => 3 + 9 * n.degree / maxDegree;
 const visible = n => !hidden.has(n.community);
 
 // 版面：同一個分群先放在同一個圓上，再用力導向排開（網格近似斥力，數千個節點也跑得動）。
+const IDEAL = 30, CELL = IDEAL * 2, LAYOUT_STEPS = 220;
 function layout() {
+  seedPositions();
+  for (let step = 0; step < LAYOUT_STEPS; step++) {
+    repel();
+    attract();
+    move(1 - step / LAYOUT_STEPS);
+  }
+}
+
+// 依 key 分組，保留第一次出現的順序。
+function groupBy(items, key) {
   const groups = new Map();
-  for (const n of nodes) { if (!groups.has(n.community)) groups.set(n.community, []); groups.get(n.community).push(n); }
+  for (const item of items) {
+    const k = key(item);
+    if (!groups.has(k)) {
+      groups.set(k, []);
+    }
+    groups.get(k).push(item);
+  }
+  return groups;
+}
+
+// 起始位置：各分群沿著一個大圓排開，群裡的節點從群的中心螺旋往外放。
+function seedPositions() {
+  const groups = groupBy(nodes, n => n.community);
   const ring = Math.sqrt(nodes.length) * 18;
   [...groups.values()].forEach((members, g) => {
     const angle = (g / groups.size) * Math.PI * 2;
     const cx = Math.cos(angle) * ring, cy = Math.sin(angle) * ring;
     members.forEach((n, j) => { const a = j * 2.4, r = 6 * Math.sqrt(j + 1); n.x = cx + Math.cos(a) * r; n.y = cy + Math.sin(a) * r; });
   });
-  const ideal = 30, cell = ideal * 2;
-  for (let step = 0; step < 220; step++) {
-    const grid = new Map();
-    for (const n of nodes) { const key = `${Math.floor(n.x / cell)},${Math.floor(n.y / cell)}`; if (!grid.has(key)) grid.set(key, []); grid.get(key).push(n); }
-    for (const n of nodes) {
-      const gx = Math.floor(n.x / cell), gy = Math.floor(n.y / cell);
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-        for (const m of grid.get(`${gx + dx},${gy + dy}`) || []) {
-          if (m === n) continue;
-          let ddx = n.x - m.x, ddy = n.y - m.y, d2 = ddx * ddx + ddy * ddy || 0.01;
-          if (d2 > cell * cell) continue;
-          const f = ideal * ideal / d2;
-          n.vx += ddx * f * 0.05; n.vy += ddy * f * 0.05;
-        }
+}
+
+const cellKey = (gx, gy) => `${gx},${gy}`;
+
+// 斥力：只和周圍 3×3 格裡的節點互推。
+function repel() {
+  const grid = groupBy(nodes, n => cellKey(Math.floor(n.x / CELL), Math.floor(n.y / CELL)));
+  for (const n of nodes) {
+    const gx = Math.floor(n.x / CELL), gy = Math.floor(n.y / CELL);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const m of grid.get(cellKey(gx + dx, gy + dy)) || []) pushApart(n, m);
       }
     }
-    for (const l of links) {
-      const a = nodes[l.s], b = nodes[l.t];
-      const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const f = (d - ideal) / d * 0.02 * (l.confidence === 'EXTRACTED' ? 1 : 0.5);
-      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
-    }
-    const cool = 1 - step / 220;
-    for (const n of nodes) {
-      n.vx -= n.x * 0.0008; n.vy -= n.y * 0.0008;
-      const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy), cap = 12 * cool + 0.5;
-      if (v > cap) { n.vx *= cap / v; n.vy *= cap / v; }
-      n.x += n.vx; n.y += n.vy; n.vx *= 0.5; n.vy *= 0.5;
-    }
+  }
+}
+
+// m 把 n 推開：越近推得越用力，超過一格的距離就不推。
+function pushApart(n, m) {
+  if (m === n) return;
+  const ddx = n.x - m.x, ddy = n.y - m.y, d2 = ddx * ddx + ddy * ddy || 0.01;
+  if (d2 > CELL * CELL) return;
+  const f = IDEAL * IDEAL / d2;
+  n.vx += ddx * f * 0.05; n.vy += ddy * f * 0.05;
+}
+
+// 拉力：有關係的兩個節點往理想距離靠攏；推斷或不確定的關係只拉一半。
+function attract() {
+  for (const l of links) {
+    const a = nodes[l.s], b = nodes[l.t];
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.01;
+    const f = (d - IDEAL) / d * 0.02 * (l.confidence === 'EXTRACTED' ? 1 : 0.5);
+    a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+  }
+}
+
+// 移動：往中心拉一點、限制速度（cool 越小越慢），移動後速度減半。
+function move(cool) {
+  for (const n of nodes) {
+    n.vx -= n.x * 0.0008; n.vy -= n.y * 0.0008;
+    const v = Math.hypot(n.vx, n.vy), cap = 12 * cool + 0.5;
+    if (v > cap) { n.vx *= cap / v; n.vy *= cap / v; }
+    n.x += n.vx; n.y += n.vy; n.vx *= 0.5; n.vy *= 0.5;
   }
 }
 
@@ -213,39 +248,67 @@ function draw() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
   const css = getComputedStyle(document.documentElement);
-  const edgeColor = css.getPropertyValue('--edge'), hlColor = css.getPropertyValue('--hl'), textColor = css.getPropertyValue('--text');
+  const colors = { edge: css.getPropertyValue('--edge'), hl: css.getPropertyValue('--hl'), text: css.getPropertyValue('--text') };
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   ctx.save();
   ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
-  const focus = selected ? new Set([selected.i, ...adj[selected.i].map(l => l.s === selected.i ? l.t : l.s)]) : null;
+  const focus = focusSet();
+  drawLinks(focus, colors);
+  ctx.setLineDash([]);
+  drawNodes(focus, colors);
+  ctx.fillStyle = colors.text;
+  ctx.font = `${12 / view.k}px system-ui, sans-serif`;
+  ctx.globalAlpha = 1;
+  drawLabels(focus);
+  ctx.restore();
+}
+
+// 選取的節點和它的相鄰節點；沒有選取時是 null。
+function focusSet() {
+  if (!selected) return null;
+  return new Set([selected.i, ...adj[selected.i].map(l => l.s === selected.i ? l.t : l.s)]);
+}
+
+function drawLinks(focus, colors) {
   for (const l of links) {
     const a = nodes[l.s], b = nodes[l.t];
     if (!visible(a) || !visible(b)) continue;
     const lit = focus && (l.s === selected.i || l.t === selected.i);
-    ctx.strokeStyle = lit ? hlColor : edgeColor;
-    ctx.lineWidth = (l.confidence === 'EXTRACTED' ? 1.5 : 1) / Math.sqrt(view.k) * (lit ? 1.6 : 1);
-    ctx.setLineDash(l.confidence === 'EXTRACTED' ? [] : [4 / view.k, 3 / view.k]);
-    ctx.globalAlpha = focus && !lit ? 0.15 : 1;
+    strokeStyleFor(l, lit, focus, colors);
     ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
   }
-  ctx.setLineDash([]);
+}
+
+// 關係的線條：選取節點的關係加粗並用強調色，其他關係變淡；推斷或不確定的關係畫虛線。
+function strokeStyleFor(l, lit, focus, colors) {
+  const extracted = l.confidence === 'EXTRACTED';
+  ctx.strokeStyle = lit ? colors.hl : colors.edge;
+  ctx.lineWidth = (extracted ? 1.5 : 1) / Math.sqrt(view.k) * (lit ? 1.6 : 1);
+  ctx.setLineDash(extracted ? [] : [4 / view.k, 3 / view.k]);
+  ctx.globalAlpha = focus && !lit ? 0.15 : 1;
+}
+
+function drawNodes(focus, colors) {
   for (const n of nodes) {
     if (!visible(n)) continue;
     ctx.globalAlpha = focus && !focus.has(n.i) ? 0.2 : 1;
     ctx.fillStyle = color(n);
     ctx.beginPath(); ctx.arc(n.x, n.y, radius(n), 0, Math.PI * 2); ctx.fill();
-    if (n === selected || n === hover) { ctx.strokeStyle = textColor; ctx.lineWidth = 2 / view.k; ctx.stroke(); }
+    if (n === selected || n === hover) { ctx.strokeStyle = colors.text; ctx.lineWidth = 2 / view.k; ctx.stroke(); }
   }
-  ctx.fillStyle = textColor;
-  ctx.font = `${12 / view.k}px system-ui, sans-serif`;
-  ctx.globalAlpha = 1;
+}
+
+// 名稱：連接多的節點、放大後的全部節點、選取或游標所在的節點，以及放大到一定程度時選取節點的相鄰節點。
+function labelShown(n, focus) {
+  if (n.degree >= labelDegree || view.k > 2.2 || n === selected || n === hover) return true;
+  return Boolean(focus && focus.has(n.i) && view.k > 0.8);
+}
+
+function drawLabels(focus) {
   for (const n of nodes) {
-    if (!visible(n)) continue;
-    const big = n.degree >= labelDegree || view.k > 2.2;
-    if (big || n === selected || n === hover || (focus && focus.has(n.i) && view.k > 0.8)) ctx.fillText(n.label, n.x + radius(n) + 2 / view.k, n.y + 4 / view.k);
+    if (visible(n) && labelShown(n, focus)) ctx.fillText(n.label, n.x + radius(n) + 2 / view.k, n.y + 4 / view.k);
   }
-  ctx.restore();
 }
 
 function nodeAt(px, py) {
@@ -263,23 +326,35 @@ function select(n, center = false) {
   selected = n;
   $('#info').hidden = !n;
   if (n) {
-    const community = DATA.communities.find(c => c[0] === n.community);
-    const rows = [['名稱', n.label], ['種類', n.kind], ['分群', community ? community[1] : n.community], ['位置', n.line ? `${n.file}:L${n.line}` : n.file], ['連接數', n.degree]];
-    $('#details').replaceChildren(...rows.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
-    const list = $('#neighbors'); list.replaceChildren();
-    const seen = new Set();
-    for (const l of adj[n.i]) {
-      const other = nodes[l.s === n.i ? l.t : l.s];
-      if (seen.has(other.i)) continue; seen.add(other.i);
-      const li = document.createElement('li');
-      li.textContent = `${l.s === n.i ? '→' : '←'} ${other.label}（${l.relation}${l.confidence === 'EXTRACTED' ? '' : '・' + l.confidence}）`;
-      li.title = other.file;
-      li.onclick = () => select(other, true);
-      list.append(li);
-    }
+    renderDetails(n);
+    renderNeighbors(n);
     if (center) { view.x = canvas.clientWidth / 2 - n.x * view.k; view.y = canvas.clientHeight / 2 - n.y * view.k; }
   }
   draw();
+}
+
+function renderDetails(n) {
+  const community = DATA.communities.find(c => c[0] === n.community);
+  const rows = [['名稱', n.label], ['種類', n.kind], ['分群', community ? community[1] : n.community], ['位置', n.line ? `${n.file}:L${n.line}` : n.file], ['連接數', n.degree]];
+  $('#details').replaceChildren(...rows.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
+}
+
+// 相鄰節點：同一個節點只列一次，點了就選取它並移到畫面中間。
+function renderNeighbors(n) {
+  const list = $('#neighbors'); list.replaceChildren();
+  const seen = new Set();
+  for (const l of adj[n.i]) {
+    const other = nodes[l.s === n.i ? l.t : l.s];
+    if (seen.has(other.i)) continue;
+    seen.add(other.i);
+    const arrow = l.s === n.i ? '→' : '←';
+    const confidence = l.confidence === 'EXTRACTED' ? '' : '・' + l.confidence;
+    const li = document.createElement('li');
+    li.textContent = `${arrow} ${other.label}（${l.relation}${confidence}）`;
+    li.title = other.file;
+    li.onclick = () => select(other, true);
+    list.append(li);
+  }
 }
 
 // 少於 3 個節點的小分群（多半是單獨的文件或設定檔）合成一列，圖例才不會太長。
@@ -298,7 +373,13 @@ function renderLegend() {
   if (small.length) row(small, 'var(--muted)', `其他小分群（${small.length} 個）`);
 }
 $('#all').onclick = () => { hidden.clear(); renderLegend(); draw(); };
-$('#none').onclick = () => { for (const [id] of DATA.communities) hidden.add(id); renderLegend(); draw(); };
+$('#none').onclick = () => {
+  for (const [id] of DATA.communities) {
+    hidden.add(id);
+  }
+  renderLegend();
+  draw();
+};
 
 $('#search').oninput = event => {
   const q = event.target.value.trim().toLowerCase();
@@ -315,7 +396,12 @@ $('#search').oninput = event => {
 let drag = null, frame = 0;
 function redraw() { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); }
 const point = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-function setHover(n) { if (n !== hover) { hover = n; canvas.title = n ? `${n.label}\n${n.file}${n.line ? ':L' + n.line : ''}` : ''; redraw(); } }
+function nodeTitle(n) {
+  if (!n) return '';
+  const line = n.line ? ':L' + n.line : '';
+  return `${n.label}\n${n.file}${line}`;
+}
+function setHover(n) { if (n !== hover) { hover = n; canvas.title = nodeTitle(n); redraw(); } }
 canvas.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
@@ -364,8 +450,17 @@ canvas.addEventListener('keydown', e => {
   e.preventDefault(); keys[e.key](); redraw();
 });
 // 畫布大小改變（視窗、分欄、iframe 第一次排好版）就重畫；還沒置中過就先置中。
-const onResize = () => { if (pendingFit) fit(); redraw(); };
-if (typeof ResizeObserver === 'function') new ResizeObserver(onResize).observe(canvas); else window.addEventListener('resize', onResize);
+const onResize = () => {
+  if (pendingFit) {
+    fit();
+  }
+  redraw();
+};
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(onResize).observe(canvas);
+} else {
+  window.addEventListener('resize', onResize);
+}
 
 renderLegend();
 $('#loading-text').textContent = `正在排版 ${nodes.length.toLocaleString()} 個節點…`;

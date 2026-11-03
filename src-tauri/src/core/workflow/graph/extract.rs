@@ -183,7 +183,7 @@ impl Walker<'_> {
     /// 類別宣告上寫的父類別與介面（extends／implements／Python 的基底類別）。
     fn bases(&self, node: Node) -> Vec<(String, &'static str)> {
         let names = |text: &str| -> Vec<String> {
-            text.split(',').map(|p| p.trim()).filter(|p| !p.is_empty() && !p.contains('=')).map(base_type).filter(|b| !b.is_empty() && b != "object").collect()
+            text.split(',').map(str::trim).filter(|p| !p.is_empty() && !p.contains('=')).map(base_type).filter(|b| !b.is_empty() && b != "object").collect()
         };
         // 「extends A implements B, C」這類寫法：依關鍵字切開。
         let clauses = |text: &str| -> Vec<(String, &'static str)> {

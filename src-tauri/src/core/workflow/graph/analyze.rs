@@ -48,7 +48,7 @@ pub fn analyze(g: &Graph) -> Analysis {
         // 不確定的關聯在分群時只算一半（graphify 的 AMBIGUOUS 權重）。
         *weights.entry(key).or_insert(0.0) += if e.confidence == "AMBIGUOUS" { 0.5 } else { 1.0 };
     }
-    let degree: Vec<usize> = neighbors.iter().map(|s| s.len()).collect();
+    let degree: Vec<usize> = neighbors.iter().map(BTreeSet::len).collect();
     let community = communities_of(n, &weights);
     let is_file = |i: usize| g.nodes[i].kind == "file";
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -121,10 +121,35 @@ fn louvain(n: usize, weights: &BTreeMap<(usize, usize), f64>) -> Vec<usize> {
     let mut edges: Vec<(usize, usize, f64)> = weights.iter().map(|((a, b), w)| (*a, *b, *w)).collect();
     let mut size = n;
     for _level in 0..10 {
+        let level = Level::of(&edges, size);
+        if level.total == 0.0 {
+            break;
+        }
+        let Some(comm) = level.local_moves() else { break };
+        // 重新編號並合併成下一層的圖。
+        let renumber = renumber(&comm);
+        for a in assignment.iter_mut() {
+            *a = renumber[&comm[*a]];
+        }
+        edges = merge_edges(&edges, &comm, &renumber);
+        size = renumber.len();
+    }
+    assignment
+}
+
+/// Louvain 的一層圖：鄰接表、每個節點的加權度數與總權重。
+struct Level {
+    adj: Vec<Vec<(usize, f64)>>,
+    k: Vec<f64>,
+    total: f64,
+}
+
+impl Level {
+    fn of(edges: &[(usize, usize, f64)], size: usize) -> Level {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![vec![]; size];
         let mut k = vec![0.0; size];
         let mut total = 0.0;
-        for &(a, b, w) in &edges {
+        for &(a, b, w) in edges {
             if a == b {
                 k[a] += 2.0 * w;
             } else {
@@ -135,33 +160,25 @@ fn louvain(n: usize, weights: &BTreeMap<(usize, usize), f64>) -> Vec<usize> {
             }
             total += w;
         }
-        if total == 0.0 {
-            break;
-        }
-        let m2 = 2.0 * total;
+        Level { adj, k, total }
+    }
+
+    /// 局部移動：每個節點輪流移到增益最大的鄰近群，直到一輪都沒有移動（最多 20 輪）。
+    /// 回傳每個節點的群；完全沒有節點移動時回傳 None。
+    fn local_moves(&self) -> Option<Vec<usize>> {
+        let size = self.k.len();
         let mut comm: Vec<usize> = (0..size).collect();
-        let mut tot = k.clone();
+        let mut tot = self.k.clone();
         let mut moved_any = false;
         for _pass in 0..20 {
             let mut moved = false;
             for i in 0..size {
                 let current = comm[i];
-                tot[current] -= k[i];
-                let mut links: BTreeMap<usize, f64> = BTreeMap::new();
-                for &(j, w) in &adj[i] {
-                    *links.entry(comm[j]).or_insert(0.0) += w;
-                }
-                let gain = |c: usize, kin: f64| kin - tot[c] * k[i] / m2;
-                let mut best = (current, gain(current, links.get(&current).copied().unwrap_or(0.0)));
-                for (&c, &kin) in &links {
-                    let g = gain(c, kin);
-                    if g > best.1 + 1e-12 {
-                        best = (c, g);
-                    }
-                }
-                comm[i] = best.0;
-                tot[best.0] += k[i];
-                if best.0 != current {
+                tot[current] -= self.k[i];
+                let best = self.best_community(i, &comm, &tot);
+                comm[i] = best;
+                tot[best] += self.k[i];
+                if best != current {
                     moved = true;
                     moved_any = true;
                 }
@@ -170,27 +187,47 @@ fn louvain(n: usize, weights: &BTreeMap<(usize, usize), f64>) -> Vec<usize> {
                 break;
             }
         }
-        if !moved_any {
-            break;
-        }
-        // 重新編號並合併成下一層的圖。
-        let mut renumber: BTreeMap<usize, usize> = BTreeMap::new();
-        for c in &comm {
-            let next = renumber.len();
-            renumber.entry(*c).or_insert(next);
-        }
-        for a in assignment.iter_mut() {
-            *a = renumber[&comm[*a]];
-        }
-        let mut merged: BTreeMap<(usize, usize), f64> = BTreeMap::new();
-        for &(a, b, w) in &edges {
-            let (ca, cb) = (renumber[&comm[a]], renumber[&comm[b]]);
-            *merged.entry((ca.min(cb), ca.max(cb))).or_insert(0.0) += w;
-        }
-        edges = merged.into_iter().map(|((a, b), w)| (a, b, w)).collect();
-        size = renumber.len();
+        moved_any.then_some(comm)
     }
-    assignment
+
+    /// 節點 i 移到哪個鄰近群的模組度增益最大；都沒有更好就留在原本的群。tot 已扣掉節點 i 自己。
+    fn best_community(&self, i: usize, comm: &[usize], tot: &[f64]) -> usize {
+        let m2 = 2.0 * self.total;
+        let current = comm[i];
+        let mut links: BTreeMap<usize, f64> = BTreeMap::new();
+        for &(j, w) in &self.adj[i] {
+            *links.entry(comm[j]).or_insert(0.0) += w;
+        }
+        let gain = |c: usize, kin: f64| kin - tot[c] * self.k[i] / m2;
+        let mut best = (current, gain(current, links.get(&current).copied().unwrap_or(0.0)));
+        for (&c, &kin) in &links {
+            let g = gain(c, kin);
+            if g > best.1 + 1e-12 {
+                best = (c, g);
+            }
+        }
+        best.0
+    }
+}
+
+/// 群依第一次出現的順序重新編號成 0、1、2…。
+fn renumber(comm: &[usize]) -> BTreeMap<usize, usize> {
+    let mut renumber: BTreeMap<usize, usize> = BTreeMap::new();
+    for c in comm {
+        let next = renumber.len();
+        renumber.entry(*c).or_insert(next);
+    }
+    renumber
+}
+
+/// 把同一群的節點合成一個節點，群之間的邊權重相加。
+fn merge_edges(edges: &[(usize, usize, f64)], comm: &[usize], renumber: &BTreeMap<usize, usize>) -> Vec<(usize, usize, f64)> {
+    let mut merged: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    for &(a, b, w) in edges {
+        let (ca, cb) = (renumber[&comm[a]], renumber[&comm[b]]);
+        *merged.entry((ca.min(cb), ca.max(cb))).or_insert(0.0) += w;
+    }
+    merged.into_iter().map(|((a, b), w)| (a, b, w)).collect()
 }
 
 fn top_dir(path: &str) -> &str {
@@ -248,7 +285,7 @@ fn import_cycles(g: &Graph) -> Vec<Vec<String>> {
         }
         for &next in adj.get(node).into_iter().flatten() {
             if next == start && path.len() >= 2 {
-                out.push(path.iter().map(|s| s.to_string()).collect());
+                out.push(path.iter().map(ToString::to_string).collect());
             } else if next > start && !path.contains(&next) && path.len() < 5 {
                 path.push(next);
                 dfs(start, next, adj, path, out);
