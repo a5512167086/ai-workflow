@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import {
   MessageSquareText, ListTodo, FileText, KanbanSquare, History, Waypoints, Gauge, Sparkles, Settings, LayoutGrid, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, Sun, Moon, Monitor, Check, Plus, Command as CommandIcon,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useRef, type ComponentProps, type ReactNode } from 'react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Kbd } from '@/components/ui/kbd';
@@ -22,15 +22,47 @@ const DOT: Record<string, string> = {
   idle: 'bg-muted-foreground', running: 'bg-info', queued: 'bg-info', waiting: 'bg-warn', feature_test: 'bg-warn', paused: 'bg-warn', stuck: 'bg-danger', error: 'bg-danger', complete: 'bg-ok',
 };
 
+// 側欄每一列（導覽、指令面板、主題、收合）都用同一個樣式：滿寬、32px 高、收合時置中，焦點外框用側欄的 ring。
+const ROW = 'group/nav relative flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] text-sidebar-foreground/85 outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring';
+const ROW_COLLAPSED = 'justify-center px-0';
+
+/** 收合時加上右側 tooltip（只剩圖示，需要名稱與快捷鍵）。 */
+function RowTooltip({ collapsed, label, shortcut, children }: { collapsed: boolean; label: string; shortcut?: string; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return (
+    <Tooltip>
+      {/* 包一層 div：NavLink 的 className 是函式，不能交給 Slot 合併。 */}
+      <TooltipTrigger asChild><div className="flex w-full">{children}</div></TooltipTrigger>
+      <TooltipContent side="right">{label}{shortcut && <Kbd className="ml-2">{shortcut}</Kbd>}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function SideButton({ collapsed, className, ...props }: ComponentProps<'button'> & { collapsed: boolean }) {
+  return <button type="button" className={cn(ROW, collapsed && ROW_COLLAPSED, className)} {...props} />;
+}
+
+/**
+ * 用滑鼠關掉下拉選單時，不把焦點還給觸發按鈕（否則按鈕會留著焦點外框，看起來像跑版）；
+ * 用鍵盤操作時照常還原焦點。
+ */
+function useMouseCloseFocus() {
+  const byPointer = useRef(false);
+  return {
+    trigger: { onPointerDown: () => { byPointer.current = true; }, onKeyDown: () => { byPointer.current = false; } },
+    content: { onCloseAutoFocus: (e: Event) => { if (byPointer.current) e.preventDefault(); byPointer.current = false; } },
+  };
+}
+
 function NavItem({ to, icon: Icon, label, badge, attention, collapsed, shortcut, end }: { to: string; icon: React.ComponentType<{ className?: string }>; label: string; badge?: string; attention?: boolean; collapsed: boolean; shortcut?: string; end?: boolean }) {
   const link = (
     <NavLink
       to={to}
       end={end}
       className={({ isActive }) => cn(
-        'group/nav flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-sidebar-foreground/85 outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+        ROW,
         isActive && 'bg-sidebar-accent font-medium text-sidebar-foreground',
-        collapsed && 'justify-center px-0',
+        collapsed && ROW_COLLAPSED,
       )}
       aria-label={collapsed ? label : undefined}
     >
@@ -42,13 +74,7 @@ function NavItem({ to, icon: Icon, label, badge, attention, collapsed, shortcut,
       {!badge && attention && <span className={cn('size-1.5 rounded-full bg-warn', collapsed && 'absolute left-7 top-1.5')} aria-label="需要處理" />}
     </NavLink>
   );
-  if (!collapsed) return link;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild><div className="relative">{link}</div></TooltipTrigger>
-      <TooltipContent side="right">{label}{shortcut && <Kbd className="ml-2">{shortcut}</Kbd>}</TooltipContent>
-    </Tooltip>
-  );
+  return <RowTooltip collapsed={collapsed} label={label} shortcut={shortcut}>{link}</RowTooltip>;
 }
 
 function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
@@ -60,11 +86,13 @@ function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
   const name = current?.name || snapName || (id ? '載入中…' : '所有專案');
   const [, tone] = current ? PROJECT_STATUS[current.status] || PROJECT_STATUS.idle : ['', 'idle'];
   const attention = projects.filter((p) => p.attention).length;
+  const focus = useMouseCloseFocus();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
+          {...focus.trigger}
           className={cn('flex h-9 w-full items-center gap-2 rounded-md px-2 text-left outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring', collapsed && 'justify-center px-0')}
           aria-label={`切換專案，目前：${name}`}
         >
@@ -82,7 +110,7 @@ function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side={collapsed ? 'right' : 'bottom'} className="w-72">
+      <DropdownMenuContent align="start" side={collapsed ? 'right' : 'bottom'} className="w-72" {...focus.content}>
         <DropdownMenuLabel className="text-xs text-muted-foreground">專案</DropdownMenuLabel>
         {projects.length === 0 && <DropdownMenuItem disabled>還沒有專案</DropdownMenuItem>}
         {projects.map((p) => {
@@ -112,14 +140,17 @@ function ThemeMenu({ collapsed }: { collapsed: boolean }) {
   const setTheme = useUi((s) => s.setTheme);
   const Icon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
   const label = THEMES.find((t) => t.key === theme)?.label || '';
+  const focus = useMouseCloseFocus();
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size={collapsed ? 'icon' : 'default'} className={cn('justify-start gap-2 px-2 text-sidebar-foreground/85', collapsed && 'justify-center')} aria-label={`主題：${label}`} title={`主題：${label}`}>
-          <Icon className="size-4" />{!collapsed && <span className="truncate">主題：{label}</span>}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="top">
+      <RowTooltip collapsed={collapsed} label={`主題：${label}`}>
+        <DropdownMenuTrigger asChild>
+          <SideButton collapsed={collapsed} aria-label={`主題：${label}`} {...focus.trigger}>
+            <Icon className="size-4 shrink-0 opacity-80" />{!collapsed && <span className="min-w-0 flex-1 truncate">主題：{label}</span>}
+          </SideButton>
+        </DropdownMenuTrigger>
+      </RowTooltip>
+      <DropdownMenuContent align="start" side={collapsed ? 'right' : 'top'} {...focus.content}>
         {THEMES.map((t) => (
           <DropdownMenuItem key={t.key} onSelect={() => setTheme(t.key)}>
             {t.key === 'light' ? <Sun className="size-4" /> : t.key === 'dark' ? <Moon className="size-4" /> : <Monitor className="size-4" />}
@@ -158,14 +189,18 @@ export function Sidebar() {
         )}
       </nav>
       <div className="flex flex-col gap-0.5 border-t p-1.5">
-        <Button variant="ghost" className={cn('justify-start gap-2 px-2 text-sidebar-foreground/85', collapsed && 'justify-center px-0')} onClick={() => setPalette(true)} aria-label="指令面板（Ctrl+K）" title="指令面板（Ctrl+K）">
-          <CommandIcon className="size-4" />{!collapsed && <><span className="flex-1 text-left">指令面板</span><Kbd>Ctrl+K</Kbd></>}
-        </Button>
+        <RowTooltip collapsed={collapsed} label="指令面板" shortcut="Ctrl+K">
+          <SideButton collapsed={collapsed} onClick={() => setPalette(true)} aria-label="指令面板（Ctrl+K）">
+            <CommandIcon className="size-4 shrink-0 opacity-80" />{!collapsed && <><span className="min-w-0 flex-1 truncate">指令面板</span><Kbd>Ctrl+K</Kbd></>}
+          </SideButton>
+        </RowTooltip>
         <NavItem to="/settings" icon={Settings} label="設定" collapsed={collapsed} shortcut="Ctrl+," />
         <ThemeMenu collapsed={collapsed} />
-        <Button variant="ghost" size="icon" className="self-end text-muted-foreground" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? '展開側欄' : '收合側欄'} title={`${collapsed ? '展開' : '收合'}側欄（Ctrl+B）`}>
-          {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-        </Button>
+        <RowTooltip collapsed={collapsed} label="展開側欄" shortcut="Ctrl+B">
+          <SideButton collapsed={collapsed} className="text-muted-foreground" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? '展開側欄' : '收合側欄'} title={collapsed ? undefined : '收合側欄（Ctrl+B）'}>
+            {collapsed ? <PanelLeftOpen className="size-4 shrink-0" /> : <><PanelLeftClose className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">收合側欄</span></>}
+          </SideButton>
+        </RowTooltip>
       </div>
     </aside>
   );
