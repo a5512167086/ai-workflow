@@ -29,7 +29,7 @@ function useGraphFrame(frame: React.RefObject<HTMLIFrameElement | null>) {
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       // 只接受我們自己的沙箱 iframe：視窗是它、來源是沙箱的不透明來源 "null"。
-      if (e.origin !== 'null' || !frame.current || e.source !== frame.current.contentWindow) return;
+      if (e.origin !== 'null' || e.source !== frame.current?.contentWindow) return;
       if (e.data?.type === 'ai-workflow-graph-ready') send();
       if (e.data?.type === 'ai-workflow-graph-aside' && typeof e.data.width === 'number') writeStorage(ASIDE_KEY, String(Math.round(e.data.width)));
     };

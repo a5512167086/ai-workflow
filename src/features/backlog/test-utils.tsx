@@ -11,9 +11,8 @@ import type { BacklogItem, RequirementsPayload, Snapshot } from '@/types/api';
 export const PID = '0123456789';
 
 export type Call = { method: string; path: string; body: unknown };
-/** 固定的回應，或 (body, call) => 回應 的函式。 */
-export type Route = unknown;
-export type Routes = Record<string, Route>;
+/** 每個 `METHOD path` 的回應：固定的值，或 (body, call) => 回應 的函式。 */
+export type Routes = Record<string, unknown>;
 
 /** jsdom 裡 react-resizable-panels 會把每個點都當成分隔線（矩形全是 0×0）而擋掉 click 的聚焦，所以先 focus 再打字。 */
 export async function typeInto(el: HTMLElement, text: string) {

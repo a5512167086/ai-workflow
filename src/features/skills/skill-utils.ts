@@ -57,16 +57,23 @@ export async function importInOrder(
   paths: string[],
   importOne: (path: string) => Promise<Skill>,
   describeError: (error: unknown) => string,
-  result: { imported: Skill | null; errors: string[] } = { imported: null, errors: [] },
-): Promise<{ imported: Skill | null; errors: string[] }> {
+): Promise<ImportResult> {
+  const result: ImportResult = { imported: null, errors: [] };
+  await importNext(paths, importOne, describeError, result);
+  return result;
+}
+
+interface ImportResult { imported: Skill | null; errors: string[] }
+
+async function importNext(paths: string[], importOne: (path: string) => Promise<Skill>, describeError: (error: unknown) => string, result: ImportResult): Promise<void> {
   const [path, ...rest] = paths;
-  if (path === undefined) return result;
+  if (path === undefined) return;
   try {
     result.imported = await importOne(path);
   } catch (e) {
     result.errors.push(`${path}：${describeError(e)}`);
   }
-  return importInOrder(rest, importOne, describeError, result);
+  await importNext(rest, importOne, describeError, result);
 }
 
 /** 會議選單裡一場會議的文字：時間 · 狀態 · 第一則訊息開頭。 */

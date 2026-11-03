@@ -32,7 +32,7 @@ export function PermissionDialog() {
   const waiting = useProject((s) => s.snap?.permissions) || [];
   const api = useProject((s) => s.api);
   // 「稍後決定」記在模組層的 later；version 變了才重新挑下一個要問的請求。
-  const [version, bump] = useState(0);
+  const [version, setVersion] = useState(0);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -40,7 +40,7 @@ export function PermissionDialog() {
   useEffect(() => { setReason(''); setError(''); setBusy(false); }, [next?.id]);
   const dismiss = () => {
     if (next) later.add(next.id);
-    bump((n) => n + 1);
+    setVersion((n) => n + 1);
   };
   const answer = async (decision: 'allow' | 'allow_session' | 'deny') => {
     if (!next) return;
@@ -57,7 +57,7 @@ export function PermissionDialog() {
     return (
       <div aria-live="polite" className="fixed bottom-8 right-3 z-40 flex items-center gap-3 rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
         <span>AI 等待你允許 {waiting.length} 個操作</span>
-        <Button type="button" size="sm" onClick={() => { later.clear(); bump((n) => n + 1); }}>檢視</Button>
+        <Button type="button" size="sm" onClick={() => { later.clear(); setVersion((n) => n + 1); }}>檢視</Button>
       </div>
     );
   }
