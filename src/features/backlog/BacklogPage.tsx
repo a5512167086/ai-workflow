@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { Page, PageHeader, Panel, Hint, Notice } from '@/components/app/Page';
+import { Page, PageHeader, Panel, Hint, Notice, Loading } from '@/components/app/Page';
 import { Chip } from '@/components/app/StatusPill';
 import { Markdown } from '@/components/app/Markdown';
 import { GuardButton } from '@/components/app/GuardButton';
@@ -42,6 +42,7 @@ export function BacklogPage() {
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [path, setPath] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [title, setTitle] = useState('');
   const [detail, setDetail] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -59,6 +60,8 @@ export function BacklogPage() {
       setItems(data.items); setPath(data.path); setError(null);
     } catch (err) {
       setError(errorMessage(err)); toast.error(errorMessage(err));
+    } finally {
+      setLoaded(true);
     }
   }, [api]);
 
@@ -170,7 +173,9 @@ export function BacklogPage() {
             actions={<Hint className="truncate">拖曳或用上／下按鈕排序・存在 <span className="mono" title={path}>{path}</span></Hint>}>
             {error && <Notice tone="bad" role="alert">{error}</Notice>}
             <ol ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-auto" aria-label="需求待辦清單，依優先順序">
-              {!items.length && <li className="py-8 text-center text-xs text-muted-foreground">還沒有需求，從左邊新增一個</li>}
+              {!items.length && (loaded
+                ? <li className="py-8 text-center text-xs text-muted-foreground">還沒有需求，從左邊新增一個</li>
+                : <li><Loading inline label="讀取需求…" className="justify-center py-8" /></li>)}
               {items.map((item, i) => {
                 const lock = lockOf(item);
                 if (editingId === item.id) {

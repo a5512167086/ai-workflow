@@ -1,6 +1,7 @@
 // PRD：左邊是 PRD 文件（預覽／原始 Markdown），右邊是決定（審查、核准、要求再改）與每輪紀錄；中間可拖拉。
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Edit3, List, Pencil } from 'lucide-react';
+import { Archive, Check, CircleCheck, Copy, Edit3, List, ListPlus, Pencil } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Page, PageHeader, Panel, Hint, Notice } from '@/components/app/Page';
 import { Chip } from '@/components/app/StatusPill';
@@ -103,6 +104,9 @@ export function PrdPage() {
 
   const prd = snap.state.prd;
   const raw = view === 'raw';
+  const navigate = useNavigate();
+  // 功能已完成並封存：PRD 與任務都不能再改，「決定」面板改成說明與下一步，不再擺一排停用的按鈕。
+  const complete = snap.state.pipeline.status === 'complete';
   useEffect(() => { useProject.getState().loadRounds().catch(() => {}); }, []);
   useEffect(() => {
     useBadges.getState().set('prd', prd.status === 'awaiting_approval' ? { text: '待核准', attention: true } : null);
@@ -152,7 +156,7 @@ export function PrdPage() {
               <ToggleGroupItem value="preview" className="text-xs">預覽</ToggleGroupItem>
               <ToggleGroupItem value="raw" className="text-xs">原始 Markdown</ToggleGroupItem>
             </ToggleGroup>
-            <GuardButton variant="outline" guard={gEdit} onClick={() => setEditing(true)}><Pencil />人工編輯</GuardButton>
+            {!complete && <GuardButton variant="outline" guard={gEdit} onClick={() => setEditing(true)}><Pencil />人工編輯</GuardButton>}
             <Button variant="outline" size="icon" onClick={copy} disabled={!snap.prd} aria-label="複製 PRD 原文" title="複製 PRD 原文"><Copy /></Button>
           </>
         }
@@ -174,7 +178,19 @@ export function PrdPage() {
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel id="prd-side" defaultSize="34" minSize={280} className="flex min-h-0 flex-col gap-3 overflow-auto bg-surface-2/40 p-3">
-          <Panel title="決定" bodyClassName="flex flex-col gap-2">
+          {/* 側欄整欄捲動；面板不可被壓扁（Panel 預設 min-h-0，在 flex 欄裡會縮到比內容矮，內容就蓋到下一個面板上）。 */}
+          {complete ? (
+            <Panel title="這個功能已完成" className="shrink-0" bodyClassName="flex flex-col gap-2">
+              <div className="flex items-start gap-2">
+                <CircleCheck className="mt-0.5 size-4 shrink-0 text-ok" aria-hidden="true" />
+                <p className="text-[13px]">{snap.state.pipeline.reason || '功能已完成並通過人工測試'}</p>
+              </div>
+              <Hint>PRD、每輪審查紀錄與任務已封存成這個功能的紀錄，內容不再變動，之後回頭查都對得上。要再修改或加功能，請到需求待辦開一個新需求，重新走一輪 PRD、審查、拆任務與實作。</Hint>
+              <Button className="w-full" onClick={() => navigate(`/p/${snap.project.id}/backlog`)}><ListPlus />到需求待辦開始新需求</Button>
+              <Button variant="outline" className="w-full" onClick={() => navigate(`/p/${snap.project.id}/records`)}><Archive />查看封存紀錄</Button>
+            </Panel>
+          ) : (
+          <Panel title="決定" className="shrink-0" bodyClassName="flex flex-col gap-2">
             <ReferenceWidget options={referenceOptions('feature')} />
             <Hint>{humanNote}</Hint>
             <GuardButton variant="outline" className="w-full" guard={gReview} onClick={() => act(api, '/api/prd/review', {}, '正在交叉審查目前版本，保留你的原文')}>只重新審查目前版本</GuardButton>
@@ -191,7 +207,8 @@ export function PrdPage() {
             )}
             {taskGenText && <LiveSince label={taskGenText} since={generating ? tg?.started_at : null} className="text-center text-xs" />}
           </Panel>
-          <Panel title="每輪紀錄" actions={<Hint>跟隨 PRD 的顯示方式</Hint>}>
+          )}
+          <Panel title="每輪紀錄" className="shrink-0" actions={<Hint>跟隨 PRD 的顯示方式</Hint>}>
             <Rounds rounds={rounds} raw={raw} />
           </Panel>
         </ResizablePanel>

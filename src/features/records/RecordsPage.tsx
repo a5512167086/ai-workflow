@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Page, EmptyState, Hint } from '@/components/app/Page';
+import { Page, Hint, Loading } from '@/components/app/Page';
 import { Chip } from '@/components/app/StatusPill';
 import { LogTree } from '@/components/app/LogTree';
 import { Markdown } from '@/components/app/Markdown';
@@ -242,9 +242,9 @@ export function RecordsPage() {
           </div>
           <div className={cn('min-h-0 flex-1 overflow-auto', tab === 'log' ? 'p-2' : 'p-4')} role="tabpanel" tabIndex={0}>
             {!current && !archive ? (
-              <EmptyState title="讀取封存…" />
+              <Loading label="讀取封存…" />
             ) : tab === 'log' && current ? (
-              <LogTree text={loading ? '讀取中…' : logs[scope] || '（還沒有 log）'} live={loading ? '' : streams[scope]} openAll={openAll} className="h-full" />
+              loading ? <Loading label="讀取 log…" /> : <LogTree text={logs[scope] || '（還沒有 log）'} live={streams[scope]} openAll={openAll} className="h-full" />
             ) : tab === 'prd' ? (
               <Markdown text={(current ? snap.prd : archive?.prd) || '（還沒有 PRD）'} />
             ) : tab === 'rounds' ? (

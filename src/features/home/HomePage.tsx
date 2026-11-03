@@ -10,7 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Page, PageHeader, PageBody, EmptyState, Hint, Eyebrow } from '@/components/app/Page';
+import { Page, PageHeader, PageBody, EmptyState, Hint, Eyebrow, Loading } from '@/components/app/Page';
 import { StatusPill } from '@/components/app/StatusPill';
 import { confirmDialog } from '@/components/app/confirm';
 import { api, errorMessage } from '@/lib/api';
@@ -182,6 +182,7 @@ export function HomePage() {
       <PageHeader title="所有專案" description={projects.length ? `${projects.length} 個專案${attention.length ? `・${attention.length} 個等你處理` : ''}` : undefined} actions={<Button onClick={() => setAddOpen(true)}><Plus className="size-4" />加入專案</Button>} />
       <PageBody className="flex flex-col gap-5">
         {error && <Hint role="alert" className="text-danger">{error}</Hint>}
+        {!loaded && !error && <Loading label="讀取專案…" />}
         {loaded && !projects.length && (
           <EmptyState
             title="還沒有專案"

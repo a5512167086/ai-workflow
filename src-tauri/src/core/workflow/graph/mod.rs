@@ -93,7 +93,7 @@ pub fn summary(root: &Path) -> Value {
         "exists": true, "builtAt": v["graph"]["built_at"], "commit": v["graph"]["built_at_commit"],
         "stats": { "nodes": count("nodes"), "edges": count("links"), "files": files, "communities": communities },
         "report": fs::read_to_string(report_file(root)).unwrap_or_default(),
-        "html": fs::read_to_string(html_file(root)).unwrap_or_default(),
+        "html": export::refresh_html(&fs::read_to_string(html_file(root)).unwrap_or_default()),
         "paths": { "json": json_file(root).display().to_string(), "report": report_file(root).display().to_string(), "html": html_file(root).display().to_string() },
     })
 }

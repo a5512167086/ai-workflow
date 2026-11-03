@@ -123,6 +123,19 @@ pub fn to_html(g: &Graph, a: &Analysis, meta: &Meta) -> String {
     include_str!("viewer.html").replace("/*__GRAPH__*/null", &data)
 }
 
+/// 以前建立的 graph.html 換上目前版本的互動圖（嵌入的資料不變）：不必重新建立圖譜，就能用到新的操作方式與修正。
+/// 看不出是我們產生的頁面時原樣回傳。
+pub fn refresh_html(stored: &str) -> String {
+    const MARK: &str = "const DATA = ";
+    let Some(start) = stored.find(MARK).map(|i| i + MARK.len()) else { return stored.to_string() };
+    let end = stored[start..].find('\n').map_or(stored.len(), |i| start + i);
+    let data = stored[start..end].trim_end().trim_end_matches(';');
+    if !data.starts_with('{') {
+        return stored.to_string();
+    }
+    include_str!("viewer.html").replace("/*__GRAPH__*/null", data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +171,17 @@ mod tests {
         let html = to_html(&g, &a, &Meta { project: "demo", built_at: "now", commit: None });
         assert!(html.contains("const DATA = {") && !html.contains("/*__GRAPH__*/"));
         assert_eq!(html.matches("</script>").count(), 1);
+    }
+
+    #[test]
+    fn 舊版_graph_html_讀取時換上目前的互動圖_資料不變() {
+        let g = sample();
+        let a = analyze(&g);
+        let html = to_html(&g, &a, &Meta { project: "demo", built_at: "now", commit: None });
+        let old = html.replace("雙擊重新置中", "舊版提示").replace("\n", "\r\n");
+        assert_eq!(refresh_html(&old), html);
+        assert_eq!(refresh_html(&html), html);
+        assert_eq!(refresh_html(""), "");
+        assert_eq!(refresh_html("<html>別的頁面</html>"), "<html>別的頁面</html>");
     }
 }

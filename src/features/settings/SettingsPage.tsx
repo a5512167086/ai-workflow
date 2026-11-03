@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Page, PageHeader, PageBody, Panel, Hint } from '@/components/app/Page';
+import { Page, PageHeader, PageBody, Panel, Hint, Loading } from '@/components/app/Page';
 import { ModelPicker } from '@/components/app/ModelPicker';
 import { api, errorMessage } from '@/lib/api';
 import { PROVIDER_LABEL, PROVIDER_LONG, REVIEW_ROLES, ROLE_HINTS, ROLE_LABELS, ROLE_ORDER } from '@/lib/constants';
@@ -182,7 +182,7 @@ function RolesCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: G
         })}
       </ul>
       <Hint>模型清單直接向 Claude Code 與 Codex CLI 查詢，就是這個帳號可用的模型；Pro 訂閱使用 Fable 可能需要額外 usage credits。Handover 是給下一個 AI session 的交接紀錄。</Hint>
-      {status && <Hint role="status">{status}</Hint>}
+      {loading && status === '正在從 CLI 讀取可用的模型…' ? <Loading inline label={status} /> : status && <Hint role="status">{status}</Hint>}
     </Panel>
   );
 }
@@ -343,7 +343,7 @@ export function SettingsPage() {
   const onQueue = useCallback((queue: QueueSnapshot) => setPayload((p) => (p ? { ...p, queue } : p)), []);
   const config = payload?.config;
   const body: ReactNode = useMemo(() => {
-    if (!config) return error ? <Hint role="alert" className="text-danger">{error}</Hint> : <Hint>載入設定…</Hint>;
+    if (!config) return error ? <Hint role="alert" className="text-danger">{error}</Hint> : <Loading label="載入設定…" />;
     return (
       <div className="grid gap-4 xl:grid-cols-2">
         <WorkflowCard config={config} queue={payload?.queue ?? null} onConfig={onConfig} onQueue={onQueue} />

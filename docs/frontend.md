@@ -58,6 +58,7 @@ src/
 - `act(api, path, body, okMsg)`：成功 toast、失敗 toast 並回傳 null。`runAction(api, snap, …)`：額度用完時先確認改用另一個 AI。
 - 防呆：`snap.guards[name]` 是不能做的原因（空字串＝可以）；用 `GuardButton guard={reason}` 停用並在 tooltip 顯示原因。
 - 事件：`projects`（總覽）、`state-<id>`（整份快照）、`log-<id>`（`{scope, text}` 增量）、`stream-<id>`（`{scope, text}`：AI 正在打的那段回覆的全文，空字串代表已寫完）。
+- 專案圖譜的互動圖（`src-tauri/.../graph/viewer.html`）放在沙箱 iframe：平移用 pointer events＋pointer capture、重畫合併到每個 frame，排版時自己顯示轉圈；讀取 `/api/graph` 時後端會把舊的 graph.html 換上目前的 viewer（資料不變），不必重新建立就能用到修正。
 - 逐字輸出：Claude 以 `--include-partial-messages`、Codex 以 app-server 的 `item/agentMessage/delta` 取得增量，寫到 `logs/<scope>.stream`（不混進 log），訊息寫完或執行結束就刪掉；App 每 200ms 檢查一次。前端 `useProject().streams[scope]` 給 LogTree 的 `live` 與對話、Grill Me、技能會議的打字中訊息（`StreamingText`，節流 120ms，打字中不畫 Mermaid）。
 
 ## 共用元件介面
@@ -71,6 +72,7 @@ src/
 | `ReferenceWidget` | `referenceOptions(type, ctx)`、`<ReferenceWidget options />`、`openReferenceDialog(options)`、`useReferenceInput(ref, getOptions)`、`<ReferenceChips ids remove? />` |
 | `useSkillCommandInput(ref)` | 訊息開頭輸入 `/` 列出相容技能 |
 | `confirmDialog / promptDialog` | 取代 `window.confirm / prompt`，回傳 Promise |
+| `Loading` | `<Loading label inline? />`（Page.tsx），轉圈＋說明、`role=status`；讀取資料時用它，不要只放「載入中…」文字或空清單。預設置中填滿區塊，`inline` 用在清單裡。圖示本身是 `components/ui/spinner` |
 
 ## 開發
 

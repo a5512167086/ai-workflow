@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { Page, Hint, Eyebrow, EmptyState } from '@/components/app/Page';
+import { Page, Hint, Eyebrow, Loading } from '@/components/app/Page';
 import { Markdown } from '@/components/app/Markdown';
 import { StreamingText } from '@/components/app/StreamingReply';
 import { LogTree } from '@/components/app/LogTree';
@@ -305,7 +305,7 @@ export function ChatPage() {
             <Button type="button" variant="outline" size="sm" disabled={!chatId || active} onClick={() => remove()}><Trash2 />刪除</Button>
           </div>
           <p role="status" className="shrink-0 truncate border-b bg-surface-2/60 px-4 py-1 text-[11px] text-muted-foreground" title={context}>{context}</p>
-          {session === null && chatId !== null ? <EmptyState title="載入對話…" /> : <MessageList session={session} onSuggest={(q) => { setInput(q); inputRef.current?.focus(); }} />}
+          {session === null && chatId !== null ? <Loading label="載入對話…" /> : <MessageList session={session} onSuggest={(q) => { setInput(q); inputRef.current?.focus(); }} />}
           <p role="status" className="shrink-0 px-4 pt-2 text-xs text-muted-foreground">
             <LiveSince label={statusText} since={active && !status && !session?.error ? lastUserAt(session) : null} />
           </p>

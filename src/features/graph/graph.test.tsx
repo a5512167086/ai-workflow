@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { GraphPage } from './GraphPage';
@@ -30,5 +30,19 @@ describe('架構圖', () => {
     await screen.findByText('已重新建立');
     expect(api).toHaveBeenCalledTimes(1);
     expect(api).toHaveBeenCalledWith('/api/graph/build', {});
+  });
+
+  it('讀取中顯示轉圈；互動圖的 iframe 載完後拿掉「正在載入互動圖」遮罩', async () => {
+    let resolve!: (v: unknown) => void;
+    const api = vi.fn(() => new Promise((r) => { resolve = r; }));
+    useProject.setState({ api: api as never });
+    render(<GraphPage />);
+    expect(screen.getByRole('status')).toHaveTextContent('正在讀取專案圖譜…');
+    expect(screen.queryByText(/還沒有建立專案圖譜/)).not.toBeInTheDocument();
+    resolve({ exists: true, stats: { files: 1, nodes: 1, edges: 0, communities: 1 }, report: '', html: '<html></html>' });
+    const frame = await waitFor(() => { const el = document.querySelector('iframe'); if (!el) throw new Error('no iframe'); return el; });
+    // jsdom 也可能自己觸發 iframe 的 load；不論哪一個先到，載完後遮罩都要拿掉。
+    fireEvent.load(frame);
+    await waitFor(() => expect(screen.queryByText('正在載入互動圖…')).not.toBeInTheDocument());
   });
 });

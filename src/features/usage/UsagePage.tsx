@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Page, PageHeader, Panel, Hint } from '@/components/app/Page';
+import { Page, PageHeader, Panel, Hint, Loading } from '@/components/app/Page';
 import { SAVING_FEATURES, USAGE_STAGES, WINDOW_NAMES } from '@/lib/constants';
 import { tokenNumber, usageTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -129,7 +129,7 @@ export function UsagePage() {
 
   useEffect(() => { if (Date.now() - lastUsageRefresh > 60000) refresh(); }, [refresh]);
 
-  if (!usage) return <Page><PageHeader title="Token 用量與訂閱額度" /></Page>;
+  if (!usage) return <Page><PageHeader title="Token 用量與訂閱額度" /><Loading label="讀取用量…" /></Page>;
   return (
     <Page>
       <PageHeader

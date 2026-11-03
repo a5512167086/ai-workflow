@@ -1,6 +1,7 @@
 // 畫面骨架：固定外框、各區獨立捲動（桌面 app 不出現頁面捲軸）。
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { Spinner } from '@/components/ui/spinner';
 
 /** 每個畫面的最外層：填滿主區域、不捲動；內容自己決定哪裡捲。 */
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
@@ -32,6 +33,19 @@ export function EmptyState({ title, description, action, className }: { title: R
       <p className="text-sm font-medium">{title}</p>
       {description && <p className="max-w-md text-xs text-muted-foreground">{description}</p>}
       {action && <div className="mt-2">{action}</div>}
+    </div>
+  );
+}
+
+/**
+ * 讀取資料中：轉圈圖示＋說明。預設置中填滿所在區塊（整個畫面或面板還沒有內容時）；
+ * inline 用在清單或一小段區域裡（靠左、一行）。
+ */
+export function Loading({ label = '載入中…', inline, className }: { label?: ReactNode; inline?: boolean; className?: string }) {
+  return (
+    <div role="status" aria-live="polite" className={cn('flex items-center gap-2 text-xs text-muted-foreground', inline ? 'py-1' : 'h-full min-h-24 w-full justify-center p-8', className)}>
+      <Spinner className={inline ? 'size-3.5' : 'size-5'} />
+      <span>{label}</span>
     </div>
   );
 }

@@ -14,7 +14,7 @@ import { useBadges } from '@/stores/badges';
 import { useReferences } from '@/stores/references';
 import { PermissionDialog } from '@/features/permissions/PermissionDialog';
 import { ReferenceDialogHost, ReferenceDropHost } from '@/features/references/ReferenceWidget';
-import { EmptyState } from '@/components/app/Page';
+import { EmptyState, Loading } from '@/components/app/Page';
 import { PrdErrorToast } from '@/features/prd/PrdErrorToast';
 
 export function AppShell() {
@@ -64,7 +64,7 @@ export function ProjectLayout() {
   }, [snap]);
   if (!valid) return <Navigate to="/" replace />;
   if (!snap && error) return <EmptyState title="無法開啟專案" description={error} />;
-  if (!snap) return <EmptyState title="載入專案…" />;
+  if (!snap) return <Loading label="載入專案…" />;
   return (
     <>
       <Outlet />

@@ -13,8 +13,8 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
   .app { display: flex; height: 100%; }
   aside { width: 300px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 12px; }
-  main { position: relative; flex: 1; min-width: 0; }
-  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  main { position: relative; flex: 1; min-width: 0; min-height: 0; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; outline: none; }
   canvas.dragging { cursor: grabbing; }
   h1 { font-size: 15px; margin: 0; }
   h2 { font-size: 12px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
@@ -30,8 +30,13 @@
   dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 0; }
   dt { color: var(--muted); }
   dd { margin: 0; word-break: break-all; }
-  .banner { position: absolute; top: 8px; left: 8px; right: 8px; padding: 6px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); }
-  .hint { position: absolute; bottom: 8px; right: 12px; color: var(--muted); font-size: 12px; }
+  .banner { position: absolute; top: 8px; left: 8px; right: 8px; padding: 6px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border); pointer-events: none; }
+  .hint { position: absolute; bottom: 8px; right: 12px; color: var(--muted); font-size: 12px; pointer-events: none; }
+  .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--bg); color: var(--muted); }
+  .loading[hidden] { display: none; }
+  .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--hl); animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
   @media (max-width: 700px) { .app { flex-direction: column; } aside { width: auto; max-height: 45%; border-right: none; border-bottom: 1px solid var(--border); } }
 </style>
 </head>
@@ -63,9 +68,10 @@
     </div>
   </aside>
   <main>
-    <canvas id="canvas" aria-label="專案圖譜"></canvas>
+    <canvas id="canvas" tabindex="0" aria-label="專案圖譜（方向鍵平移、+／- 縮放、0 重新置中）"></canvas>
     <div id="banner" class="banner" hidden></div>
-    <div class="hint">拖曳平移 · 滾輪縮放 · 點節點看細節 · 虛線是推斷或不確定的關係</div>
+    <div class="hint">拖曳平移 · 滾輪縮放 · 雙擊重新置中 · 點節點看細節 · 虛線是推斷或不確定的關係</div>
+    <div id="loading" class="loading" role="status"><span class="spin" aria-hidden="true"></span><span id="loading-text">正在排版…</span></div>
   </main>
 </div>
 <script>
@@ -145,21 +151,28 @@ function layout() {
   }
 }
 
+let pendingFit = false;
 function fit() {
   const shown = nodes.filter(visible);
   if (!shown.length) return;
-  const xs = shown.map(n => n.x), ys = shown.map(n => n.y);
-  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  // 畫布還沒有大小（iframe 還沒排好版）時縮放會算成 0、整張圖看不到；先記著，等有大小再置中。
+  pendingFit = !w || !h;
+  if (pendingFit) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const n of shown) { x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); }
   view.k = Math.min(w / (x1 - x0 + 80), h / (y1 - y0 + 80), 3);
   view.x = w / 2 - (x0 + x1) / 2 * view.k; view.y = h / 2 - (y0 + y1) / 2 * view.k;
 }
 
+let ready = false;
 function draw() {
+  if (!ready) return;
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
   const css = getComputedStyle(document.documentElement);
+  const edgeColor = css.getPropertyValue('--edge'), hlColor = css.getPropertyValue('--hl'), textColor = css.getPropertyValue('--text');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   ctx.save();
@@ -169,7 +182,7 @@ function draw() {
     const a = nodes[l.s], b = nodes[l.t];
     if (!visible(a) || !visible(b)) continue;
     const lit = focus && (l.s === selected.i || l.t === selected.i);
-    ctx.strokeStyle = lit ? css.getPropertyValue('--hl') : css.getPropertyValue('--edge');
+    ctx.strokeStyle = lit ? hlColor : edgeColor;
     ctx.lineWidth = (l.confidence === 'EXTRACTED' ? 1.5 : 1) / Math.sqrt(view.k) * (lit ? 1.6 : 1);
     ctx.setLineDash(l.confidence === 'EXTRACTED' ? [] : [4 / view.k, 3 / view.k]);
     ctx.globalAlpha = focus && !lit ? 0.15 : 1;
@@ -181,9 +194,9 @@ function draw() {
     ctx.globalAlpha = focus && !focus.has(n.i) ? 0.2 : 1;
     ctx.fillStyle = color(n);
     ctx.beginPath(); ctx.arc(n.x, n.y, radius(n), 0, Math.PI * 2); ctx.fill();
-    if (n === selected || n === hover) { ctx.strokeStyle = css.getPropertyValue('--text'); ctx.lineWidth = 2 / view.k; ctx.stroke(); }
+    if (n === selected || n === hover) { ctx.strokeStyle = textColor; ctx.lineWidth = 2 / view.k; ctx.stroke(); }
   }
-  ctx.fillStyle = css.getPropertyValue('--text');
+  ctx.fillStyle = textColor;
   ctx.font = `${12 / view.k}px system-ui, sans-serif`;
   ctx.globalAlpha = 1;
   for (const n of nodes) {
@@ -256,33 +269,77 @@ $('#search').oninput = event => {
   }
 };
 
-let drag = null;
-canvas.onmousedown = e => { drag = { x: e.offsetX, y: e.offsetY, vx: view.x, vy: view.y, moved: false }; canvas.classList.add('dragging'); };
-window.onmouseup = e => {
-  canvas.classList.remove('dragging');
-  if (drag && !drag.moved && e.target === canvas) select(nodeAt(e.offsetX, e.offsetY));
-  drag = null;
-};
-canvas.onmousemove = e => {
-  if (drag) {
-    const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-    view.x = drag.vx + dx; view.y = drag.vy + dy; draw(); return;
-  }
-  const n = nodeAt(e.offsetX, e.offsetY);
-  if (n !== hover) { hover = n; canvas.title = n ? `${n.label}\n${n.file}${n.line ? ':L' + n.line : ''}` : ''; draw(); }
-};
-canvas.onwheel = e => {
+// 平移用 pointer events＋pointer capture：拖曳時游標移出畫布、經過提示文字或滑出 iframe 都還收得到移動；
+// 重畫合併到每個 frame 一次，節點多時拖曳也跟得上。
+let drag = null, frame = 0;
+const redraw = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); };
+const point = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+function setHover(n) { if (n !== hover) { hover = n; canvas.title = n ? `${n.label}\n${n.file}${n.line ? ':L' + n.line : ''}` : ''; redraw(); } }
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
   e.preventDefault();
-  const k = Math.min(8, Math.max(0.05, view.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-  view.x = e.offsetX - (e.offsetX - view.x) * k / view.k; view.y = e.offsetY - (e.offsetY - view.y) * k / view.k; view.k = k; draw();
-};
-window.onresize = draw;
+  canvas.focus({ preventScroll: true });
+  try { canvas.setPointerCapture(e.pointerId); } catch {}
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false };
+  canvas.classList.add('dragging');
+});
+canvas.addEventListener('pointermove', e => {
+  if (drag && e.pointerId === drag.id) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    view.x = drag.vx + dx; view.y = drag.vy + dy; redraw(); return;
+  }
+  const p = point(e);
+  setHover(nodeAt(p.x, p.y));
+});
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const click = e.type === 'pointerup' && !drag.moved;
+  drag = null;
+  canvas.classList.remove('dragging');
+  try { if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId); } catch {}
+  if (click) { const p = point(e); select(nodeAt(p.x, p.y)); }
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('lostpointercapture', endDrag);
+canvas.addEventListener('pointerleave', () => { if (!drag) setHover(null); });
+canvas.addEventListener('dragstart', e => e.preventDefault());
+canvas.addEventListener('dblclick', () => { fit(); redraw(); });
+function zoomAt(px, py, factor) {
+  const k = Math.min(8, Math.max(0.05, view.k * factor));
+  view.x = px - (px - view.x) * k / view.k; view.y = py - (py - view.y) * k / view.k; view.k = k; redraw();
+}
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = point(e);
+  zoomAt(p.x, p.y, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+canvas.addEventListener('keydown', e => {
+  const step = 60, cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2;
+  const keys = { ArrowLeft: () => { view.x += step; }, ArrowRight: () => { view.x -= step; }, ArrowUp: () => { view.y += step; }, ArrowDown: () => { view.y -= step; },
+    '+': () => zoomAt(cx, cy, 1.25), '=': () => zoomAt(cx, cy, 1.25), '-': () => zoomAt(cx, cy, 0.8), '0': () => fit() };
+  if (!keys[e.key]) return;
+  e.preventDefault(); keys[e.key](); redraw();
+});
+// 畫布大小改變（視窗、分欄、iframe 第一次排好版）就重畫；還沒置中過就先置中。
+const onResize = () => { if (pendingFit) fit(); redraw(); };
+if (typeof ResizeObserver === 'function') new ResizeObserver(onResize).observe(canvas); else window.addEventListener('resize', onResize);
 
 renderLegend();
-layout();
-fit();
-draw();
+$('#loading-text').textContent = `正在排版 ${nodes.length.toLocaleString()} 個節點…`;
+function start() {
+  layout();
+  ready = true;
+  fit();
+  draw();
+  $('#loading').hidden = true;
+}
+// 先讓「正在排版」畫出來再開始（排版會占住主執行緒幾秒）；頁面在背景時 requestAnimationFrame 不會跑，所以也用計時器保底。
+let started = false;
+const kick = () => { if (!started) { started = true; setTimeout(start, 0); } };
+requestAnimationFrame(kick);
+setTimeout(kick, 120);
 </script>
 </body>
 </html>

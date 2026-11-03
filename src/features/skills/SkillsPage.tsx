@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { Page, Eyebrow, Hint, Notice, EmptyState } from '@/components/app/Page';
+import { Page, Eyebrow, Hint, Notice, EmptyState, Loading } from '@/components/app/Page';
 import { Chip } from '@/components/app/StatusPill';
 import { Markdown } from '@/components/app/Markdown';
 import { StreamingText } from '@/components/app/StreamingReply';
@@ -103,6 +103,7 @@ export function SkillsPage() {
   const [query, setQuery] = useState('');
   const [picker, setPicker] = useState<SkillStage | null>(null);
   const [loadError, setLoadError] = useState('');
+  const [loaded, setLoaded] = useState(false);
 
   // 非同步載入時要讀到最新的選取狀態，用 ref 鏡射。
   const live = useRef({ selected, runId, runFresh, editing, runs, bindings, bindingsSaved });
@@ -138,7 +139,7 @@ export function SkillsPage() {
     const saved = normalizeBindings(data.config, stageList);
     const { bindings: b, bindingsSaved: bs, selected: sel, editing: ed } = live.current;
     const wasDirty = JSON.stringify(b) !== JSON.stringify(bs);
-    setLibrary(skills); setStages(stageList); setBindingsSaved(saved);
+    setLibrary(skills); setStages(stageList); setBindingsSaved(saved); setLoaded(true);
     if (!wasDirty) setBindings(structuredClone(saved));
     let nextSel = sel;
     if (sel && sel !== 'bindings' && !skills.some((s) => s.name === sel) && !ed) nextSel = null;
@@ -295,7 +296,9 @@ export function SkillsPage() {
                 </button>
                 <div className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">技能</div>
                 <ul className="flex flex-col gap-1" aria-label="共用技能">
-                  {!visible.length && <li className="px-2 py-3 text-xs text-muted-foreground">{library.length ? '沒有符合的技能' : loadError || '還沒有技能'}</li>}
+                  {!visible.length && (!loaded && !loadError
+                    ? <li><Loading inline label="讀取技能…" className="px-2 py-3" /></li>
+                    : <li className="px-2 py-3 text-xs text-muted-foreground">{library.length ? '沒有符合的技能' : loadError || '還沒有技能'}</li>)}
                   {visible.map((s) => {
                     const { origin, compat, tone } = skillOriginText(s);
                     const on = s.name === selected && !draft;

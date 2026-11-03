@@ -13,7 +13,7 @@ import { Markdown } from '@/components/app/Markdown';
 import { LogTree } from '@/components/app/LogTree';
 import { DiffView } from '@/components/app/DiffView';
 import { Chip } from '@/components/app/StatusPill';
-import { Hint, Notice } from '@/components/app/Page';
+import { Notice, Loading } from '@/components/app/Page';
 import { confirmDialog } from '@/components/app/confirm';
 import { ReferenceWidget, referenceOptions } from '@/features/references/ReferenceWidget';
 import { runAction } from '@/lib/actions';
@@ -187,7 +187,7 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
       {error && !detail ? (
         <div className="p-3 text-xs"><span>{error} </span><Button type="button" size="sm" variant="outline" onClick={() => load(true)}>重新讀取</Button></div>
       ) : !detail || !task ? (
-        <p className="p-3 text-xs text-muted-foreground">載入中…</p>
+        <Loading inline label="載入任務…" className="px-3 py-3" />
       ) : (
         <>
           <div className="grid shrink-0 gap-3 overflow-y-auto border-b px-3 py-2" style={{ maxHeight: '45%' }}>
@@ -244,7 +244,6 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
           <TaskEditDialog detail={detail} open={editing} onOpenChange={setEditing} onSaved={() => load()} />
         </>
       )}
-      {!detail && !error && <Hint className="sr-only">載入中</Hint>}
     </div>
   );
 }

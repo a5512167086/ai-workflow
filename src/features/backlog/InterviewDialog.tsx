@@ -14,7 +14,7 @@ import { StreamingText } from '@/components/app/StreamingReply';
 import { partialJsonString } from '@/lib/format';
 import { LiveSince } from '@/components/app/LiveSince';
 import { GuardButton } from '@/components/app/GuardButton';
-import { Hint } from '@/components/app/Page';
+import { Hint, Loading } from '@/components/app/Page';
 import { confirmDialog } from '@/components/app/confirm';
 import { useSkillCommandInput } from '@/features/skills/use-skill-command';
 import { useProject } from '@/stores/project';
@@ -230,6 +230,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
                     {message.role === 'user' ? <div className="selectable whitespace-pre-wrap">{message.text}</div> : <Markdown text={message.text} />}
                   </article>
                 ))}
+                {!data && !statusError && <Loading label="讀取會議…" />}
                 {active && session?.turn && <InterviewTyping turn={session.turn} />}
               </div>
               <LiveSince label={statusText} since={since} className={cn('text-xs', (statusError || session?.error || data?.stale) && 'text-danger')} />

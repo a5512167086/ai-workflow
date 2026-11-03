@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ConfirmHost } from '@/components/app/confirm';
@@ -116,5 +116,27 @@ describe('PRD 頁', () => {
     expect(stepIndex({ state: { prd: { status: 'awaiting_approval', rounds: [] }, pipeline: { status: 'idle' }, control: {}, tasks: {} }, tasks: [] })).toBe(2);
     expect(stepIndex({ state: { prd: { status: 'approved', rounds: [] }, pipeline: { status: 'idle' }, control: {}, tasks: {} }, tasks: [] })).toBe(3);
     expect(stepIndex({ state: { prd: { status: 'approved', rounds: [] }, pipeline: { status: 'idle' }, control: {}, tasks: {}, task_gen: { status: 'done' } }, tasks: [] })).toBe(4);
+  });
+
+  test('功能已完成：決定面板改成說明與「到需求待辦開始新需求」，不再顯示停用的審查／核准按鈕', async () => {
+    const snap = snapshot({ status: 'approved' }, { guards: { 'prd.edit': '這個功能已完成並封存', 'prd.review': '這個功能已完成並封存', 'prd.approve': 'PRD 目前不是等待核准', 'prd.revise': '這個功能已完成並封存', 'tasks.generate': '這個功能已完成並封存' } });
+    snap.state.pipeline = { status: 'complete', reason: '功能已完成並通過人工測試' };
+    useProject.setState({ id: snap.project.id, snap, api: vi.fn(async () => ({ rounds: [] })) as never, rounds: [], logs: {}, logsFull: new Set(), error: null });
+    render(
+      <MemoryRouter initialEntries={['/p/0123456789/prd']}>
+        <TooltipProvider>
+          <Routes>
+            <Route path="/p/:id/prd" element={<PrdPage />} />
+            <Route path="/p/:id/backlog" element={<p>需求待辦畫面</p>} />
+          </Routes>
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: '這個功能已完成' })).toBeInTheDocument();
+    expect(screen.getByText('功能已完成並通過人工測試')).toBeInTheDocument();
+    for (const name of [/只重新審查目前版本/, /核准 PRD/, /要求再改/, /人工編輯/]) expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /查看封存紀錄/ })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: /到需求待辦開始新需求/ }));
+    expect(await screen.findByText('需求待辦畫面')).toBeInTheDocument();
   });
 });
