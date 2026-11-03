@@ -30,7 +30,7 @@ function NativeSelect({ className, ...props }: React.ComponentProps<'select'>) {
 const SAVING_ITEMS: [keyof TokenSaving & string, string, string][] = [
   ['review_diff_filter', '審查略過 lockfile 與產生檔', 'package-lock.json、Cargo.lock、dist/、*.min.js 等只列檔名，內容不送審查。'],
   ['prd_excerpt', '實作只附相關的 PRD', '只附任務對應的使用者故事、測試決策與不做的事，並給完整 PRD 路徑；對不到使用者故事時照舊附全文。'],
-  ['dedupe_skills', '內建技能不重複附加', 'tdd、to-spec、to-tickets、grill-me 的方法已寫在該階段的提示詞裡；沒改過的內建技能就不再附一次。'],
+  ['dedupe_skills', '內建技能不重複附加', 'to-spec、to-tickets、grill-me 的方法已寫在該階段的提示詞裡；沒改過的內建技能就不再附一次。實作的開發方法（例如 tdd）不寫在提示詞裡，綁了才會附加。'],
   ['code_map', '專案圖譜', '以 tree-sitter 建立定義、匯入、呼叫與繼承的圖譜（參考 graphify），實作與修正前依任務內容把相關的節點與關係附給 AI，不用整個專案搜尋；專案頁的「架構圖」分頁可以檢視。'],
 ];
 const TERSE_ROLES: [keyof NonNullable<TokenSaving['terse']>, string][] = [['reviewer', 'PRD 審查'], ['implementer', '實作'], ['fixer', '修正'], ['code_reviewer', '程式碼審查']];

@@ -113,9 +113,9 @@ pub const TERSE_RULES: &str = "## 回覆風格：精簡
 - 這些規則只約束你的回覆文字；寫進檔案的程式碼、註解、文件，以及上面規定的輸出格式（例如最後的 VERDICT 行）照原本的要求。";
 
 /// 內建技能的方法已經寫在這個階段的 prompt 裡（技能改編自同一份來源）：重複附加只是多花 token。
+/// tdd 不在這裡：開發方法完全交給使用者綁定的技能（可以換成別的方法，或不綁），實作 prompt 不寫死。
 pub fn builtin_inlined(skill: &str, stage: Option<&str>, role: Option<&str>) -> bool {
     match skill {
-        "tdd" => stage == Some("implement"),
         "to-spec" => stage == Some("prd"),
         "to-tickets" => stage == Some("tasks"),
         "grill-me" => role == Some("interviewer"),

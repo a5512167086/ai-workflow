@@ -85,12 +85,13 @@ fn 預設開啟的節省項目_縮小實作與審查_prompt_並記錄估計節�
     let (root, cfg) = project_with(scenario(), &["codex"], json!({}));
     assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting", "{}", read_state(&root)["pipeline"]["reason"]);
 
-    // 實作：只附 US-2 與測試決策、不做的事，給完整 PRD 路徑；內建 tdd 已寫在 prompt 裡不再附加，其他技能照常附加。
+    // 實作：只附 US-2 與測試決策、不做的事，給完整 PRD 路徑；開發方法交給綁定的技能，內建 tdd 照常附加。
     let implement = prompt_of(&root, "你正在一個全新的對話中實作");
     assert!(implement.contains("US-2 身為會計") && implement.contains("在報表服務的公開介面測試") && implement.contains("不做排程寄送"), "{implement}");
     assert!(!implement.contains("US-1 身為會計") && !implement.contains("金額一律以整數分儲存"));
     assert!(implement.contains(&prd_file(&root).display().to_string()));
-    assert!(!implement.contains("### Skill: tdd") && implement.contains("### Skill: uiux-design"));
+    assert!(implement.contains("### Skill: tdd") && implement.contains("### Skill: uiux-design"));
+    assert!(!implement.contains("用 TDD 實作"), "prompt 本身不寫死開發方法");
     assert!(implement.contains("回覆風格：精簡"));
     assert!(implement.contains("## 專案圖譜") && implement.contains("NODE monthly() [src=report.rs loc=L1"), "專案圖譜預設開啟：{implement}");
 
@@ -104,8 +105,7 @@ fn 預設開啟的節省項目_縮小實作與審查_prompt_並記錄估計節�
     assert!(fs::read_to_string(data_dir(&root).join("tasks/1/diff.patch")).unwrap().contains(LOCK));
 
     let implement_session = session_of(&root, "implement");
-    assert_eq!(features(&implement_session), vec!["prd_excerpt", "dedupe_skills"]);
-    assert_eq!(implement_session["saved"][1]["skills"], json!(["tdd"]));
+    assert_eq!(features(&implement_session), vec!["prd_excerpt"]);
     assert_eq!(implement_session["terse"], true);
     assert_eq!(features(&session_of(&root, "code_review")), vec!["review_diff_filter"]);
     assert_eq!(session_of(&root, "handover")["terse"], false);
