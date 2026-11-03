@@ -219,7 +219,7 @@ async function handleApi(method: string, path: string, body: Record<string, unkn
   if (method === 'GET') {
     if (rest === 'state') return snapshot();
     if (rest === 'prd') { const s = snapshot(); return { prd, status: s.state.prd, rounds: s.state.prd.rounds }; }
-    if (rest === 'backlog') return { items: backlog, path: 'C:\\Users\\me\\.ai-workflow\\projects\\0123456789\\backlog.json' };
+    if (rest === 'backlog') return { items: [...backlog], path: 'C:\\Users\\me\\.ai-workflow\\projects\\0123456789\\backlog.json' };
     if (rest === 'chats') return { items: chats.map(({ messages: _m, ...c }) => c as ChatSummary) };
     if (rest.startsWith('chat/')) return chats.find((c) => c.id === decodeURIComponent(rest.slice(5))) || Promise.reject(new Error('找不到對話'));
     if (rest.startsWith('requirements/')) return { session: { id: 'req-1', status: 'done', messages: [{ role: 'assistant', text: '1. 誰會使用匯出？\n2. 需要哪些欄位？', at: now() }], requirementsReady: true, requirementsSummary: '# 需求摘要\n- 分析師匯出 CSV\n- 可選日期範圍' }, confirmed: false, stale: false };
@@ -230,7 +230,21 @@ async function handleApi(method: string, path: string, body: Record<string, unkn
     if (rest === 'models') return models;
     if (rest === 'graph') return { exists: true, stats: { files: 42, nodes: 310, edges: 520, communities: 6 }, builtAt: now(), commit: 'a1b2c3d4e5', paths: { report: 'C:\\...\\GRAPH_REPORT.md' }, report: '# 專案圖譜\n\n## 分群\n- api（12 個檔案）\n- pages（20 個檔案）', html: '<!doctype html><html><body style="font-family:sans-serif;padding:20px">互動圖（預覽）</body></html>' };
     if (rest === 'archive') return { items: [{ name: '2026-10-20-login-oauth', feature: '登入 OAuth', progress: { done: 3, total: 3 }, completed_at: now() }], dir: 'C:\\Users\\me\\.ai-workflow\\projects\\0123456789\\archive' };
-    if (rest.startsWith('archive/')) return { name: decodeURIComponent(rest.slice(8)), path: 'C:\\...\\archive\\2026-10-20-login-oauth', meta: { feature: '登入 OAuth', approved_at: now(), completed_at: now(), tm_tag: 'login-oauth', progress: { done: 3, total: 3 } }, prd: '# PRD：登入 OAuth\n\n舊功能的 PRD。', rounds: [{ name: '1-draft-claude.md', text: '初稿' }, { name: '1-review-codex-approve.md', text: 'VERDICT: APPROVE' }], tasks: [{ id: 1, title: 'OAuth 回呼', status: 'done', priority: 'high' }] };
+    if (rest.startsWith('archive/') && rest.includes('/task/')) {
+      // 封存裡的任務：任務 1 有完整的實作紀錄，任務 2 沒有保存紀錄。
+      const id = rest.split('/task/')[1];
+      if (id === '2') return { id, hasRecords: false, task: { id: 2, title: 'OAuth 設定頁', status: 'done', description: '讓管理者設定 Client ID。' }, state: null, checks: '', diff: '', implement: '', reviews: [], log: '' };
+      return {
+        id, hasRecords: true, state: { phase: 'done', step: '人工測試通過' },
+        task: { id: 1, title: 'OAuth 回呼', status: 'done', priority: 'high', description: '處理 OAuth 回呼並建立工作階段。', testStrategy: '模擬回呼參數，確認建立 session。' },
+        implement: '完成 /oauth/callback，驗證 state 參數。',
+        checks: '$ npm test\n✓ 12 passed',
+        reviews: [{ name: 'review-1.md', round: 1, provider: 'codex', text: '[必須修正] 沒有檢查 state\n\nVERDICT: REVISE' }, { name: 'review-2.md', round: 2, provider: 'codex', text: '已修正。\n\nVERDICT: APPROVE' }],
+        diff: 'diff --git a/src/oauth.ts b/src/oauth.ts\n--- a/src/oauth.ts\n+++ b/src/oauth.ts\n@@ -1,2 +1,3 @@\n export function callback() {\n+  verifyState();\n }\n',
+        log: '[10:00:01] ── 實作任務 1：claude（可編輯）開始，session a ──\n[10:00:02] 🔧 Read src/oauth.ts\n[10:00:09] ── 實作任務 1：完成（8s） ──',
+      };
+    }
+    if (rest.startsWith('archive/')) return { name: decodeURIComponent(rest.slice(8)), taskStates: { 1: { phase: 'done', step: '人工測試通過' } }, path: 'C:\\...\\archive\\2026-10-20-login-oauth', meta: { feature: '登入 OAuth', approved_at: now(), completed_at: now(), tm_tag: 'login-oauth', progress: { done: 3, total: 3 } }, prd: '# PRD：登入 OAuth\n\n舊功能的 PRD。', rounds: [{ name: '1-draft-claude.md', text: '初稿' }, { name: '1-review-codex-approve.md', text: 'VERDICT: APPROVE' }], tasks: [{ id: 1, title: 'OAuth 回呼', status: 'done', priority: 'high' }, { id: 2, title: 'OAuth 設定頁', status: 'done', priority: 'medium' }] };
     if (rest.startsWith('task/')) return taskDetail(rest.slice(5));
     if (rest.startsWith('log/')) return { text: logs[rest.slice(4)] || '' };
     throw new Error(`mock：沒有 GET ${clean}`);
@@ -254,8 +268,8 @@ async function handleApi(method: string, path: string, body: Record<string, unkn
     case 'graph/build': return handleApi('GET', path.replace('graph/build', 'graph'), null);
     case 'backlog/add': { const item: BacklogItem = { id: Math.random().toString(16).slice(2, 12), title: String(b.title), detail: String(b.detail || ''), status: 'open', references: (b.references as string[]) || [], created_at: now(), updated_at: now() }; backlog.push(item); return { item }; }
     case 'backlog/update': { const item = backlog.find((i) => i.id === b.id); if (item) Object.assign(item, { title: b.title, detail: b.detail, updated_at: now() }); return { item }; }
-    case 'backlog/delete': { const i = backlog.findIndex((x) => x.id === b.id); if (i >= 0) backlog.splice(i, 1); return { items: backlog }; }
-    case 'backlog/reorder': { const ids = b.ids as string[]; backlog.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id)); return { items: backlog }; }
+    case 'backlog/delete': { const i = backlog.findIndex((x) => x.id === b.id); if (i >= 0) backlog.splice(i, 1); return { items: [...backlog] }; }
+    case 'backlog/reorder': { const ids = b.ids as string[]; backlog.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id)); return { items: [...backlog] }; }
     case 'backlog/interview': return { session: { id: 'req-1', status: 'done', messages: [{ role: 'assistant', text: '1. 誰會使用匯出？', at: now() }, ...(b.input ? [{ role: 'user', text: String(b.input), at: now() }, { role: 'assistant', text: '了解。還有：欄位要可選嗎？', at: now() }] : [])], requirementsReady: !!b.input, requirementsSummary: '# 需求摘要\n- 分析師匯出 CSV' }, confirmed: false, stale: false };
     case 'backlog/confirm': return { session: { id: 'req-1', status: 'done', messages: [], requirementsReady: true, confirmedSummary: b.summary }, confirmed: true };
     case 'backlog/draft': return { ok: true };

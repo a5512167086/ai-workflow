@@ -105,4 +105,66 @@ describe('需求待辦', () => {
     await waitFor(() => expect(calls.find((c) => c.path === '/api/backlog/delete')?.body).toEqual({ id: 'ccc' }));
     await waitFor(() => expect(screen.queryByText('深色模式')).not.toBeInTheDocument());
   });
+
+  test('依狀態篩選：數量正確、記住選擇；篩選時上／下移跟畫面上相鄰的項目換位置', async () => {
+    localStorage.removeItem('ai-workflow.backlog.filter');
+    const { calls } = setup();
+    renderApp(<BacklogPage />);
+    await screen.findByText('通知中心');
+    const group = screen.getByLabelText('依狀態篩選需求');
+    expect(within(group).getByRole('radio', { name: /全部s*3/ })).toBeInTheDocument();
+    await userEvent.click(within(group).getByRole('radio', { name: /待辦s*2/ }));
+    expect(screen.queryByText('鎖住的需求')).not.toBeInTheDocument();
+    expect(localStorage.getItem('ai-workflow.backlog.filter')).toBe('open');
+    // 篩選中「深色模式」往上移：跑到「通知中心」前面，被篩掉的「鎖住的需求」仍在最前面。
+    await userEvent.click(screen.getByRole('button', { name: /往上移：深色模式/ }));
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/backlog/reorder')?.body).toEqual({ ids: ['aaa', 'ccc', 'bbb'] }));
+    await userEvent.click(within(group).getByRole('radio', { name: /已完成s*0/ }));
+    expect(screen.getByText('沒有「已完成」的需求')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '顯示全部' }));
+    expect(await screen.findByText('鎖住的需求')).toBeInTheDocument();
+  });
+
+  test('拖曳排序用 pointer events（桌面 App 裡 HTML5 拖曳不會觸發）：拖過門檻才算、放到目標列的前或後', async () => {
+    localStorage.removeItem('ai-workflow.backlog.filter');
+    const { calls } = setup();
+    renderApp(<BacklogPage />);
+    await screen.findByText('通知中心');
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-reorder-id]')];
+    expect(rows.map((r) => r.dataset.reorderId)).toEqual(['aaa', 'bbb', 'ccc']);
+    rows.forEach((row, i) => { row.getBoundingClientRect = () => ({ top: i * 100, bottom: i * 100 + 90, height: 90, left: 0, right: 300, width: 300, x: 0, y: i * 100, toJSON: () => ({}) }); });
+    const ccc = rows[2];
+    // 只是點一下（沒有移動）不會排序。
+    fireEvent.pointerDown(ccc, { button: 0, pointerId: 1, clientX: 10, clientY: 240 });
+    fireEvent.pointerUp(ccc, { button: 0, pointerId: 1, clientX: 10, clientY: 240 });
+    // 從按鈕開始拖不算。
+    const up = within(ccc).getByRole('button', { name: /往上移/ });
+    fireEvent.pointerDown(up, { button: 0, pointerId: 2, clientX: 10, clientY: 240 });
+    fireEvent.pointerMove(ccc, { pointerId: 2, clientX: 10, clientY: 20 });
+    fireEvent.pointerUp(ccc, { pointerId: 2, clientX: 10, clientY: 20 });
+    expect(calls.some((c) => c.path === '/api/backlog/reorder')).toBe(false);
+    // 把「深色模式」拖到「通知中心」的上半部：放在它前面。
+    fireEvent.pointerDown(ccc, { button: 0, pointerId: 3, clientX: 10, clientY: 240 });
+    fireEvent.pointerMove(ccc, { pointerId: 3, clientX: 10, clientY: 120 });
+    expect(ccc.className).toContain('opacity-50');
+    expect(rows[1].className).toContain('before:bg-primary');
+    fireEvent.pointerUp(ccc, { pointerId: 3, clientX: 10, clientY: 120 });
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/backlog/reorder')?.body).toEqual({ ids: ['aaa', 'ccc', 'bbb'] }));
+  });
+
+  test('拖曳中按 Esc 取消，不會排序', async () => {
+    localStorage.removeItem('ai-workflow.backlog.filter');
+    const { calls } = setup();
+    renderApp(<BacklogPage />);
+    await screen.findByText('通知中心');
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-reorder-id]')];
+    rows.forEach((row, i) => { row.getBoundingClientRect = () => ({ top: i * 100, bottom: i * 100 + 90, height: 90, left: 0, right: 300, width: 300, x: 0, y: i * 100, toJSON: () => ({}) }); });
+    fireEvent.pointerDown(rows[0], { button: 0, pointerId: 1, clientX: 10, clientY: 40 });
+    fireEvent.pointerMove(rows[0], { pointerId: 1, clientX: 10, clientY: 260 });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.pointerUp(rows[0], { pointerId: 1, clientX: 10, clientY: 260 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.some((c) => c.path === '/api/backlog/reorder')).toBe(false);
+    expect(rows[0].className).not.toContain('opacity-50');
+  });
 });

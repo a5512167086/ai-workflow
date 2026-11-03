@@ -55,6 +55,44 @@ fn set_pipeline(root: &Path, status: &str, reason: &str, extra: Value) -> Result
     Ok(())
 }
 
+/// 「已完成」只屬於完成的那個功能。舊版開始新功能時沒有重設流程狀態，新功能會一直顯示已完成、任務也不能開始；
+/// 發現這種殘留就改回 idle。完成時會記下功能的封存資料夾（pipeline.feature）；舊資料沒有記，就看任務是否全部完成。
+pub fn recover_stale_complete(root: &Path) -> Result<bool> {
+    let s = read_state(root);
+    if s["pipeline"]["status"] != "complete" {
+        return Ok(false);
+    }
+    let stale = if s["prd"]["status"] != "approved" {
+        true
+    } else {
+        match s["pipeline"]["feature"].as_str() {
+            Some(feature) => s["prd"]["archive_dir"].as_str() != Some(feature),
+            None => {
+                let list = tasks::read_tasks(root).unwrap_or_default();
+                list.is_empty() || list.iter().any(|t| t["status"] != "done")
+            }
+        }
+    };
+    if !stale {
+        return Ok(false);
+    }
+    reset_pipeline(root)?;
+    append_log(root, RUN_SCOPE, "流程狀態：idle（上一個功能的「已完成」已清除，目前是新的功能）");
+    Ok(true)
+}
+
+/// 開始新的功能：流程狀態回到 idle（不寫 log，由呼叫的地方說明）。
+pub fn reset_pipeline(root: &Path) -> Result<()> {
+    update_state(root, |s| {
+        s["pipeline"]["status"] = json!("idle");
+        s["pipeline"]["reason"] = json!("");
+        s["pipeline"]["current_task"] = Value::Null;
+        if let Some(p) = s["pipeline"].as_object_mut() {
+            p.remove("feature");
+        }
+    })
+}
+
 fn set_task(root: &Path, id: &str, patch: Value) -> Result<()> {
     update_state(root, |s| {
         let t = task_state(s, id);
@@ -349,6 +387,9 @@ pub fn run_pipeline_with_provider(root: &Path, first_task: Option<&str>, verify_
         crate::bail!("本次執行的 AI 必須是 claude 或 codex");
     }
     acquire_runner(root)?;
+    if let Err(err) = crate::core::archive::settle_task_records(root) {
+        append_log(root, RUN_SCOPE, &format!("⚠ 整理上一個功能的任務紀錄失敗：{}", err.message));
+    }
     let result = pipeline_loop(root, first_task, verify_only, provider);
     if let Err(err) = &result {
         let _ = set_pipeline(root, "error", &err.message, json!({}));
@@ -464,7 +505,8 @@ pub fn acknowledge(root: &Path) -> Result<Next> {
         append_log(root, &format!("task-{id}"), "使用者確認測試通過");
     }
     if state["pipeline"]["status"] == "feature_test" {
-        set_pipeline(root, "complete", "功能已完成並通過人工測試", json!({}))?;
+        // 記下完成的是哪個功能（封存資料夾），開始下一個功能時才分得出這個「已完成」是舊的。
+        set_pipeline(root, "complete", "功能已完成並通過人工測試", json!({ "feature": state["prd"]["archive_dir"] }))?;
         finish_feature(root);
         return Ok(Next::Done);
     }

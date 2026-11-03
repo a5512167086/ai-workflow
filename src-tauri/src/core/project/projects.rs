@@ -153,6 +153,7 @@ pub fn project_summary(project: &Value) -> Value {
         }
     };
     let _ = crate::core::prd::recover_interrupted(&root);
+    let _ = crate::core::runner::recover_stale_complete(&root);
     let state = read_state(&root);
     // tasks.json 壞掉時總覽仍要能顯示
     let tasks = read_tasks(&root).unwrap_or_default();

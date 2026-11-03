@@ -198,7 +198,11 @@ export interface ArchiveSummary extends Loose { name: string; feature?: string; 
 export interface ArchivePayload extends Loose {
   name: string; path: string; meta?: { feature?: string; idea?: string; approved_at?: string; completed_at?: string; tm_tag?: string; progress?: { done: number; total: number } } & Loose;
   prd?: string; rounds: { name: string; text: string }[]; tasks: Task[];
+  /** 封存當時每個任務的執行狀態（舊的封存沒有）。 */
+  taskStates?: Record<string, TaskState> | null;
 }
+/** 封存裡的一個任務：內容、當時的狀態與實作紀錄；hasRecords 為 false 表示沒有保存紀錄。 */
+export interface ArchivedTask extends Pick<TaskDetail, 'id' | 'task' | 'state' | 'checks' | 'diff' | 'implement' | 'log' | 'reviews'> { hasRecords: boolean }
 
 export interface GraphSummary extends Loose {
   exists: boolean; stats?: { files: number; nodes: number; edges: number; communities: number }; builtAt?: string; commit?: string; paths?: { report?: string }; report?: string; html?: string;

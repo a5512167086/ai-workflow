@@ -1,10 +1,13 @@
 //! 功能封存：每個功能一個資料夾 <home>/projects/<id>/archive/<日期>-<功能>/。
 //!   prd.md            核准的 PRD
 //!   rounds/NN-*.md    每一輪的初稿、審查、修訂、使用者意見
-//!   tasks.json        最後的任務清單（含狀態）
+//!   tasks.json        最後的任務清單（含狀態）與每個任務的執行狀態（states）
+//!   task-records/<id>/ 每個任務的實作紀錄：task.log、implement.md、review-*.md、checks.txt、diff.patch
 //!   meta.json         功能名稱、想法、核准時間、任務群組、待辦項目 id
 //! 資料夾名稱不會重複；同一個功能重新核准時更新同一個資料夾，開始下一個功能時一定建新的。
 //! state.prd.archive_dir 記的是相對於專案資料目錄的路徑（archive/<名稱>）。
+//! 任務的實作紀錄平常放在 tasks/<id>/ 與 logs/task-<id>.log；下一個功能的任務編號會重複，所以開始新功能時移進封存。
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,9 +15,9 @@ use serde_json::{json, Value};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::core::config::cfg_str;
-use crate::core::state::{data_dir, read_state, update_state};
+use crate::core::state::{data_dir, log_path, read_state, update_state};
 use crate::core::tasks::{current_tag, read_tasks, tasks_in};
-use crate::core::util::{now_iso, pretty, read_json, read_text, rel_slash, today, truthy};
+use crate::core::util::{js_string, now_iso, pretty, read_json, read_text, rel_slash, today, truthy};
 use crate::core::Result;
 
 fn kind_file(kind: &str) -> &str {
@@ -152,7 +155,11 @@ pub fn archive_tasks(root: &Path, extra: Value) -> Result<Option<String>> {
     let tasks = read_tasks(root)?;
     let tag = current_tag(root)?;
     if !tasks.is_empty() {
-        fs::write(dir.join("tasks.json"), pretty(&json!({ "tag": tag, "tasks": tasks })) + "\n")?;
+        fs::write(dir.join("tasks.json"), pretty(&json!({ "tag": tag, "tasks": tasks, "states": state["tasks"] })) + "\n")?;
+    }
+    settle_leftover_records(root, &state, Some(&dir))?;
+    for id in owned_records(root, &state) {
+        copy_records(root, &id, &dir.join("task-records").join(&id))?;
     }
     let mut patch = json!({
         "tm_tag": state["task_gen"]["tag"].as_str().filter(|t| !t.is_empty()).unwrap_or(&tag),
@@ -164,6 +171,152 @@ pub fn archive_tasks(root: &Path, extra: Value) -> Result<Option<String>> {
     }
     write_meta(&dir, patch)?;
     Ok(Some(rel))
+}
+
+fn records_root(root: &Path) -> PathBuf {
+    data_dir(root).join("tasks")
+}
+
+fn valid_record_id(id: &str) -> bool {
+    !id.is_empty() && id.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// 目前留著實作紀錄的任務：有 tasks/<id>/ 資料夾或 logs/task-<id>.log。
+fn record_ids(root: &Path) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for entry in fs::read_dir(records_root(root)).into_iter().flatten().flatten() {
+        if entry.path().is_dir() {
+            ids.insert(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    for entry in fs::read_dir(data_dir(root).join("logs")).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(id) = name.strip_prefix("task-").and_then(|n| n.strip_suffix(".log")) {
+            ids.insert(id.to_string());
+        }
+    }
+    ids.retain(|id| valid_record_id(id));
+    ids
+}
+
+/// 屬於目前任務清單的紀錄：產生任務清單時 state.tasks 會清空，之後有執行狀態的任務才是這個功能跑過的。
+fn owned_records(root: &Path, state: &Value) -> Vec<String> {
+    let owned = state["tasks"].as_object();
+    record_ids(root).into_iter().filter(|id| owned.is_some_and(|o| o.contains_key(id))).collect()
+}
+
+fn copy_records(root: &Path, id: &str, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(records_root(root).join(id)).into_iter().flatten().flatten() {
+        if entry.path().is_file() {
+            fs::copy(entry.path(), dest.join(entry.file_name()))?;
+        }
+    }
+    let log = log_path(root, &format!("task-{id}"));
+    if log.is_file() {
+        fs::copy(&log, dest.join("task.log"))?;
+    }
+    Ok(())
+}
+
+fn remove_records(root: &Path, id: &str) {
+    let _ = fs::remove_dir_all(records_root(root).join(id));
+    let _ = fs::remove_file(log_path(root, &format!("task-{id}")));
+}
+
+/// 封存的任務清單裡有沒有這個任務（子任務 "1.2" 看父任務 1）。
+fn archive_has_task(dir: &Path, id: &str) -> bool {
+    let parent = id.split('.').next().unwrap_or(id);
+    tasks_in(&dir.join("tasks.json")).iter().any(|t| js_string(&t["id"]) == parent)
+}
+
+/// 不屬於目前任務清單的紀錄（舊版開始新功能時沒有清掉，會和新任務混在一起）：
+/// 搬進最近一個有這個任務、還沒有它紀錄的其他封存；找不到就留著，不刪除。
+fn settle_leftover_records(root: &Path, state: &Value, current: Option<&Path>) -> Result<()> {
+    let owned = state["tasks"].as_object();
+    let leftovers: Vec<String> = record_ids(root).into_iter().filter(|id| !owned.is_some_and(|o| o.contains_key(id))).collect();
+    if leftovers.is_empty() {
+        return Ok(());
+    }
+    let mut archives: Vec<PathBuf> = fs::read_dir(archive_root(root)).into_iter().flatten().flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("prd.md").exists() && current.is_none_or(|c| c != p.as_path()))
+        .collect();
+    archives.sort();
+    archives.reverse(); // 資料夾名稱以日期開頭：最近的在前
+    for id in leftovers {
+        if let Some(target) = archives.iter().find(|a| archive_has_task(a, &id) && !a.join("task-records").join(&id).exists()) {
+            copy_records(root, &id, &target.join("task-records").join(&id))?;
+            remove_records(root, &id);
+        }
+    }
+    Ok(())
+}
+
+/// 執行任務前呼叫：先把不屬於目前任務清單的舊紀錄移走，新的 log 才不會接在上一個功能的後面。
+pub fn settle_task_records(root: &Path) -> Result<()> {
+    let state = read_state(root);
+    let current = state["prd"]["archive_dir"].as_str().filter(|d| !d.is_empty()).map(|rel| archive_path(root, rel));
+    settle_leftover_records(root, &state, current.as_deref())
+}
+
+/// 開始新功能：上一個功能的任務紀錄已由 archive_tasks 複製進封存，這裡把原本的清掉，新功能的任務從空白開始。
+pub fn release_task_records(root: &Path) {
+    let state = read_state(root);
+    for id in owned_records(root, &state) {
+        remove_records(root, &id);
+    }
+}
+
+/// 一個任務的實作紀錄（目前的 tasks/<id>/ 與封存裡的 task-records/<id>/ 格式相同）。
+pub fn task_records(dir: &Path, log: &Path) -> Value {
+    // review-<n>.md，或雙人審查的 review-<n>-<claude|codex>.md
+    let mut reviews: Vec<(u64, String, String)> = fs::read_dir(dir).into_iter().flatten().flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter_map(|f| {
+            let stem = f.strip_prefix("review-")?.strip_suffix(".md")?.to_string();
+            let (n, provider) = stem.split_once('-').map(|(n, p)| (n.to_string(), p.to_string())).unwrap_or((stem, String::new()));
+            Some((n.parse().ok()?, provider, f.clone()))
+        })
+        .collect();
+    reviews.sort();
+    let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
+    json!({
+        "checks": read_text(dir.join("checks.txt")),
+        "diff": read_text(dir.join("diff.patch")),
+        "implement": read_text(dir.join("implement.md")),
+        "reviews": reviews,
+        "log": crate::core::api::tail(log, 200_000)["text"],
+    })
+}
+
+/// 封存裡的一個任務：任務內容、當時的執行狀態與實作紀錄（沒有紀錄時欄位是空字串，hasRecords 為 false）。
+pub fn read_archived_task(root: &Path, name: &str, id: &str) -> Result<Value> {
+    if !safe_name(name) || !valid_record_id(id) {
+        crate::bail!(400; "封存或任務名稱不正確");
+    }
+    let dir = archive_root(root).join(name);
+    let file = read_json(dir.join("tasks.json")).unwrap_or(json!({}));
+    let list = file["tasks"].as_array().cloned().unwrap_or_default();
+    let mut parts = id.splitn(2, '.');
+    let (parent, sub) = (parts.next().unwrap_or(""), parts.next());
+    let top = list.iter().find(|t| js_string(&t["id"]) == parent).cloned();
+    let task = match (top, sub) {
+        (Some(t), None) => Some(t),
+        (Some(t), Some(s)) => t["subtasks"].as_array().and_then(|subs| subs.iter().find(|x| js_string(&x["id"]) == s)).cloned().map(|mut x| {
+            x["parent"] = json!(parent);
+            x
+        }),
+        _ => None,
+    };
+    let Some(task) = task else { crate::bail!(404; "封存裡找不到這個任務") };
+    let records_dir = dir.join("task-records").join(id);
+    let mut out = task_records(&records_dir, &records_dir.join("task.log"));
+    out["id"] = json!(id);
+    out["task"] = task;
+    out["state"] = file["states"].get(id).cloned().unwrap_or(Value::Null);
+    out["hasRecords"] = json!(records_dir.is_dir());
+    Ok(out)
 }
 
 fn safe_name(name: &str) -> bool {
@@ -218,5 +371,6 @@ pub fn read_archive(root: &Path, name: &str) -> Result<Value> {
         "prd": read_text(dir.join("prd.md")),
         "rounds": rounds,
         "tasks": tasks_in(&dir.join("tasks.json")),
+        "taskStates": read_json(dir.join("tasks.json")).map(|v| v["states"].clone()).unwrap_or(Value::Null),
     }))
 }

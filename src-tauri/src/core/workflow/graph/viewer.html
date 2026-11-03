@@ -12,7 +12,12 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; }
   .app { display: flex; height: 100%; }
-  aside { width: 300px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  aside { width: var(--aside, 300px); flex: none; min-width: 0; overflow-x: hidden; overflow-y: auto; background: var(--panel); padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow-wrap: anywhere; }
+  /* 分隔線：看得到的是 1px 邊線，可以抓的範圍往畫布那邊多 8px（不蓋住側欄的捲軸）。 */
+  .splitter { flex: none; width: 9px; margin-right: -8px; position: relative; z-index: 1; cursor: col-resize; touch-action: none; background: linear-gradient(to right, var(--border) 1px, transparent 1px); }
+  .splitter:hover, .splitter.dragging, .splitter:focus-visible { background: linear-gradient(to right, var(--hl) 3px, transparent 3px); outline: none; }
+  body.resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+  body.resizing canvas { pointer-events: none; }
   main { position: relative; flex: 1; min-width: 0; min-height: 0; user-select: none; -webkit-user-select: none; }
   canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; outline: none; }
   canvas.dragging { cursor: grabbing; }
@@ -24,6 +29,8 @@
   .results li, .neighbors li { padding: 3px 4px; border-radius: 4px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .results li:hover, .neighbors li:hover { background: var(--border); }
   .legend li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .legend li > span:last-child { min-width: 0; }
+  #stats, h1 { min-width: 0; }
   .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .muted { color: var(--muted); }
   .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -37,7 +44,7 @@
   .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--hl); animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
-  @media (max-width: 700px) { .app { flex-direction: column; } aside { width: auto; max-height: 45%; border-right: none; border-bottom: 1px solid var(--border); } }
+  @media (max-width: 700px) { .app { flex-direction: column; } aside { width: auto; max-height: 45%; border-bottom: 1px solid var(--border); } .splitter { display: none; } }
 </style>
 </head>
 <body>
@@ -46,10 +53,6 @@
     <div>
       <h1 id="title">專案圖譜</h1>
       <div id="stats" class="muted"></div>
-    </div>
-    <div class="row">
-      <span class="muted">主題</span>
-      <button data-theme-set="light" type="button">淺色</button><button data-theme-set="dark" type="button">深色</button><button data-theme-set="system" type="button">跟隨系統</button>
     </div>
     <div>
       <h2>搜尋</h2>
@@ -67,6 +70,7 @@
       <ul id="legend" class="legend"></ul>
     </div>
   </aside>
+  <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="調整側欄寬度" tabindex="0"></div>
   <main>
     <canvas id="canvas" tabindex="0" aria-label="專案圖譜（方向鍵平移、+／- 縮放、0 重新置中）"></canvas>
     <div id="banner" class="banner" hidden></div>
@@ -96,14 +100,51 @@ $('#title').textContent = `專案圖譜 · ${DATA.project}`;
 $('#stats').textContent = `${DATA.stats.nodes} 個節點 · ${DATA.stats.edges} 條關係 · ${DATA.communities.length} 個分群 · 建立於 ${String(DATA.stats.built).replace('T', ' ').slice(0, 16)}`;
 if (DATA.aggregated) { const b = $('#banner'); b.hidden = false; b.textContent = `節點超過 ${DATA.limit} 個，只顯示檔案層級的關係；完整內容見 graph.json。`; }
 
-// 主題：淺色／深色／跟隨系統，記在瀏覽器裡。
-function setTheme(mode) {
-  if (mode === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = mode;
-  try { localStorage.setItem('graph-theme', mode); } catch {}
-  draw();
+// 主題與側欄寬度由 App 決定：App 用 postMessage 傳 { type: 'ai-workflow-graph', dark, aside }。
+// 沙箱 iframe 不能用 localStorage，所以拖好的寬度也用 postMessage 交給 App 記住。單獨開啟 graph.html 時跟隨系統主題。
+const ASIDE_MIN = 200;
+const asideMax = () => Math.max(ASIDE_MIN, Math.floor(document.documentElement.clientWidth * 0.6));
+let asideWidth = 300;
+function setAside(width, report) {
+  asideWidth = Math.round(Math.min(asideMax(), Math.max(ASIDE_MIN, width)));
+  document.documentElement.style.setProperty('--aside', asideWidth + 'px');
+  $('#splitter').setAttribute('aria-valuenow', String(asideWidth));
+  if (report && window.parent !== window) window.parent.postMessage({ type: 'ai-workflow-graph-aside', width: asideWidth }, '*');
 }
-for (const b of document.querySelectorAll('[data-theme-set]')) b.onclick = () => setTheme(b.dataset.themeSet);
-try { const saved = localStorage.getItem('graph-theme'); if (saved && saved !== 'system') document.documentElement.dataset.theme = saved; } catch {}
+window.addEventListener('message', e => {
+  if (e.source !== window.parent || !e.data || e.data.type !== 'ai-workflow-graph') return;
+  if (typeof e.data.dark === 'boolean') { document.documentElement.dataset.theme = e.data.dark ? 'dark' : 'light'; redraw(); }
+  if (typeof e.data.aside === 'number') setAside(e.data.aside, false);
+});
+{
+  const bar = $('#splitter');
+  $('#splitter').setAttribute('aria-valuemin', String(ASIDE_MIN));
+  let resize = null;
+  bar.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { bar.setPointerCapture(e.pointerId); } catch {}
+    resize = { id: e.pointerId, x: e.clientX, width: asideWidth };
+    bar.classList.add('dragging'); document.body.classList.add('resizing');
+  });
+  bar.addEventListener('pointermove', e => { if (resize && e.pointerId === resize.id) setAside(resize.width + e.clientX - resize.x, false); });
+  const end = e => {
+    if (!resize || e.pointerId !== resize.id) return;
+    resize = null;
+    bar.classList.remove('dragging'); document.body.classList.remove('resizing');
+    setAside(asideWidth, true);
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+  bar.addEventListener('lostpointercapture', end);
+  bar.addEventListener('dblclick', () => setAside(300, true));
+  bar.addEventListener('keydown', e => {
+    const delta = { ArrowLeft: -20, ArrowRight: 20 }[e.key];
+    if (delta) { e.preventDefault(); setAside(asideWidth + delta, true); }
+    else if (e.key === 'Home') { e.preventDefault(); setAside(ASIDE_MIN, true); }
+    else if (e.key === 'End') { e.preventDefault(); setAside(asideMax(), true); }
+  });
+}
 
 const color = n => PALETTE[n.community % PALETTE.length];
 const radius = n => 3 + 9 * n.degree / maxDegree;
@@ -272,7 +313,7 @@ $('#search').oninput = event => {
 // 平移用 pointer events＋pointer capture：拖曳時游標移出畫布、經過提示文字或滑出 iframe 都還收得到移動；
 // 重畫合併到每個 frame 一次，節點多時拖曳也跟得上。
 let drag = null, frame = 0;
-const redraw = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); };
+function redraw() { if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); }); }
 const point = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 function setHover(n) { if (n !== hover) { hover = n; canvas.title = n ? `${n.label}\n${n.file}${n.line ? ':L' + n.line : ''}` : ''; redraw(); } }
 canvas.addEventListener('pointerdown', e => {
@@ -340,6 +381,8 @@ let started = false;
 const kick = () => { if (!started) { started = true; setTimeout(start, 0); } };
 requestAnimationFrame(kick);
 setTimeout(kick, 120);
+setAside(asideWidth, false);
+if (window.parent !== window) window.parent.postMessage({ type: 'ai-workflow-graph-ready' }, '*');
 </script>
 </body>
 </html>

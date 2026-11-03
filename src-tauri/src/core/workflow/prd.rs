@@ -153,8 +153,15 @@ pub fn draft_prd(root: &Path, cfg: &Value, idea: &str, backlog_id: Option<&str>)
     let idea=if let Some(id)=backlog_id { confirmed=crate::core::requirements::prd_input(root,&crate::core::backlog::get_item(root,id)?)?; confirmed.as_str() } else { idea };
     guard(root)?;
     // 開始新功能前，把上一個功能最後的任務狀態寫進它的封存；之後 archive_dir 清空，核准時會建新的資料夾。
-    if let Err(err) = archive_tasks(root, json!({})) {
-        append_log(root, SCOPE, &format!("⚠ 封存上一個功能的任務清單失敗：{}", err.message));
+    // 任務的實作紀錄（log、審查、diff）也一起封存，封存成功才清掉，新功能的任務從空白開始。
+    match archive_tasks(root, json!({})) {
+        Ok(Some(_)) => crate::core::archive::release_task_records(root),
+        Ok(None) => {}
+        Err(err) => append_log(root, SCOPE, &format!("⚠ 封存上一個功能的任務清單失敗：{}（任務紀錄保留在原處）", err.message)),
+    }
+    // 上一個功能已完成時，新功能從頭開始：流程狀態不再是「已完成」。
+    if read_state(root)["pipeline"]["status"] == "complete" {
+        crate::core::runner::reset_pipeline(root)?;
     }
     let references=if let Some(id)=backlog_id { crate::core::references::ids(root,&crate::core::backlog::get_item(root,id)?["references"])? } else { vec![] };
     with_error_state(root, || {

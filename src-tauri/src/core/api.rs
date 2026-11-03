@@ -55,6 +55,7 @@ pub fn snapshot(root: &Path) -> Result<Value> {
     let cfg = load_config(root)?;
     // PRD 程序中途被結束時，狀態不會自己回來；在這裡發現並恢復，避免畫面一直停在「修訂中」。
     let _ = crate::core::prd::recover_interrupted(root);
+    let _ = crate::core::runner::recover_stale_complete(root);
     let state = read_state(root);
     let runner_alive = is_pid_alive_value(&state["runner"]["pid"]);
     let mut snap = json!({
@@ -92,29 +93,14 @@ fn prd_rounds(root: &Path, state: &Value) -> Vec<Value> {
 }
 
 fn task_detail(root: &Path, id: &str) -> Result<Value> {
-    let dir = data_dir(root).join("tasks").join(id);
-    // review-<n>.md，或雙人審查的 review-<n>-<claude|codex>.md
-    let mut reviews: Vec<(u64, String, String)> = fs::read_dir(&dir).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_else(|_| vec![])
-        .into_iter()
-        .filter_map(|f| {
-            let stem = f.strip_prefix("review-")?.strip_suffix(".md")?.to_string();
-            let (n, provider) = stem.split_once('-').map(|(n, p)| (n.to_string(), p.to_string())).unwrap_or((stem, String::new()));
-            Some((n.parse().ok()?, provider, f.clone()))
-        })
-        .collect();
-    reviews.sort();
-    let reviews: Vec<Value> = reviews.into_iter().map(|(n, provider, f)| json!({ "name": f, "round": n, "provider": provider, "text": read_text(dir.join(&f)) })).collect();
     let task = crate::core::tasks::find_task(root, id)?.ok_or_else(|| http(404, "找不到這個任務"))?;
-    Ok(json!({
-        "id": id, "revision": crate::core::tasks::revision(root)?, "tag": crate::core::tasks::current_tag(root)?,
-        "state": read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null),
-        "task": task,
-        "checks": read_text(dir.join("checks.txt")),
-        "diff": read_text(dir.join("diff.patch")),
-        "implement": read_text(dir.join("implement.md")),
-        "reviews": reviews,
-        "log": tail(&log_path(root, &format!("task-{id}")), 200_000)["text"],
-    }))
+    let mut out = crate::core::archive::task_records(&data_dir(root).join("tasks").join(id), &log_path(root, &format!("task-{id}")));
+    out["id"] = json!(id);
+    out["revision"] = json!(crate::core::tasks::revision(root)?);
+    out["tag"] = json!(crate::core::tasks::current_tag(root)?);
+    out["state"] = read_state(root)["tasks"].get(id).cloned().unwrap_or(Value::Null);
+    out["task"] = task;
+    Ok(out)
 }
 
 fn busy_guard(snap: &Value) -> Result<()> {
@@ -484,6 +470,10 @@ fn project_route(root: &Path, method: &str, rest: &str, body: &Value) -> Result<
         if let Some(id) = rest.strip_prefix("requirements/") { return crate::core::requirements::get(root, id); }
         if let Some(id) = rest.strip_prefix("chat/") { return crate::core::chat::get_chat(root, id); }
         if let Some(name) = rest.strip_prefix("archive/") {
+            // archive/<名稱>/task/<id>：封存裡某個任務的內容與實作紀錄
+            if let Some((name, id)) = name.split_once("/task/") {
+                return crate::core::archive::read_archived_task(root, &percent_decode(name), id);
+            }
             return read_archive(root, &percent_decode(name));
         }
         if let Some(id) = rest.strip_prefix("task/").filter(|id| is_task_id(id)) {

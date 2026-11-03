@@ -101,4 +101,34 @@ describe('紀錄', () => {
     await pick(within(tabs).getByRole('tab', { name: '任務' }));
     expect(screen.getByText('舊任務')).toBeInTheDocument();
   });
+  it('封存的任務可以展開：任務內容、log、審查意見與 diff；沒有保存紀錄的任務說明原因', async () => {
+    const name = '2026-10-20-舊功能';
+    const base = `/api/archive/${encodeURIComponent(name)}`;
+    const api = vi.fn(async (path: string) => {
+      if (path === '/api/archive') return { items: [{ name, feature: '舊功能' }], dir: '' };
+      if (path.startsWith('/api/log/')) return { text: '' };
+      if (path === base) return { name, path: 'C:\\old', meta: { feature: '舊功能' }, prd: '# 舊', rounds: [], tasks: [{ id: 1, title: '匯出按鈕', status: 'done' }, { id: 2, title: '欄位選擇', status: 'done' }], taskStates: { 1: { phase: 'done', step: '人工測試通過' } } };
+      if (path === `${base}/task/1`) return { id: '1', hasRecords: true, task: { id: 1, title: '匯出按鈕', status: 'done', description: '加一個匯出按鈕' }, state: { phase: 'done' }, implement: '完成匯出', checks: 'ok', diff: '', log: '[10:00:00] 實作 log 內容', reviews: [{ name: 'review-1.md', round: 1, provider: 'codex', text: '沒問題\n\nVERDICT: APPROVE' }] };
+      if (path === `${base}/task/2`) return { id: '2', hasRecords: false, task: { id: 2, title: '欄位選擇', status: 'done' }, state: null, implement: '', checks: '', diff: '', log: '', reviews: [] };
+      throw new Error(`unexpected ${path}`);
+    });
+    setup(api);
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('舊功能'));
+    await pick(await screen.findByRole('tab', { name: '任務' }));
+    expect(await screen.findByText('done：人工測試通過')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '展開任務 #1 的紀錄' }));
+    const detail = await screen.findByTestId('archived-task-1');
+    expect(within(detail).getByText('加一個匯出按鈕')).toBeInTheDocument();
+    expect(within(detail).getByText('完成匯出')).toBeInTheDocument();
+    expect(within(detail).getByRole('tab', { name: 'diff' })).toBeDisabled();
+    await pick(within(detail).getByRole('tab', { name: '審查意見（1）' }));
+    expect(await within(detail).findByText('沒問題')).toBeInTheDocument();
+    await pick(within(detail).getByRole('tab', { name: 'Log' }));
+    expect(await within(detail).findByText(/實作 log 內容/)).toBeInTheDocument();
+    // 換展開另一個任務：沒有保存紀錄時說明原因。
+    await user.click(screen.getByRole('button', { name: '展開任務 #2 的紀錄' }));
+    expect(screen.queryByTestId('archived-task-1')).not.toBeInTheDocument();
+    expect(await screen.findByText(/這個任務沒有保存實作紀錄/)).toBeInTheDocument();
+  });
 });

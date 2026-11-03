@@ -1,7 +1,7 @@
 // 紀錄：左側是目前功能與封存的歷史功能，右側以子分頁切換 Log（只有目前功能）、PRD、每輪紀錄、任務。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDefaultLayout } from 'react-resizable-panels';
-import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -16,6 +16,7 @@ import { LOG_SCOPE_LABELS, PRIORITY_TEXT, PROVIDER_LABEL, ROUND_KIND, TASK_STATU
 import { dateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useProject } from '@/stores/project';
+import { ArchivedTask } from '@/features/records/ArchivedTask';
 import type { ArchivePayload, ArchiveSummary, Snapshot, Task, TaskState } from '@/types/api';
 
 type RecordTab = 'log' | 'prd' | 'rounds' | 'tasks';
@@ -96,26 +97,51 @@ function RoundsView({ list }: { list: RoundView[] }) {
   );
 }
 
-function TasksView({ tasks, states = {} }: { tasks: Task[]; states?: Record<string, TaskState> }) {
+/** 任務清單。給 archive 時是封存的功能：點一列展開那個任務的內容與實作紀錄（log、審查、diff）。 */
+function TasksView({ tasks, states, archive }: { tasks: Task[]; states?: Record<string, TaskState> | null; archive?: string }) {
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => { setOpen(null); }, [archive]);
   if (!tasks.length) return <p className="text-muted-foreground">（沒有任務清單）</p>;
+  const toggle = (id: string) => setOpen((cur) => (cur === id ? null : id));
   return (
     <Table>
       <TableHeader>
-        <TableRow><TableHead>#</TableHead><TableHead>標題</TableHead><TableHead>優先</TableHead><TableHead>狀態</TableHead><TableHead>目前步驟</TableHead></TableRow>
+        <TableRow><TableHead>#</TableHead><TableHead>標題</TableHead><TableHead>優先</TableHead><TableHead>狀態</TableHead><TableHead>{archive ? '最後步驟' : '目前步驟'}</TableHead></TableRow>
       </TableHeader>
       <TableBody>
-        {tasks.map((t) => {
-          const ts = states[String(t.id)];
+        {tasks.flatMap((t) => {
+          const id = String(t.id);
+          const ts = states?.[id];
           const step = ts ? `${ts.phase || ''}${ts.step ? `：${ts.step}` : ''}` : '';
-          return (
-            <TableRow key={String(t.id)}>
-              <TableCell className="mono">#{String(t.id)}</TableCell>
+          const expanded = open === id;
+          const row = (
+            <TableRow
+              key={id}
+              className={cn(archive && 'cursor-pointer', expanded && 'bg-accent/60')}
+              onClick={archive ? () => toggle(id) : undefined}
+            >
+              <TableCell className="mono">
+                {archive ? (
+                  <button type="button" className="inline-flex items-center gap-1" aria-expanded={expanded} aria-label={`${expanded ? '收合' : '展開'}任務 #${id} 的紀錄`} onClick={(e) => { e.stopPropagation(); toggle(id); }}>
+                    <ChevronRight className={cn('size-3.5 transition-transform', expanded && 'rotate-90')} />#{id}
+                  </button>
+                ) : <>#{id}</>}
+              </TableCell>
               <TableCell>{t.title}</TableCell>
               <TableCell>{t.priority ? PRIORITY_TEXT[t.priority] || t.priority : ''}</TableCell>
               <TableCell><Chip tone={t.status === 'done' ? 'ok' : t.status === 'blocked' ? 'bad' : t.status === 'in-progress' || t.status === 'review' ? 'info' : 'neutral'}>{TASK_STATUS_TEXT[t.status || ''] || t.status || '待處理'}</Chip></TableCell>
               <TableCell className="text-muted-foreground">{step}</TableCell>
             </TableRow>
           );
+          if (!expanded || !archive) return [row];
+          return [row, (
+            <TableRow key={`${id}-detail`} className="hover:bg-transparent">
+              <TableCell colSpan={5} className="whitespace-normal bg-surface-2/40 p-3">
+                {/* contain:inline-size：寬度跟著表格，不被 diff 之類的寬內容撐開（內容自己捲動）。 */}
+                <div className="w-full [contain:inline-size]"><ArchivedTask archive={archive} id={id} tasks={tasks} /></div>
+              </TableCell>
+            </TableRow>
+          )];
         })}
       </TableBody>
     </Table>
@@ -252,7 +278,7 @@ export function RecordsPage() {
             ) : current ? (
               <TasksView tasks={snap.tasks} states={snap.state.tasks} />
             ) : (
-              <TasksView tasks={archive?.tasks || []} />
+              <TasksView tasks={archive?.tasks || []} states={archive?.taskStates} archive={archive?.name} />
             )}
           </div>
         </ResizablePanel>

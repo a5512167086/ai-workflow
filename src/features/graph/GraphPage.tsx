@@ -6,8 +6,35 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Page, PageHeader, Hint, Loading } from '@/components/app/Page';
 import { Markdown } from '@/components/app/Markdown';
 import { usageTime } from '@/lib/format';
+import { readStorage, writeStorage } from '@/lib/storage';
+import { useUi } from '@/stores/ui';
 import { useProject } from '@/stores/project';
 import type { GraphSummary } from '@/types/api';
+
+const ASIDE_KEY = 'ai-workflow.graph.aside';
+
+/**
+ * 互動圖在沙箱 iframe 裡（不能讀 App 的主題，也不能用 localStorage）：
+ * App 把主題與記住的側欄寬度用 postMessage 傳進去，互動圖拖好寬度後再傳回來記住。
+ */
+function useGraphFrame(frame: React.RefObject<HTMLIFrameElement | null>) {
+  const dark = useUi((s) => s.dark);
+  const send = useCallback(() => {
+    const aside = Number(readStorage(ASIDE_KEY)) || undefined;
+    frame.current?.contentWindow?.postMessage({ type: 'ai-workflow-graph', dark, aside }, '*');
+  }, [frame, dark]);
+  useEffect(() => { send(); }, [send]);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (!frame.current || e.source !== frame.current.contentWindow) return;
+      if (e.data?.type === 'ai-workflow-graph-ready') send();
+      if (e.data?.type === 'ai-workflow-graph-aside' && typeof e.data.width === 'number') writeStorage(ASIDE_KEY, String(Math.round(e.data.width)));
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [frame, send]);
+  return send;
+}
 
 export function GraphPage() {
   const api = useProject((s) => s.api);
@@ -19,6 +46,8 @@ export function GraphPage() {
   // 互動圖的 iframe 載完（約 1 MB 的頁面要解析）之前蓋一層讀取中；排版中的轉圈由互動圖自己顯示。
   const [frameReady, setFrameReady] = useState(false);
   const htmlRef = useRef('');
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const sendToFrame = useGraphFrame(frameRef);
 
   /** 讀取上次建立的圖譜；build 為 true 時先重新建立（只解析改過的檔案）。 */
   const load = useCallback(async (build = false) => {
@@ -61,7 +90,7 @@ export function GraphPage() {
         {!graph && busy && <Loading label="正在讀取專案圖譜…" className="min-h-[360px] rounded-lg border bg-card" />}
         {graph?.exists && (
           <div className="relative min-h-[360px] shrink-0 overflow-hidden rounded-lg border bg-card" style={{ height: '60vh' }}>
-            <iframe title="專案圖譜互動圖" sandbox="allow-scripts" srcDoc={html} onLoad={() => setFrameReady(true)} className="h-full w-full border-0 bg-background" />
+            <iframe title="專案圖譜互動圖" sandbox="allow-scripts" srcDoc={html} ref={frameRef} onLoad={() => { setFrameReady(true); sendToFrame(); }} className="h-full w-full border-0 bg-background" />
             {!frameReady && <Loading label="正在載入互動圖…" className="absolute inset-0 bg-card" />}
           </div>
         )}

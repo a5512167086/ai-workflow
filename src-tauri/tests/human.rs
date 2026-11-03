@@ -362,6 +362,8 @@ fn 防呆_已產生目前_prd_的需求只能排序_功能完成後不能再改�
     // 功能完成後：參考、重跑、開始都被擋下，原因說明已完成。
     update_state(&root, |s| s["pipeline"]["status"] = json!("complete")).unwrap();
     tasks::write_tasks(&root, &[json!({ "id": 1, "title": "done" })], Some("master"), json!({})).unwrap();
+    tasks::set_status(&root, "1", "review").unwrap();
+    tasks::set_status(&root, "1", "done").unwrap();
     for (path, body) in [
         ("references/assign", json!({ "target": "feature", "featureScope": "scope", "references": [] })),
         ("references/assign", json!({ "target": "group", "tag": "master", "references": [] })),
@@ -373,5 +375,41 @@ fn 防呆_已產生目前_prd_的需求只能排序_功能完成後不能再改�
         assert!(err.message.contains("已完成"), "{path}: {}", err.message);
     }
     assert!(get("state").unwrap()["guards"]["task.edit"].as_str().unwrap().contains("已完成"));
+    remove_project(&pid).unwrap();
+}
+
+#[test]
+fn 上一個功能的已完成不會留到新功能_真的完成的功能維持已完成() {
+    use ai_workflow::core::runner::recover_stale_complete;
+    let (root, _cfg) = fixture();
+    let p = add_project(&root, None).unwrap();
+    let pid = p["id"].as_str().unwrap().to_string();
+    let get = |path: &str| handle("GET", &format!("/api/p/{pid}/{path}"), &Value::Null);
+    let done = |status: &str| { tasks::write_tasks(&root, &[json!({ "id": 1, "title": "a" })], Some("master"), json!({})).unwrap(); if status == "done" { tasks::set_status(&root, "1", "review").unwrap(); } tasks::set_status(&root, "1", status).unwrap(); };
+
+    // 完成時記下的功能就是目前的功能：維持已完成。
+    done("done");
+    update_state(&root, |s| {
+        s["prd"]["status"] = json!("approved"); s["prd"]["archive_dir"] = json!("archive/a");
+        s["pipeline"] = json!({ "status": "complete", "reason": "功能已完成並通過人工測試", "feature": "archive/a" });
+    }).unwrap();
+    assert!(!recover_stale_complete(&root).unwrap());
+    assert_eq!(read_state(&root)["pipeline"]["status"], "complete");
+
+    // 新功能已核准、任務還沒做（舊版沒重設的情況）：讀取狀態時改回 idle，可以開始。
+    done("pending");
+    update_state(&root, |s| s["prd"]["archive_dir"] = json!("archive/b")).unwrap();
+    let snap = get("state").unwrap();
+    assert_eq!(snap["state"]["pipeline"]["status"], "idle");
+    assert!(snap["state"]["pipeline"]["feature"].is_null());
+    assert!(!snap["guards"]["run.start"].as_str().unwrap_or("").contains("已完成"));
+
+    // 舊資料沒有記功能：任務全部完成才算已完成；新功能還在寫 PRD 一定不是。
+    update_state(&root, |s| s["pipeline"] = json!({ "status": "complete" })).unwrap();
+    done("done");
+    assert!(!recover_stale_complete(&root).unwrap());
+    update_state(&root, |s| s["prd"]["status"] = json!("drafting")).unwrap();
+    assert!(recover_stale_complete(&root).unwrap());
+    assert_eq!(read_state(&root)["pipeline"]["status"], "idle");
     remove_project(&pid).unwrap();
 }
