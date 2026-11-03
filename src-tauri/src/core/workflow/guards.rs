@@ -50,7 +50,14 @@ pub fn project(snap: &Value) -> Value {
     out.insert("tasks.references".into(), first(&[busy.clone(), when(tasks.is_empty(), "拆任務前的參考資料請加在 PRD 或需求待辦"), complete.clone()]));
     out.insert("task.edit".into(), first(&[busy.clone(), no_tasks.clone(), complete.clone()]));
     out.insert("task.rerun".into(), first(&[busy.clone(), no_tasks.clone(), complete.clone()]));
-    out.insert("run.start".into(), first(&[busy.clone(), no_tasks, not_approved, complete, when(!approved_tasks, "請先檢視並核准任務")]));
+    // 等你測試時開始只會再停下來；任務全部完成就沒有東西可以跑。
+    let waiting = match state["pipeline"]["status"].as_str() {
+        Some("waiting") => Some("有任務等待人工測試，測完請按「我測完了，繼續」".to_string()),
+        Some("feature_test") => Some("所有任務都完成了，請做功能驗收後按「我測完了，繼續」".to_string()),
+        _ => None,
+    };
+    let all_done = when(!tasks.is_empty() && tasks.iter().all(|t| t["status"] == "done"), "所有任務都已完成，沒有可以開始的任務");
+    out.insert("run.start".into(), first(&[busy.clone(), no_tasks, not_approved, complete, when(!approved_tasks, "請先檢視並核准任務"), waiting, all_done]));
     out.insert("project.settings".into(), first(&[when(snap["runnerAlive"] == true, "流程執行中，暫停或結束後再修改驗證指令")]));
     // 需求釐清會議本身是唯讀對話，流程執行中也能進行；用確認過的需求開始寫 PRD 才要等流程結束。
     out.insert("backlog.draft".into(), first(&[busy]));
@@ -129,6 +136,15 @@ mod tests {
         let g = project(&snap("approved", "waiting", json!([{ "id": 1, "status": "review" }, { "id": 2, "status": "pending" }])));
         assert!(g["prd.edit"].as_str().unwrap().contains("已有任務開始執行"));
         assert!(g["tasks.generate"].as_str().unwrap().contains("丟掉"));
+        // 等待人工測試或任務全部完成：不能按開始。
+        let mut s = snap("approved", "waiting", json!([{ "id": 1, "status": "review" }]));
+        s["state"]["task_approval"] = json!({ "revision": "r1" });
+        assert!(project(&s)["run.start"].as_str().unwrap().contains("我測完了，繼續"));
+        s["state"]["pipeline"]["status"] = json!("idle");
+        s["tasks"] = json!([{ "id": 1, "status": "done" }]);
+        assert!(project(&s)["run.start"].as_str().unwrap().contains("所有任務都已完成"));
+        s["tasks"] = json!([{ "id": 1, "status": "done" }, { "id": 2, "status": "pending" }]);
+        assert!(project(&s)["run.start"].is_null());
         // 子任務開始也算。
         let g = project(&snap("approved", "idle", json!([{ "id": 1, "status": "pending", "subtasks": [{ "id": 1, "status": "done" }] }])));
         assert!(g["prd.revise"].is_string());

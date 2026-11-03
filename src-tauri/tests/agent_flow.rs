@@ -693,6 +693,16 @@ fn 審查分級_上一輪交接與人工接受目前結果() {
     assert_eq!(ts["review_verdict"], "ACCEPTED");
     assert!(ts["review_override"].is_null());
     assert!(!calls(&root)[before..].iter().any(|c| c["prompt"].as_str().unwrap().contains("你是程式碼審查者")));
+    // 測完按「我測完了，繼續」：跳過審查的任務也要能標成完成。
+    assert_eq!(read_tasks(&root).unwrap()[0]["status"], "review");
+    assert!(matches!(acknowledge(&root).unwrap(), Next::Run));
+    assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
+
+    // 舊版接受後狀態停在 in-progress 的任務，按繼續也能完成。
+    update_state(&root, |s| { s["tasks"]["1"]["phase"] = json!("awaiting_test"); }).unwrap();
+    ai_workflow::core::tasks::set_status(&root, "1", "in-progress").unwrap();
+    assert!(matches!(acknowledge(&root).unwrap(), Next::Run));
+    assert_eq!(read_tasks(&root).unwrap()[0]["status"], "done");
 }
 
 #[test]

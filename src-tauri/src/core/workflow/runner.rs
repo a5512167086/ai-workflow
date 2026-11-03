@@ -212,6 +212,8 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         if accepted {
             append_log(root, scope, "使用者接受目前結果：驗證通過，不再送審查");
             set_task(root, id, json!({ "review_verdict": "ACCEPTED", "review_verdicts": {} }))?;
+            // 跳過審查也要經過 review 狀態，之後「我測完了，繼續」才能標成完成。
+            tasks::set_status(root, id, "review")?;
             break;
         }
         set_task(root, id, json!({ "phase": "reviewing", "step": "程式碼審查中" }))?;
@@ -453,6 +455,10 @@ pub fn acknowledge(root: &Path) -> Result<Next> {
     let waiting: Vec<&Value> = all.iter().filter(|t| t["phase"] == "awaiting_test").collect();
     for t in &waiting {
         let id = js_string(&t["id"]);
+        // 等待測試的任務已經通過驗證與審查（或使用者接受）；舊版「接受目前結果」沒有把狀態推到 review，這裡補上。
+        if tasks::find_task(root, &id)?.is_some_and(|task| !["review", "done"].contains(&task["status"].as_str().unwrap_or(""))) {
+            tasks::set_status(root, &id, "review")?;
+        }
         tasks::set_status(root, &id, "done")?;
         set_task(root, &id, json!({ "phase": "done", "step": "人工測試通過" }))?;
         append_log(root, &format!("task-{id}"), "使用者確認測試通過");
