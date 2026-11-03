@@ -30,7 +30,7 @@ Monstrare UI reference
 https://github.com/pjwang2022/Monstrare
 Reference revision: a187710a3e3f3495003707d4f69eee873373df03
 
-The task board visual hierarchy, roadmap organization and review checklist inspired parts of aipipe's UI. The implementation uses aipipe's existing task engine, theme and desktop integration.
+The task board visual hierarchy, roadmap organization and review checklist inspired parts of ai-workflow's UI. The implementation uses ai-workflow's existing task engine, theme and desktop integration.
 
 MIT License
 

@@ -1,7 +1,7 @@
 {
   "name": "ai-workflow",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "用本機 Claude Code / Codex CLI 與共用 Skills 跑 PRD、內建任務管理、實作審查及人工驗收的桌面工作流工具",
   "engines": {

@@ -1,7 +1,9 @@
 [package]
 name = "ai-workflow-desktop"
-version = "0.5.0"
+version = "0.1.0"
 description = "ai-workflow 桌面版"
+license = "MIT"
+repository = "https://github.com/a5512167086/ai-workflow"
 edition = "2021"
 
 [lib]

@@ -1,0 +1,67 @@
+# 每次 push 到 main 與每個 PR：型別檢查、前端測試、clippy、Rust 測試。
+# 跑在 Windows：App 只出 Windows 安裝包，Rust 測試也用到 Windows 的程序管理（WSL 測試在沒有 WSL 的 runner 上會自動略過）。
+# 程式碼品質由 SonarCloud 的自動分析負責（設定在 .sonarcloud.properties），不在這裡跑。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # 部分 Rust 測試會在暫存專案裡 git commit。
+      - name: Configure git identity for tests
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.com"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Frontend tests
+        run: npm run test:ui
+
+      # Tauri 編譯時會把 dist/ 內嵌進執行檔，Rust 的 clippy 與測試都需要它先存在。
+      - name: Build web assets
+        run: npx vite build
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
