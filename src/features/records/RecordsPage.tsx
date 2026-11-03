@@ -17,7 +17,7 @@ import { dateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useProject } from '@/stores/project';
 import { ArchivedTask } from '@/features/records/ArchivedTask';
-import type { ArchivePayload, ArchiveSummary, Snapshot, Task, TaskState } from '@/types/api';
+import type { ArchivePayload, ArchiveSummary, PrdRound, Snapshot, Task, TaskState } from '@/types/api';
 
 type RecordTab = 'log' | 'prd' | 'rounds' | 'tasks';
 
@@ -36,6 +36,12 @@ export const scopeLabel = (scope: string) => LOG_SCOPE_LABELS[scope] || scope.re
 
 interface RoundView { key: string; title: string; verdict: string; text: string }
 
+/** 從檔名推回結論：approve／pass 算通過，revise／fail 算要修改。 */
+function verdictFromName(name: string) {
+  if (/approve|pass/i.test(name)) return 'APPROVE';
+  return /revise|fail/i.test(name) ? 'REVISE' : '';
+}
+
 /** 封存的每輪紀錄只有檔名：從檔名推回種類與結論。 */
 export function archiveRounds(rounds: { name: string; text: string }[]): RoundView[] {
   return rounds.map((r) => {
@@ -44,17 +50,44 @@ export function archiveRounds(rounds: { name: string; text: string }[]): RoundVi
     return {
       key: r.name,
       title: `${ROUND_KIND[kind] || kind}・${r.name.replace(/\.md$/, '')}`,
-      verdict: /approve|pass/i.test(r.name) ? 'APPROVE' : /revise|fail/i.test(r.name) ? 'REVISE' : '',
+      verdict: verdictFromName(r.name),
       text: r.text,
     };
   });
+}
+
+/** 目前功能的每輪紀錄：標題帶輪次、種類、AI、結論與版本。 */
+function currentRound(r: PrdRound): RoundView {
+  const parts = [`第 ${r.round} 輪`, ROUND_KIND[r.kind] || r.kind, PROVIDER_LABEL[r.provider] || r.provider];
+  if (r.verdict) parts.push(r.verdict);
+  if (r.version) parts.push(`v${r.version}`);
+  return { key: `${r.round}-${r.kind}-${r.version || ''}`, title: parts.join('・'), verdict: r.verdict || '', text: r.text || '' };
 }
 
 function currentTitle(snap: Snapshot) {
   return (snap.config.feature || snap.state.prd.idea || '目前功能').split('\n')[0];
 }
 
-function HistoryItem({ title, meta, active, onClick }: { title: string; meta: string; active: boolean; onClick: () => void }) {
+type ArchiveMeta = NonNullable<ArchivePayload['meta']>;
+
+/** 標題下方的摘要：目前功能看 PRD／流程狀態，封存功能看核准與完成時間。 */
+function currentMetaRows(snap: Snapshot, done: number): [string, string][] {
+  return [['PRD', snap.state.prd.status], ['流程', snap.state.pipeline.status], ['進度', snap.tasks.length ? `${done} / ${snap.tasks.length}` : '—']];
+}
+
+function archiveMetaRows(m: ArchiveMeta): [string, string][] {
+  return [['核准時間', dateTime(m.approved_at)], ['完成時間', dateTime(m.completed_at)], ['任務群組', m.tm_tag || '—'], ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—']];
+}
+
+/** 右側標題：目前功能、讀到的封存功能，或還在讀取時的資料夾名稱。 */
+function recordTitle(snap: Snapshot, selected: string | null, archive: ArchivePayload | null) {
+  if (selected === null) return currentTitle(snap);
+  if (!archive) return selected;
+  const m = archive.meta || {};
+  return (m.feature || m.idea || archive.name).split('\n')[0];
+}
+
+function HistoryItem({ title, meta, active, onClick }: Readonly<{ title: string; meta: string; active: boolean; onClick: () => void }>) {
   return (
     <li>
       <button
@@ -70,7 +103,7 @@ function HistoryItem({ title, meta, active, onClick }: { title: string; meta: st
   );
 }
 
-function MetaList({ rows }: { rows: [string, string][] }) {
+function MetaList({ rows }: Readonly<{ rows: [string, string][] }>) {
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
       {rows.map(([k, v]) => (
@@ -83,7 +116,7 @@ function MetaList({ rows }: { rows: [string, string][] }) {
   );
 }
 
-function RoundsView({ list }: { list: RoundView[] }) {
+function RoundsView({ list }: Readonly<{ list: RoundView[] }>) {
   if (!list.length) return <p className="text-muted-foreground">（沒有紀錄）</p>;
   return (
     <div className="flex flex-col gap-2">
@@ -97,8 +130,49 @@ function RoundsView({ list }: { list: RoundView[] }) {
   );
 }
 
+/** 「階段：步驟」；沒有狀態時是空字串。 */
+function stepText(ts: TaskState | undefined) {
+  if (!ts) return '';
+  return ts.step ? `${ts.phase || ''}：${ts.step}` : ts.phase || '';
+}
+
+function statusTone(status: Task['status']): 'ok' | 'bad' | 'info' | 'neutral' {
+  if (status === 'done') return 'ok';
+  if (status === 'blocked') return 'bad';
+  return status === 'in-progress' || status === 'review' ? 'info' : 'neutral';
+}
+
+/** 任務清單的一列；封存功能的列可以點開紀錄。 */
+function TaskRow({ task, state, archive, expanded, onToggle }: Readonly<{
+  task: Task;
+  state: TaskState | undefined;
+  archive?: string;
+  expanded: boolean;
+  onToggle: () => void;
+}>) {
+  const id = String(task.id);
+  return (
+    <TableRow
+      className={cn(archive && 'cursor-pointer', expanded && 'bg-accent/60')}
+      onClick={archive ? onToggle : undefined}
+    >
+      <TableCell className="mono">
+        {archive ? (
+          <button type="button" className="inline-flex items-center gap-1" aria-expanded={expanded} aria-label={`${expanded ? '收合' : '展開'}任務 #${id} 的紀錄`} onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+            <ChevronRight className={cn('size-3.5 transition-transform', expanded && 'rotate-90')} />#{id}
+          </button>
+        ) : <>#{id}</>}
+      </TableCell>
+      <TableCell>{task.title}</TableCell>
+      <TableCell>{task.priority ? PRIORITY_TEXT[task.priority] || task.priority : ''}</TableCell>
+      <TableCell><Chip tone={statusTone(task.status)}>{TASK_STATUS_TEXT[task.status || ''] || task.status || '待處理'}</Chip></TableCell>
+      <TableCell className="text-muted-foreground">{stepText(state)}</TableCell>
+    </TableRow>
+  );
+}
+
 /** 任務清單。給 archive 時是封存的功能：點一列展開那個任務的內容與實作紀錄（log、審查、diff）。 */
-function TasksView({ tasks, states, archive }: { tasks: Task[]; states?: Record<string, TaskState> | null; archive?: string }) {
+function TasksView({ tasks, states, archive }: Readonly<{ tasks: Task[]; states?: Record<string, TaskState> | null; archive?: string }>) {
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => { setOpen(null); }, [archive]);
   if (!tasks.length) return <p className="text-muted-foreground">（沒有任務清單）</p>;
@@ -111,28 +185,8 @@ function TasksView({ tasks, states, archive }: { tasks: Task[]; states?: Record<
       <TableBody>
         {tasks.flatMap((t) => {
           const id = String(t.id);
-          const ts = states?.[id];
-          const step = ts ? `${ts.phase || ''}${ts.step ? `：${ts.step}` : ''}` : '';
           const expanded = open === id;
-          const row = (
-            <TableRow
-              key={id}
-              className={cn(archive && 'cursor-pointer', expanded && 'bg-accent/60')}
-              onClick={archive ? () => toggle(id) : undefined}
-            >
-              <TableCell className="mono">
-                {archive ? (
-                  <button type="button" className="inline-flex items-center gap-1" aria-expanded={expanded} aria-label={`${expanded ? '收合' : '展開'}任務 #${id} 的紀錄`} onClick={(e) => { e.stopPropagation(); toggle(id); }}>
-                    <ChevronRight className={cn('size-3.5 transition-transform', expanded && 'rotate-90')} />#{id}
-                  </button>
-                ) : <>#{id}</>}
-              </TableCell>
-              <TableCell>{t.title}</TableCell>
-              <TableCell>{t.priority ? PRIORITY_TEXT[t.priority] || t.priority : ''}</TableCell>
-              <TableCell><Chip tone={t.status === 'done' ? 'ok' : t.status === 'blocked' ? 'bad' : t.status === 'in-progress' || t.status === 'review' ? 'info' : 'neutral'}>{TASK_STATUS_TEXT[t.status || ''] || t.status || '待處理'}</Chip></TableCell>
-              <TableCell className="text-muted-foreground">{step}</TableCell>
-            </TableRow>
-          );
+          const row = <TaskRow key={id} task={t} state={states?.[id]} archive={archive} expanded={expanded} onToggle={() => toggle(id)} />;
           if (!expanded || !archive) return [row];
           return [row, (
             <TableRow key={`${id}-detail`} className="hover:bg-transparent">
@@ -146,6 +200,76 @@ function TasksView({ tasks, states, archive }: { tasks: Task[]; states?: Record<
       </TableBody>
     </Table>
   );
+}
+
+/** 左側的功能清單：目前功能在最上面，接著是封存的歷史功能。 */
+function FeatureList({ snap, done, archives, archiveDir, selected, onCurrent, onArchive }: Readonly<{
+  snap: Snapshot;
+  done: number;
+  archives: ArchiveSummary[];
+  archiveDir: string;
+  selected: string | null;
+  onCurrent: () => void;
+  onArchive: (name: string) => void;
+}>) {
+  const currentDir = snap.state.prd.archive_dir || '';
+  const past = archives.filter((a) => !currentDir.endsWith(`/${a.name}`));
+  const progress = snap.tasks.length ? `${done}/${snap.tasks.length} 任務` : '尚未產生任務';
+  return (
+    <>
+      <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+        <h1 className="text-[15px] font-semibold">功能</h1>
+        <span className="mono truncate text-[11px] text-muted-foreground" title={archiveDir}>{archiveDir}</span>
+      </div>
+      <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto p-2" aria-label="功能紀錄">
+        <HistoryItem title={currentTitle(snap)} meta={`目前功能・${progress}`} active={selected === null} onClick={onCurrent} />
+        <li className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{past.length ? '歷史功能' : '還沒有歷史功能：核准 PRD 後會自動封存'}</li>
+        {past.map((a) => {
+          const t = (a.feature || a.idea || a.name).split('\n')[0];
+          const prog = a.progress?.total ? `${a.progress.done}/${a.progress.total} 任務` : '尚未產生任務';
+          const completed = a.completed_at ? '・已完成' : '';
+          return <HistoryItem key={a.name} title={t} meta={`${a.name.slice(0, 10)}・${prog}${completed}`} active={selected === a.name} onClick={() => onArchive(a.name)} />;
+        })}
+      </ul>
+    </>
+  );
+}
+
+/** Log 分頁的工具列：來源選單、全部展開／收合。 */
+function LogControls({ scope, scopes, onScope, onOpenAll }: Readonly<{ scope: string; scopes: string[]; onScope: (scope: string) => void; onOpenAll: (open: boolean) => void }>) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="text-xs text-muted-foreground" htmlFor="log-scope">來源</label>
+      <Select value={scope} onValueChange={onScope}>
+        <SelectTrigger id="log-scope" size="sm" className="min-w-36" aria-label="log 來源"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {scopes.map((s) => <SelectItem key={s} value={s}>{scopeLabel(s)}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Button variant="outline" size="sm" onClick={() => onOpenAll(true)}><ChevronsUpDown />全部展開</Button>
+      <Button variant="outline" size="sm" onClick={() => onOpenAll(false)}><ChevronsDownUp />全部收合</Button>
+      <Hint>捲到最底時會自動跟隨新輸出</Hint>
+    </div>
+  );
+}
+
+/** 子分頁的內容。archive 為 null 表示目前功能（只有目前功能有 Log）。 */
+function RecordContent({ tab, snap, archive, rounds, log }: Readonly<{
+  tab: RecordTab;
+  snap: Snapshot;
+  archive: ArchivePayload | null;
+  rounds: RoundView[];
+  log: { loading: boolean; text?: string; live?: string; openAll?: boolean };
+}>) {
+  const current = archive === null;
+  if (tab === 'log' && current) {
+    if (log.loading) return <Loading label="讀取 log…" />;
+    return <LogTree text={log.text || '（還沒有 log）'} live={log.live} openAll={log.openAll} className="h-full" />;
+  }
+  if (tab === 'prd') return <Markdown text={(current ? snap.prd : archive.prd) || '（還沒有 PRD）'} />;
+  if (tab === 'rounds') return <RoundsView list={rounds} />;
+  if (current) return <TasksView tasks={snap.tasks} states={snap.state.tasks} />;
+  return <TasksView tasks={archive.tasks || []} states={archive.taskStates} archive={archive.name} />;
 }
 
 export function RecordsPage() {
@@ -202,36 +326,17 @@ export function RecordsPage() {
 
   const current = selected === null;
   const currentDir = snap.state.prd.archive_dir || '';
-  const past = archives.filter((a) => !currentDir.endsWith(`/${a.name}`));
   const done = snap.tasks.filter((t) => t.status === 'done').length;
-  const progress = snap.tasks.length ? `${done}/${snap.tasks.length} 任務` : '尚未產生任務';
-  const m = archive?.meta || {};
-  const title = current ? currentTitle(snap) : archive ? (m.feature || m.idea || archive.name).split('\n')[0] : selected;
+  const title = recordTitle(snap, selected, archive);
   const path = current ? currentDir : archive?.path || '';
-  const metaRows: [string, string][] = current
-    ? [['PRD', snap.state.prd.status], ['流程', snap.state.pipeline.status], ['進度', snap.tasks.length ? `${done} / ${snap.tasks.length}` : '—']]
-    : [['核准時間', dateTime(m.approved_at)], ['完成時間', dateTime(m.completed_at)], ['任務群組', m.tm_tag || '—'], ['進度', m.progress?.total ? `${m.progress.done} / ${m.progress.total}` : '—']];
-  const roundList: RoundView[] = current
-    ? rounds.map((r) => ({ key: `${r.round}-${r.kind}-${r.version || ''}`, title: `第 ${r.round} 輪・${ROUND_KIND[r.kind] || r.kind}・${PROVIDER_LABEL[r.provider] || r.provider}${r.verdict ? `・${r.verdict}` : ''}${r.version ? `・v${r.version}` : ''}`, verdict: r.verdict || '', text: r.text || '' }))
-    : archiveRounds(archive?.rounds || []);
+  const metaRows = current ? currentMetaRows(snap, done) : archiveMetaRows(archive?.meta || {});
+  const roundList: RoundView[] = current ? rounds.map(currentRound) : archiveRounds(archive?.rounds || []);
 
   return (
     <Page>
       <ResizablePanelGroup orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged} className="min-h-0 flex-1">
         <ResizablePanel id="list" defaultSize="28" minSize={200} className="flex min-h-0 flex-col">
-          <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-            <h1 className="text-[15px] font-semibold">功能</h1>
-            <span className="mono truncate text-[11px] text-muted-foreground" title={archiveDir}>{archiveDir}</span>
-          </div>
-          <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto p-2" aria-label="功能紀錄">
-            <HistoryItem title={currentTitle(snap)} meta={`目前功能・${progress}`} active={current} onClick={openCurrent} />
-            <li className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{past.length ? '歷史功能' : '還沒有歷史功能：核准 PRD 後會自動封存'}</li>
-            {past.map((a) => {
-              const t = (a.feature || a.idea || a.name).split('\n')[0];
-              const prog = a.progress?.total ? `${a.progress.done}/${a.progress.total} 任務` : '尚未產生任務';
-              return <HistoryItem key={a.name} title={t} meta={`${a.name.slice(0, 10)}・${prog}${a.completed_at ? '・已完成' : ''}`} active={selected === a.name} onClick={() => openArchive(a.name)} />;
-            })}
-          </ul>
+          <FeatureList snap={snap} done={done} archives={archives} archiveDir={archiveDir} selected={selected} onCurrent={openCurrent} onArchive={(name) => void openArchive(name)} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel id="main" defaultSize="72" minSize={320} className="flex min-h-0 flex-col">
@@ -251,34 +356,13 @@ export function RecordsPage() {
                 <TabsTrigger value="tasks">任務</TabsTrigger>
               </TabsList>
             </Tabs>
-            {current && tab === 'log' && (
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-xs text-muted-foreground" htmlFor="log-scope">來源</label>
-                <Select value={scope} onValueChange={setScope}>
-                  <SelectTrigger id="log-scope" size="sm" className="min-w-36" aria-label="log 來源"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {scopes.map((s) => <SelectItem key={s} value={s}>{scopeLabel(s)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Button variant="outline" size="sm" onClick={() => setOpenAll(true)}><ChevronsUpDown />全部展開</Button>
-                <Button variant="outline" size="sm" onClick={() => setOpenAll(false)}><ChevronsDownUp />全部收合</Button>
-                <Hint>捲到最底時會自動跟隨新輸出</Hint>
-              </div>
-            )}
+            {current && tab === 'log' && <LogControls scope={scope} scopes={scopes} onScope={setScope} onOpenAll={setOpenAll} />}
           </div>
           <div className={cn('min-h-0 flex-1 overflow-auto', tab === 'log' ? 'p-2' : 'p-4')} role="tabpanel" tabIndex={0}>
             {!current && !archive ? (
               <Loading label="讀取封存…" />
-            ) : tab === 'log' && current ? (
-              loading ? <Loading label="讀取 log…" /> : <LogTree text={logs[scope] || '（還沒有 log）'} live={streams[scope]} openAll={openAll} className="h-full" />
-            ) : tab === 'prd' ? (
-              <Markdown text={(current ? snap.prd : archive?.prd) || '（還沒有 PRD）'} />
-            ) : tab === 'rounds' ? (
-              <RoundsView list={roundList} />
-            ) : current ? (
-              <TasksView tasks={snap.tasks} states={snap.state.tasks} />
             ) : (
-              <TasksView tasks={archive?.tasks || []} states={archive?.taskStates} archive={archive?.name} />
+              <RecordContent tab={tab} snap={snap} archive={current ? null : archive} rounds={roundList} log={{ loading, text: logs[scope], live: streams[scope], openAll }} />
             )}
           </div>
         </ResizablePanel>

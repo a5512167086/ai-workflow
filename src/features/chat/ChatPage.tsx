@@ -26,7 +26,7 @@ import { useProject, useProjectApi, useSnapshot } from '@/stores/project';
 import { useModels } from '@/stores/models';
 import { useReferences } from '@/stores/references';
 import { useBadges } from '@/stores/badges';
-import type { ChatSession, ChatSummary, Provider } from '@/types/api';
+import type { ChatSession, ChatSummary, ModelOptions, Provider, Snapshot } from '@/types/api';
 
 const SUGGESTIONS = ['目前專案執行到哪裡？有什麼需要我處理？', '請閱讀程式碼，畫一張 Mermaid 專案架構圖。', '解釋目前的資料流與主要模組。', '目前有哪些風險、卡點或可以改善的地方？'];
 const chatActive = (session?: { status?: string } | null) => !!session && ['pending', 'running'].includes(session.status || '');
@@ -42,7 +42,7 @@ async function copyText(text: string, ok: string) {
 }
 
 /** 一則訊息的執行紀錄（工具活動）：第一次讀完整檔案，之後跟著串流更新。 */
-function TurnActivity({ turn, running, since }: { turn: string; running: boolean; since: string | null }) {
+function TurnActivity({ turn, running, since }: Readonly<{ turn: string; running: boolean; since: string | null }>) {
   const scope = `chat-${turn}`;
   const text = useProject((s) => s.logs[scope]);
   useEffect(() => { useProject.getState().loadLog(scope).catch(() => {}); }, [scope]);
@@ -54,8 +54,8 @@ function TurnActivity({ turn, running, since }: { turn: string; running: boolean
   );
 }
 
-function MessageList({ session, onSuggest }: { session: ChatSession | null; onSuggest: (text: string) => void }) {
-  const host = useRef<HTMLDivElement>(null);
+function MessageList({ session, onSuggest }: Readonly<{ session: ChatSession | null; onSuggest: (text: string) => void }>) {
+  const host = useRef<HTMLElement>(null);
   const atBottom = useRef(true);
   const key = `${session?.id || ''}|${session?.messages?.map((m) => m.id).join(',') || ''}|${session?.status || ''}|${session?.turn || ''}`;
   // 重畫前記下是否在最底；是的話重畫後跟隨到最底（和舊版一樣）。
@@ -75,7 +75,7 @@ function MessageList({ session, onSuggest }: { session: ChatSession | null; onSu
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [typing]);
   return (
-    <div ref={host} onScroll={onScroll} role="region" aria-label="對話訊息" className="min-h-0 flex-1 overflow-auto px-4 py-3">
+    <section ref={host} onScroll={onScroll} aria-label="對話訊息" className="min-h-0 flex-1 overflow-auto px-4 py-3">
       {!session?.messages?.length && (
         <div className="mx-auto flex max-w-xl flex-col items-center gap-2 py-10 text-center">
           <Eyebrow>問問題、理解程式、釐清下一步</Eyebrow>
@@ -112,7 +112,111 @@ function MessageList({ session, onSuggest }: { session: ChatSession | null; onSu
         )}
         {session?.turn && <TurnActivity turn={session.turn} running={running} since={lastUserAt(session)} />}
       </div>
-    </div>
+    </section>
+  );
+}
+
+/** 對話角色的預設模型與推理強度：專案對話角色設定 → 該 AI 的設定 → CLI 回報的預設。 */
+function chatDefaults(snap: Snapshot, provider: Provider, options: ModelOptions | null) {
+  const role = snap.config.models?.chat?.[provider];
+  const configured = snap.config[provider];
+  const cli = options?.[provider];
+  const cliDefault = cli?.models?.find((m) => m.default);
+  return {
+    placeholder: role?.model || configured?.model || '沿用對話角色預設',
+    model: role?.model || configured?.model || cli?.defaultModel || cliDefault?.id,
+    effort: role?.effort || configured?.effort || cli?.defaultEffort || cliDefault?.defaultEffort,
+  };
+}
+
+/** 輸入區上方的背景說明：帶入哪些內容、長對話是否只帶最近幾則。 */
+function contextText(pipeline: string, session: ChatSession | null) {
+  const parts = [`帶入最新流程、任務、PRD 與交接文件 · 目前：${pipeline}`];
+  if (session?.contextTruncated) parts.push(`最近 ${session.contextMessages} 則帶入模型，完整紀錄仍保留`);
+  if (session?.contextReferencesTruncated) parts.push('參考資料帶入最近 24 份，較早的附件仍保留');
+  return parts.join(' · ');
+}
+
+/** 訊息下方的狀態說明：錯誤優先，其次是回覆中與可以做什麼。 */
+function chatStatusText(status: string | null, session: ChatSession | null, active: boolean, anyActive: boolean) {
+  if (status) return status;
+  if (session?.error) return `${CHAT_STATUS[session.status] || ''}：${session.error}`;
+  if (active) return 'AI 正在讀取與分析專案，展開執行紀錄可查看工具活動。';
+  if (anyActive) return '另一個對話正在回覆；完成或停止後即可傳送。';
+  return session ? '可直接追問，也可切換 AI 接續同一份對話紀錄。' : '不需要先產生 PRD，就可以討論專案。';
+}
+
+/** 左側的對話紀錄清單；右鍵可改名或刪除。 */
+function ChatHistory({ items, chatId, onNew, onOpen, onRename, onRemove }: Readonly<{
+  items: ChatSummary[];
+  chatId: string | null;
+  onNew: () => void;
+  onOpen: (id: string) => Promise<void>;
+  onRename: () => Promise<void>;
+  onRemove: (id: string, title?: string) => Promise<void>;
+}>) {
+  return (
+    <>
+      <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
+        <h2 className="text-[13px] font-semibold">對話紀錄</h2>
+        <Button type="button" size="sm" variant="outline" onClick={onNew}><Plus />新增對話</Button>
+      </div>
+      <ul className="min-h-0 flex-1 overflow-auto p-1.5" aria-label="專案對話紀錄">
+        {!items.length && <li className="px-2 py-3 text-xs text-muted-foreground">還沒有對話。從右邊問一個問題開始。</li>}
+        {items.map((c) => (
+          <li key={c.id}>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-current={c.id === chatId ? 'true' : 'false'}
+                  onClick={() => onOpen(c.id)}
+                  className={cn('flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:outline-2', c.id === chatId && 'bg-accent font-medium')}
+                >
+                  <span className="w-full truncate text-[13px]">{c.title || '未命名對話'}</span>
+                  <span className="text-[11px] text-muted-foreground">{CHAT_STATUS[c.status] || c.status} · {c.updated_at ? shortDate(c.updated_at) : '檔案需要檢查'}</span>
+                </button>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem onSelect={async () => { if (c.id !== chatId) { await onOpen(c.id); } void onRename(); }}><Pencil />改名</ContextMenuItem>
+                <ContextMenuItem variant="destructive" disabled={chatActive(c)} onSelect={() => onRemove(c.id, c.title)}><Trash2 />刪除</ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          </li>
+        ))}
+      </ul>
+      <Hint className="border-t px-3 py-2">對話保存在本專案，重新開啟仍可接續。</Hint>
+    </>
+  );
+}
+
+/** 模型與推理強度的進階設定（預設收合）。 */
+function ModelSettings({ provider, model, effort, onModel, onEffort, effortList, defaults }: Readonly<{
+  provider: Provider;
+  model: string;
+  effort: string;
+  onModel: (model: string) => void;
+  onEffort: (effort: string) => void;
+  effortList: string[];
+  defaults: ReturnType<typeof chatDefaults>;
+}>) {
+  const summary = model || effort ? `：${model || '預設'} / ${effort || '預設'}` : '';
+  return (
+    <Collapsible>
+      <CollapsibleTrigger asChild><Button type="button" variant="ghost" size="sm">模型與推理設定{summary}</Button></CollapsibleTrigger>
+      <CollapsibleContent className="mt-2 flex w-full flex-wrap items-end gap-3 rounded-md border bg-surface-2/60 p-3">
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">模型
+          <ModelPicker provider={provider} value={model} onChange={onModel} placeholder={defaults.placeholder} aria-label="模型" className="w-64" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          推理強度<select aria-label="推理強度" className="h-8 rounded-md border border-input bg-transparent px-2 text-[13px] text-foreground" value={effort} onChange={(e) => onEffort(e.target.value)}>
+            <option value="">預設</option>
+            {effortList.map((e) => <option key={e} value={e}>{e}</option>)}
+          </select>
+        </label>
+        <Hint className="basis-full">空白沿用首頁「專案對話」角色設定。預設模型：{defaults.model || 'CLI 依帳號決定（未回報）'}；推理強度：{defaults.effort || 'CLI 依模型決定（未回報）'}。</Hint>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -246,53 +350,19 @@ export function ChatPage() {
     } catch (error) { toast.error((error as Error).message); }
   };
 
-  const defaults = snap.config.models?.chat?.[provider];
-  const defaultModel = defaults?.model || snap.config[provider]?.model || modelOptions?.[provider]?.defaultModel || modelOptions?.[provider]?.models?.find((m) => m.default)?.id;
-  const defaultEffort = defaults?.effort || snap.config[provider]?.effort || modelOptions?.[provider]?.defaultEffort || modelOptions?.[provider]?.models?.find((m) => m.default)?.defaultEffort;
+  const defaults = chatDefaults(snap, provider, modelOptions);
   const effortOptions = efforts(provider, model);
   const effortList = effort && !effortOptions.includes(effort) ? [...effortOptions, effort] : effortOptions;
   const pipeline = STATUS_TEXT[snap.state.pipeline.status] || snap.state.pipeline.status;
-  const context = `帶入最新流程、任務、PRD 與交接文件 · 目前：${pipeline}${session?.contextTruncated ? ` · 最近 ${session.contextMessages} 則帶入模型，完整紀錄仍保留` : ''}${session?.contextReferencesTruncated ? ' · 參考資料帶入最近 24 份，較早的附件仍保留' : ''}`;
-  const statusText = status ? status
-    : session?.error ? `${CHAT_STATUS[session.status] || ''}：${session.error}`
-    : active ? 'AI 正在讀取與分析專案，展開執行紀錄可查看工具活動。'
-    : anyActive ? '另一個對話正在回覆；完成或停止後即可傳送。'
-    : session ? '可直接追問，也可切換 AI 接續同一份對話紀錄。' : '不需要先產生 PRD，就可以討論專案。';
+  const context = contextText(pipeline, session);
+  const statusText = chatStatusText(status, session, active, anyActive);
   const canRetry = !!session && ['error', 'cancelled'].includes(session.status) && session.messages?.at(-1)?.role === 'user';
 
   return (
     <Page>
       <ResizablePanelGroup orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged} className="min-h-0 flex-1">
         <ResizablePanel id="chat-history" defaultSize="22" minSize={180} className="flex min-h-0 flex-col bg-sidebar/40">
-          <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-            <h2 className="text-[13px] font-semibold">對話紀錄</h2>
-            <Button type="button" size="sm" variant="outline" onClick={newChat}><Plus />新增對話</Button>
-          </div>
-          <ul className="min-h-0 flex-1 overflow-auto p-1.5" aria-label="專案對話紀錄">
-            {!items.length && <li className="px-2 py-3 text-xs text-muted-foreground">還沒有對話。從右邊問一個問題開始。</li>}
-            {items.map((c) => (
-              <li key={c.id}>
-                <ContextMenu>
-                  <ContextMenuTrigger asChild>
-                    <button
-                      type="button"
-                      aria-current={c.id === chatId ? 'true' : 'false'}
-                      onClick={() => openChat(c.id)}
-                      className={cn('flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:outline-2', c.id === chatId && 'bg-accent font-medium')}
-                    >
-                      <span className="w-full truncate text-[13px]">{c.title || '未命名對話'}</span>
-                      <span className="text-[11px] text-muted-foreground">{CHAT_STATUS[c.status] || c.status} · {c.updated_at ? shortDate(c.updated_at) : '檔案需要檢查'}</span>
-                    </button>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent>
-                    <ContextMenuItem onSelect={async () => { if (c.id !== chatId) await openChat(c.id); void rename(); }}><Pencil />改名</ContextMenuItem>
-                    <ContextMenuItem variant="destructive" disabled={chatActive(c)} onSelect={() => remove(c.id, c.title)}><Trash2 />刪除</ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              </li>
-            ))}
-          </ul>
-          <Hint className="border-t px-3 py-2">對話保存在本專案，重新開啟仍可接續。</Hint>
+          <ChatHistory items={items} chatId={chatId} onNew={newChat} onOpen={openChat} onRename={rename} onRemove={(id, title) => remove(id, title)} />
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel id="chat-main" minSize={360} className="flex min-h-0 flex-col">
@@ -304,11 +374,11 @@ export function ChatPage() {
             <Button type="button" variant="outline" size="sm" disabled={!chatId} onClick={rename}><Pencil />改名</Button>
             <Button type="button" variant="outline" size="sm" disabled={!chatId || active} onClick={() => remove()}><Trash2 />刪除</Button>
           </div>
-          <p role="status" className="shrink-0 truncate border-b bg-surface-2/60 px-4 py-1 text-[11px] text-muted-foreground" title={context}>{context}</p>
+          <output className="block shrink-0 truncate border-b bg-surface-2/60 px-4 py-1 text-[11px] text-muted-foreground" title={context}>{context}</output>
           {session === null && chatId !== null ? <Loading label="載入對話…" /> : <MessageList session={session} onSuggest={(q) => { setInput(q); inputRef.current?.focus(); }} />}
-          <p role="status" className="shrink-0 px-4 pt-2 text-xs text-muted-foreground">
+          <output className="block shrink-0 px-4 pt-2 text-xs text-muted-foreground">
             <LiveSince label={statusText} since={active && !status && !session?.error ? lastUserAt(session) : null} />
-          </p>
+          </output>
           <form data-reference-drop="chat" className="shrink-0 border-t px-4 py-3" onSubmit={(e) => { e.preventDefault(); void send(); }}>
             <div className="mb-2 flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-xs text-muted-foreground">AI
@@ -320,21 +390,7 @@ export function ChatPage() {
                   </SelectContent>
                 </Select>
               </label>
-              <Collapsible>
-                <CollapsibleTrigger asChild><Button type="button" variant="ghost" size="sm">模型與推理設定{(model || effort) ? `：${model || '預設'} / ${effort || '預設'}` : ''}</Button></CollapsibleTrigger>
-                <CollapsibleContent className="mt-2 flex w-full flex-wrap items-end gap-3 rounded-md border bg-surface-2/60 p-3">
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">模型
-                    <ModelPicker provider={provider} value={model} onChange={setModel} placeholder={defaults?.model || snap.config[provider]?.model || '沿用對話角色預設'} aria-label="模型" className="w-64" />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">推理強度
-                    <select aria-label="推理強度" className="h-8 rounded-md border border-input bg-transparent px-2 text-[13px] text-foreground" value={effort} onChange={(e) => setEffort(e.target.value)}>
-                      <option value="">預設</option>
-                      {effortList.map((e) => <option key={e} value={e}>{e}</option>)}
-                    </select>
-                  </label>
-                  <Hint className="basis-full">空白沿用首頁「專案對話」角色設定。預設模型：{defaultModel || 'CLI 依帳號決定（未回報）'}；推理強度：{defaultEffort || 'CLI 依模型決定（未回報）'}。</Hint>
-                </CollapsibleContent>
-              </Collapsible>
+              <ModelSettings provider={provider} model={model} effort={effort} onModel={setModel} onEffort={setEffort} effortList={effortList} defaults={defaults} />
             </div>
             <div className="mb-2"><ReferenceWidget options={refOptions} /></div>
             <label className="sr-only" htmlFor="chat-input">詢問專案</label>

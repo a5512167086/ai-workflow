@@ -1,7 +1,7 @@
 // Grill Me · 需求釐清會議（移植自 legacy-src/human.js 的 openInterview）。
 // 左側是對話與回答區，右側在關鍵問題釐清後出現需求摘要：先確認（可編輯），再「開始寫 PRD」。
 // 用法：在畫面裡掛 <InterviewHost />，任何地方呼叫 openInterview(id)。
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ import { useProject } from '@/stores/project';
 import { readJson, writeJson } from '@/lib/storage';
 import { errorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { ChatSession, Provider, RequirementsPayload } from '@/types/api';
+import type { ChatMessage, ChatSession, Provider, RequirementsPayload } from '@/types/api';
 
 const chatActive = (session?: ChatSession | null) => !!session && ['pending', 'running'].includes(session.status);
 /** 關閉再打開時保留還沒送出的回答（依需求分開）。 */
@@ -30,7 +30,7 @@ const interviewDrafts = new Map<string, string>();
 // ---------- 命令式開啟 ----------
 const openers = new Set<(id: string) => void>();
 /** 需求釐清 AI 正在打的回覆：回覆是 JSON（message、ready、summary…），只把 message 的部分逐字顯示。 */
-function InterviewTyping({ turn }: { turn: string }) {
+function InterviewTyping({ turn }: Readonly<{ turn: string }>) {
   const raw = useProject((s) => s.streams[`chat-${turn}`] || '');
   const message = partialJsonString(raw, 'message');
   if (!raw) return null;
@@ -60,28 +60,48 @@ export function InterviewHost() {
 
 const LAYOUT_KEY = 'ai-workflow.interview.layout';
 
-export function InterviewDialog({ id, onClose }: { id: string; onClose: () => void }) {
+type SummaryView = 'preview' | 'edit';
+
+/** 對話區下方的狀態說明：依優先順序挑一句。 */
+function interviewStatusText(statusError: string | null, data: RequirementsPayload | null, busy: boolean): string {
+  const session = data?.session;
+  if (statusError) return statusError;
+  if (data?.stale) return '需求或附件已修改，請重新釐清。舊對話仍保留。';
+  if (session?.error) return session.error;
+  if (busy) return 'AI 正在查閱資料與整理問題…';
+  if (data?.confirmed) return '你已確認需求，可開始寫 PRD。';
+  if (session?.requirementsReady) return '關鍵問題已釐清，請檢閱、修正並確認右側摘要。';
+  return '請回答本輪問題；AI 會依回答繼續追問。';
+}
+
+/** 摘要上方的提示：錯誤訊息優先，其次是確認狀態。 */
+function summaryNoteText(note: string | null, confirmed: boolean, edited: boolean): string {
+  if (note) return note;
+  if (confirmed) return '你已確認這份摘要。可以開始寫 PRD，或改成「編輯」再修改後重新確認。';
+  if (edited) return '摘要已修改，請重新確認。';
+  return '請檢視 AI 整理的需求範圍、限制與驗收條件；可切到「編輯」直接修改，確認後才能開始寫 PRD。';
+}
+
+function confirmButtonText(edited: boolean, confirmed: boolean) {
+  if (edited) return '重新確認摘要';
+  return confirmed ? '已確認' : '確認需求摘要';
+}
+
+/** 「開始寫 PRD」不能按的原因；空字串表示可以按。 */
+function draftGuardText(pending: boolean, confirmed: boolean, guard: string) {
+  if (pending) return '處理中…';
+  if (!confirmed) return '請先確認需求摘要';
+  return guard;
+}
+
+/** 讀取目前會議；還沒有會議就用需求內容啟動第一輪；AI 回覆中每 1.2 秒更新。 */
+function useInterviewSession(id: string, provider: Provider) {
   const api = useProject((s) => s.api);
-  const snap = useProject((s) => s.snap);
   const [data, setData] = useState<RequirementsPayload | null>(null);
   const [pending, setPending] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [input, setInput] = useState(() => interviewDrafts.get(id) || '');
-  const [provider, setProvider] = useState<Provider>(() => (snap?.config?.roles?.interviewer || snap?.config?.roles?.author || 'claude') as Provider);
-  const [summary, setSummary] = useState('');
-  const [summaryView, setSummaryView] = useState<'preview' | 'edit'>('preview');
-  useEffect(() => { if (summaryView === 'edit') summaryRef.current?.focus(); }, [summaryView]);
-  const [summaryNote, setSummaryNote] = useState<string | null>(null);
-  const summaryTurn = useRef<string | undefined>(undefined);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const summaryRef = useRef<HTMLTextAreaElement>(null);
-  const messagesRef = useRef<HTMLDivElement>(null);
   const closed = useRef(false);
-  useSkillCommandInput(inputRef);
-
-  const session = data?.session ?? null;
-  const active = chatActive(session);
-  const guard = (name: string) => snap?.guards?.[name] || '';
+  const active = chatActive(data?.session ?? null);
 
   const load = useCallback(async () => {
     try {
@@ -94,39 +114,20 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
     }
   }, [api, id]);
 
-  const send = useCallback(async (opts: { restart?: boolean; retry?: boolean; initial?: boolean } = {}) => {
-    const { restart = false, retry = false, initial = false } = opts;
-    if (pending || (!restart && !retry && !initial && !input.trim())) return;
-    if (restart && !(await confirmDialog({ title: '重新開始需求釐清？', description: '舊會議會保留，這項需求改用新的會議。', confirmText: '重新釐清' }))) return;
-    setPending(true);
-    const answer = input;
-    try {
-      const next = await api<RequirementsPayload>('/api/backlog/interview', { id, input: initial || restart ? '' : answer, provider, restart, retry });
-      if (closed.current) return;
-      setData(next); setStatusError(null);
-      if (!initial && !restart) { setInput(''); interviewDrafts.set(id, ''); }
-    } catch (err) {
-      if (!closed.current) setStatusError(errorMessage(err));
-    } finally {
-      if (!closed.current) setPending(false);
-    }
-  }, [api, id, input, pending, provider]);
-
   // 開啟：讀目前會議；還沒有會議就用需求內容啟動第一輪。
   useEffect(() => {
     closed.current = false;
     void (async () => {
       const first = await load();
-      if (first && !first.session && !closed.current) {
-        setPending(true);
-        try {
-          const next = await api<RequirementsPayload>('/api/backlog/interview', { id, input: '', provider, restart: false, retry: false });
-          if (!closed.current) { setData(next); setStatusError(null); }
-        } catch (err) {
-          if (!closed.current) setStatusError(errorMessage(err));
-        } finally {
-          if (!closed.current) setPending(false);
-        }
+      if (!first || first.session || closed.current) return;
+      setPending(true);
+      try {
+        const next = await api<RequirementsPayload>('/api/backlog/interview', { id, input: '', provider, restart: false, retry: false });
+        if (!closed.current) { setData(next); setStatusError(null); }
+      } catch (err) {
+        if (!closed.current) setStatusError(errorMessage(err));
+      } finally {
+        if (!closed.current) setPending(false);
       }
     })();
     return () => { closed.current = true; };
@@ -139,6 +140,180 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
     const t = setTimeout(load, 1200);
     return () => clearTimeout(t);
   }, [active, data, load]);
+
+  return { api, data, setData, pending, setPending, statusError, setStatusError, closed, load, active };
+}
+
+/** 會議的對話紀錄；AI 回覆中時在最後顯示正在打的內容。 */
+function InterviewMessages({ messages, loading, typingTurn, hostRef }: Readonly<{
+  messages: ChatMessage[];
+  loading: boolean;
+  typingTurn?: string;
+  hostRef: RefObject<HTMLDivElement | null>;
+}>) {
+  return (
+    <div ref={hostRef} className="min-h-0 flex-1 space-y-3 overflow-auto rounded-md border bg-card p-3" role="log" aria-live="polite" data-testid="interview-conversation">
+      {messages.map((message, i) => {
+        const user = message.role === 'user';
+        return (
+          <article key={message.id || i} className={cn('rounded-md px-3 py-2', user ? 'ml-8 bg-surface-2' : 'mr-8 border bg-background')}>
+            <b className="mb-1 block text-xs text-muted-foreground">{user ? '你' : '需求釐清 AI'}</b>
+            {user ? <div className="selectable whitespace-pre-wrap">{message.text}</div> : <Markdown text={message.text} />}
+          </article>
+        );
+      })}
+      {loading && <Loading label="讀取會議…" />}
+      {typingTurn && <InterviewTyping turn={typingTurn} />}
+    </div>
+  );
+}
+
+/** 右側的需求摘要：預覽／編輯、確認摘要、開始寫 PRD。 */
+function SummaryPanel({ summary, onSummaryChange, view, onViewChange, textareaRef, note, noteError, confirmed, edited, pending, showDraft, draftGuard, onConfirm, onDraft }: Readonly<{
+  summary: string;
+  onSummaryChange: (text: string) => void;
+  view: SummaryView;
+  onViewChange: (view: SummaryView) => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  note: string;
+  noteError: boolean;
+  confirmed: boolean;
+  edited: boolean;
+  pending: boolean;
+  showDraft: boolean;
+  draftGuard: string;
+  onConfirm: () => void;
+  onDraft: () => void;
+}>) {
+  return (
+    <aside className="flex h-full min-h-0 flex-col gap-2 pl-2" aria-label="需求摘要" data-testid="interview-summary">
+      <div className="flex shrink-0 items-center justify-between gap-2">
+        <h3 className="text-[13px] font-semibold">需求摘要</h3>
+        <ToggleGroup type="single" variant="outline" size="sm" value={view} onValueChange={(v) => { if (v) onViewChange(v as SummaryView); }} aria-label="摘要顯示方式">
+          <ToggleGroupItem value="preview" aria-label="預覽">預覽</ToggleGroupItem>
+          <ToggleGroupItem value="edit" aria-label="編輯">編輯</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <Hint role="status" className={cn(noteError && 'text-danger')}>{note}</Hint>
+      <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card p-3">
+        {view === 'edit'
+          ? <Textarea ref={textareaRef} className="mono h-full min-h-full resize-none" aria-label="需求摘要 Markdown" spellCheck={false} value={summary} onChange={(e) => onSummaryChange(e.target.value)} />
+          : <Markdown text={summary} />}
+      </div>
+      <div className="flex shrink-0 justify-end gap-2">
+        <Button variant={confirmed ? 'outline' : 'default'} disabled={pending || confirmed || !summary.trim()} onClick={onConfirm}>
+          {confirmButtonText(edited, confirmed)}
+        </Button>
+        {showDraft && <GuardButton guard={draftGuard} onClick={onDraft}>開始寫 PRD</GuardButton>}
+      </div>
+    </aside>
+  );
+}
+
+/** 回答輸入框與送出、重試、重新釐清等按鈕。 */
+function AnswerBox({ inputRef, input, onInput, onSubmit, provider, onProvider, busy, stale, canRetry, primary, onStop, onRetry, onRestart }: Readonly<{
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  input: string;
+  onInput: (text: string) => void;
+  onSubmit: () => void;
+  provider: Provider;
+  onProvider: (provider: Provider) => void;
+  busy: { pending: boolean; active: boolean };
+  stale: boolean;
+  canRetry: boolean;
+  primary: boolean;
+  onStop: () => void;
+  onRetry: () => void;
+  onRestart: () => void;
+}>) {
+  const { pending, active } = busy;
+  return (
+    <div className="shrink-0 space-y-2">
+      <label className="block">
+        <span className="mb-1 block text-xs text-muted-foreground">你的回答或補充</span>
+        <Textarea
+          ref={inputRef}
+          rows={3}
+          maxLength={20000}
+          value={input}
+          onChange={(e) => onInput(e.target.value)}
+          placeholder="回答本輪問題；有多題時可依題號回答。開頭輸入 / 可叫用技能…"
+          // 和專案對話一樣：Enter 送出、Shift+Enter 換行，中文組字時不送出；技能清單開著時 Enter 由清單處理。
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (!pending && !active && !stale) onSubmit();
+          }}
+          aria-label="你的回答或補充"
+        />
+      </label>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span className="mr-auto text-xs text-muted-foreground">Enter 送出 · Shift+Enter 換行 · 開頭輸入 / 叫用技能</span>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">AI
+          <Select value={provider} onValueChange={(v) => onProvider(v as Provider)}>
+            <SelectTrigger size="sm" aria-label="需求釐清 AI" className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="claude">Claude Code</SelectItem><SelectItem value="codex">Codex</SelectItem></SelectContent>
+          </Select>
+        </label>
+        {active && <Button variant="outline" onClick={onStop}>停止回覆</Button>}
+        {canRetry && <Button variant="outline" disabled={pending || active} onClick={onRetry}>重試回覆</Button>}
+        <Button variant="outline" disabled={pending || active} onClick={onRestart}>重新釐清</Button>
+        <Button variant={primary ? 'default' : 'outline'} disabled={pending || active || stale} onClick={onSubmit}>送出回答</Button>
+      </div>
+    </div>
+  );
+}
+
+/** 「開始寫 PRD」前的確認文字：目前功能還沒做完時講清楚後果。 */
+function draftSwitchText(unfinished: number, complete: boolean) {
+  if (complete || !unfinished) return '以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。';
+  return `目前功能還有 ${unfinished} 個任務未完成。改用這份需求起草新 PRD 後，流程會切換到新功能，舊任務留在原本的任務群組，不會繼續執行。確定要切換嗎？`;
+}
+
+/** 能不能送出：處理中不行；一般回答需要有內容，重試、重新開始與第一輪不用。 */
+function canSend(opts: { restart: boolean; retry: boolean; initial: boolean }, pending: boolean, input: string) {
+  if (pending) return false;
+  return opts.restart || opts.retry || opts.initial || !!input.trim();
+}
+
+const confirmRestart = () => confirmDialog({ title: '重新開始需求釐清？', description: '舊會議會保留，這項需求改用新的會議。', confirmText: '重新釐清' });
+
+export function InterviewDialog({ id, onClose }: Readonly<{ id: string; onClose: () => void }>) {
+  const snap = useProject((s) => s.snap);
+  const [input, setInput] = useState(() => interviewDrafts.get(id) || '');
+  const [provider, setProvider] = useState<Provider>(() => (snap?.config?.roles?.interviewer || snap?.config?.roles?.author || 'claude') as Provider);
+  const { api, data, setData, pending, setPending, statusError, setStatusError, closed, load, active } = useInterviewSession(id, provider);
+  const [summary, setSummary] = useState('');
+  const [summaryView, setSummaryView] = useState<SummaryView>('preview');
+  useEffect(() => { if (summaryView === 'edit') summaryRef.current?.focus(); }, [summaryView]);
+  const [summaryNote, setSummaryNote] = useState<string | null>(null);
+  const summaryTurn = useRef<string | undefined>(undefined);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  useSkillCommandInput(inputRef);
+
+  const session = data?.session ?? null;
+  const guard = (name: string) => snap?.guards?.[name] || '';
+
+  const send = useCallback(async (opts: { restart?: boolean; retry?: boolean; initial?: boolean } = {}) => {
+    const { restart = false, retry = false, initial = false } = opts;
+    if (!canSend({ restart, retry, initial }, pending, input)) return;
+    if (restart && !(await confirmRestart())) return;
+    setPending(true);
+    const answer = input;
+    const fresh = initial || restart;
+    try {
+      const next = await api<RequirementsPayload>('/api/backlog/interview', { id, input: fresh ? '' : answer, provider, restart, retry });
+      if (closed.current) return;
+      setData(next); setStatusError(null);
+      if (!fresh) { setInput(''); interviewDrafts.set(id, ''); }
+    } catch (err) {
+      if (!closed.current) setStatusError(errorMessage(err));
+    } finally {
+      if (!closed.current) setPending(false);
+    }
+  }, [api, id, input, pending, provider, closed, setData, setPending, setStatusError]);
 
   // 摘要文字：這一輪第一次有摘要時帶入（確認過的優先），之後由使用者編輯。
   useEffect(() => {
@@ -161,19 +336,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
   const confirmed = !!data?.confirmed && !edited;
   const showSummary = !!session?.requirementsReady && !data?.stale && !active && !pending;
   const since = active ? session?.messages?.findLast?.((m) => m.role === 'user')?.at : null;
-  const statusText = statusError
-    ? statusError
-    : data?.stale ? '需求或附件已修改，請重新釐清。舊對話仍保留。'
-      : session?.error ? session.error
-        : active || pending ? 'AI 正在查閱資料與整理問題…'
-          : data?.confirmed ? '你已確認需求，可開始寫 PRD。'
-            : session?.requirementsReady ? '關鍵問題已釐清，請檢閱、修正並確認右側摘要。'
-              : '請回答本輪問題；AI 會依回答繼續追問。';
-  const noteText = summaryNote
-    ? summaryNote
-    : confirmed ? '你已確認這份摘要。可以開始寫 PRD，或改成「編輯」再修改後重新確認。'
-      : edited ? '摘要已修改，請重新確認。'
-        : '請檢視 AI 整理的需求範圍、限制與驗收條件；可切到「編輯」直接修改，確認後才能開始寫 PRD。';
+  const statusText = interviewStatusText(statusError, data, active || pending);
 
   const confirmSummary = async () => {
     if (pending || !session?.requirementsReady || !summary.trim()) return;
@@ -193,9 +356,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
     if (pending || !data?.confirmed) return;
     // 目前功能還沒做完時講清楚後果：未完成的任務會留在原本的任務群組，不會繼續執行。
     const unfinished = (snap?.tasks || []).filter((task) => task.status !== 'done').length;
-    const switching = snap?.state?.pipeline?.status === 'complete' || !unfinished
-      ? '以這份已確認的需求起草新 PRD？目前 PRD 將切換到新功能。'
-      : `目前功能還有 ${unfinished} 個任務未完成。改用這份需求起草新 PRD 後，流程會切換到新功能，舊任務留在原本的任務群組，不會繼續執行。確定要切換嗎？`;
+    const switching = draftSwitchText(unfinished, snap?.state?.pipeline?.status === 'complete');
     if (snap?.prd && !(await confirmDialog({ title: '開始寫 PRD', description: switching, confirmText: '開始寫 PRD' }))) return;
     setPending(true); setSummaryNote(null);
     try {
@@ -225,79 +386,50 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1" defaultLayout={layout || undefined} onLayoutChanged={(l) => writeJson(LAYOUT_KEY, l)}>
           <ResizablePanel id="chat" defaultSize={showSummary ? '55' : '100'} minSize="30">
             <div className="flex h-full min-h-0 flex-col gap-2 pr-2">
-              <div ref={messagesRef} className="min-h-0 flex-1 space-y-3 overflow-auto rounded-md border bg-card p-3" role="log" aria-live="polite" data-testid="interview-conversation">
-                {(session?.messages || []).map((message, i) => (
-                  <article key={message.id || i} className={cn('rounded-md px-3 py-2', message.role === 'user' ? 'ml-8 bg-surface-2' : 'mr-8 border bg-background')}>
-                    <b className="mb-1 block text-xs text-muted-foreground">{message.role === 'user' ? '你' : '需求釐清 AI'}</b>
-                    {message.role === 'user' ? <div className="selectable whitespace-pre-wrap">{message.text}</div> : <Markdown text={message.text} />}
-                  </article>
-                ))}
-                {!data && !statusError && <Loading label="讀取會議…" />}
-                {active && session?.turn && <InterviewTyping turn={session.turn} />}
-              </div>
+              <InterviewMessages
+                hostRef={messagesRef}
+                messages={session?.messages || []}
+                loading={!data && !statusError}
+                typingTurn={active ? session?.turn : undefined}
+              />
               <LiveSince label={statusText} since={since} className={cn('text-xs', (statusError || session?.error || data?.stale) && 'text-danger')} />
-              <div className="shrink-0 space-y-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-muted-foreground">你的回答或補充</span>
-                  <Textarea
-                    ref={inputRef}
-                    rows={3}
-                    maxLength={20000}
-                    value={input}
-                    onChange={(e) => { setInput(e.target.value); interviewDrafts.set(id, e.target.value); }}
-                    placeholder="回答本輪問題；有多題時可依題號回答。開頭輸入 / 可叫用技能…"
-                    // 和專案對話一樣：Enter 送出、Shift+Enter 換行，中文組字時不送出；技能清單開著時 Enter 由清單處理。
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-                      e.preventDefault();
-                      if (!pending && !active && !data?.stale) void send();
-                    }}
-                    aria-label="你的回答或補充"
-                  />
-                </label>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <span className="mr-auto text-xs text-muted-foreground">Enter 送出 · Shift+Enter 換行 · 開頭輸入 / 叫用技能</span>
-                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">AI
-                    <Select value={provider} onValueChange={(v) => setProvider(v as Provider)}>
-                      <SelectTrigger size="sm" aria-label="需求釐清 AI" className="w-32"><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="claude">Claude Code</SelectItem><SelectItem value="codex">Codex</SelectItem></SelectContent>
-                    </Select>
-                  </label>
-                  {active && <Button variant="outline" onClick={stop}>停止回覆</Button>}
-                  {!!session && ['error', 'cancelled'].includes(session.status) && <Button variant="outline" disabled={pending || active} onClick={() => send({ retry: true })}>重試回覆</Button>}
-                  <Button variant="outline" disabled={pending || active} onClick={() => send({ restart: true })}>重新釐清</Button>
-                  <Button variant={showSummary ? 'outline' : 'default'} disabled={pending || active || !!data?.stale} onClick={() => send()}>送出回答</Button>
-                </div>
-              </div>
+              <AnswerBox
+                inputRef={inputRef}
+                input={input}
+                onInput={(text) => { setInput(text); interviewDrafts.set(id, text); }}
+                onSubmit={() => void send()}
+                provider={provider}
+                onProvider={setProvider}
+                busy={{ pending, active }}
+                stale={!!data?.stale}
+                canRetry={!!session && ['error', 'cancelled'].includes(session.status)}
+                primary={!showSummary}
+                onStop={() => void stop()}
+                onRetry={() => void send({ retry: true })}
+                onRestart={() => void send({ restart: true })}
+              />
             </div>
           </ResizablePanel>
           {showSummary && (
             <>
               <ResizableHandle withHandle />
               <ResizablePanel id="summary" defaultSize="45" minSize="25">
-                <aside className="flex h-full min-h-0 flex-col gap-2 pl-2" aria-label="需求摘要" data-testid="interview-summary">
-                  <div className="flex shrink-0 items-center justify-between gap-2">
-                    <h3 className="text-[13px] font-semibold">需求摘要</h3>
-                    <ToggleGroup type="single" variant="outline" size="sm" value={summaryView} onValueChange={(v) => { if (v) setSummaryView(v as 'preview' | 'edit'); }} aria-label="摘要顯示方式">
-                      <ToggleGroupItem value="preview" aria-label="預覽">預覽</ToggleGroupItem>
-                      <ToggleGroupItem value="edit" aria-label="編輯">編輯</ToggleGroupItem>
-                    </ToggleGroup>
-                  </div>
-                  <Hint role="status" className={cn(summaryNote && 'text-danger')}>{noteText}</Hint>
-                  <div className="min-h-0 flex-1 overflow-auto rounded-md border bg-card p-3">
-                    {summaryView === 'edit'
-                      ? <Textarea ref={summaryRef} className="mono h-full min-h-full resize-none" aria-label="需求摘要 Markdown" spellCheck={false} value={summary} onChange={(e) => { setSummary(e.target.value); setSummaryNote(null); }} />
-                      : <Markdown text={summary} />}
-                  </div>
-                  <div className="flex shrink-0 justify-end gap-2">
-                    <Button variant={confirmed ? 'outline' : 'default'} disabled={pending || confirmed || !summary.trim()} onClick={confirmSummary}>
-                      {edited ? '重新確認摘要' : confirmed ? '已確認' : '確認需求摘要'}
-                    </Button>
-                    {!!data?.confirmed && (
-                      <GuardButton guard={pending ? '處理中…' : !confirmed ? '請先確認需求摘要' : guard('backlog.draft')} onClick={startDraft}>開始寫 PRD</GuardButton>
-                    )}
-                  </div>
-                </aside>
+                <SummaryPanel
+                  summary={summary}
+                  onSummaryChange={(text) => { setSummary(text); setSummaryNote(null); }}
+                  view={summaryView}
+                  onViewChange={setSummaryView}
+                  textareaRef={summaryRef}
+                  note={summaryNoteText(summaryNote, confirmed, edited)}
+                  noteError={!!summaryNote}
+                  confirmed={confirmed}
+                  edited={edited}
+                  pending={pending}
+                  showDraft={!!data?.confirmed}
+                  draftGuard={draftGuardText(pending, confirmed, guard('backlog.draft'))}
+                  onConfirm={() => void confirmSummary()}
+                  onDraft={() => void startDraft()}
+                />
               </ResizablePanel>
             </>
           )}

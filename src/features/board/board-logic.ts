@@ -52,47 +52,83 @@ export interface Gate { label: string; text: string; status: GateStatus }
 
 const checksConfigured = (snap: Snapshot) => Object.values(snap.config.commands || {}).some((value) => typeof value === 'string' && value.trim());
 
+type GateResult = Pick<Gate, 'text' | 'status'>;
+
+/** 驗證條件：有結果才看通過／失敗，否則看有沒有設定驗證指令。 */
+function checkGate(verified: boolean, ok: boolean | null | undefined, configured: boolean): GateResult {
+  if (!verified) return { text: configured ? '尚未執行' : '未設定驗證指令', status: 'pending' };
+  return ok ? { text: '通過', status: 'pass' } : { text: '失敗', status: 'fail' };
+}
+
+/** 審查條件：人工接受也算通過。 */
+function reviewGate(review: string | undefined): GateResult {
+  if (!review) return { text: '尚未審查', status: 'pending' };
+  const status = PASSING.includes(review) ? 'pass' : 'fail';
+  if (review === 'ACCEPTED') return { text: '你已接受目前結果', status };
+  return { text: ['PASS', 'APPROVE'].includes(review) ? '通過' : '未通過', status };
+}
+
 /** 完成條件：依賴、驗證、審查與人工驗收；未知值不顯示成通過。 */
 export function taskGates(snap: Snapshot, task: Task, state: TaskState, detail: TaskDetail | null, done: Set<string>): Gate[] {
   const missing = (task.dependencies || []).filter((id) => !done.has(String(id)));
   const configured = checksConfigured(snap);
   const verified = state.last_check_ok != null && (configured || !!detail?.checks?.trim());
-  const review = state.review_verdict;
   const humanDone = state.step === '人工測試通過' || (snap.state.pipeline.status === 'complete' && column(task, state) === 'done');
+  const dependency: GateResult = missing.length ? { text: `尚有 ${missing.length} 項未完成`, status: 'pending' } : { text: '已滿足', status: 'pass' };
   return [
-    { label: '依賴', text: missing.length ? `尚有 ${missing.length} 項未完成` : '已滿足', status: missing.length ? 'pending' : 'pass' },
-    { label: '驗證', text: verified ? (state.last_check_ok ? '通過' : '失敗') : configured ? '尚未執行' : '未設定驗證指令', status: verified ? (state.last_check_ok ? 'pass' : 'fail') : 'pending' },
-    { label: '審查', text: review === 'ACCEPTED' ? '你已接受目前結果' : review ? (['PASS', 'APPROVE'].includes(review) ? '通過' : '未通過') : '尚未審查', status: review ? (PASSING.includes(review) ? 'pass' : 'fail') : 'pending' },
+    { label: '依賴', ...dependency },
+    { label: '驗證', ...checkGate(verified, state.last_check_ok, configured) },
+    { label: '審查', ...reviewGate(state.review_verdict) },
     { label: '人工驗收', text: humanDone ? '已確認' : '等待人工確認', status: humanDone ? 'pass' : 'pending' },
   ];
 }
 
 export interface MetaRow { label: string; value: string; cls?: 'ok' | 'bad' | 'mono' }
 
+/** 驗證那一列：沒有指令、尚未執行、通過或失敗。 */
+function checkMeta(hasChecks: boolean, ok: boolean | null | undefined): [string, MetaRow['cls']] {
+  if (!hasChecks) return ['未設定指令', undefined];
+  if (ok == null) return ['尚未執行', undefined];
+  return ok ? ['通過', 'ok'] : ['失敗', 'bad'];
+}
+
+/** 審查那一列的文字：人工接受、各家審查結果，或單一結論。 */
+function reviewMetaText(state: TaskState): string {
+  const verdict = state.review_verdict;
+  if (verdict === 'ACCEPTED') return '人工接受';
+  if (verdict && state.review_verdicts) return Object.entries(state.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ');
+  return verdict || '—';
+}
+
+function verdictClass(verdict: string | undefined): MetaRow['cls'] {
+  if (!verdict) return undefined;
+  return PASSING.includes(verdict) ? 'ok' : 'bad';
+}
+
 /** 執行資訊：步驟、修正輪數、嘗試次數、驗證、審查、commit。 */
 export function taskMeta(snap: Snapshot, state: TaskState, detail: TaskDetail): MetaRow[] {
   const hasChecks = checksConfigured(snap) || !!detail.checks?.trim();
-  const check: [string, MetaRow['cls']] = !hasChecks ? ['未設定指令', undefined] : state.last_check_ok == null ? ['尚未執行', undefined] : state.last_check_ok ? ['通過', 'ok'] : ['失敗', 'bad'];
-  const verdict = state.review_verdict;
-  const review = verdict === 'ACCEPTED'
-    ? '人工接受'
-    : verdict && state.review_verdicts
-      ? Object.entries(state.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ')
-      : verdict || '—';
+  const check = checkMeta(hasChecks, state.last_check_ok);
   return [
     { label: '步驟', value: state.step || state.phase || '未開始' },
     { label: '修正輪數', value: `${state.fix_round || 0} / ${snap.config.max_fix_rounds}` },
     { label: '嘗試次數', value: String(state.attempts || 0) },
     { label: '驗證', value: check[0], cls: check[1] },
-    { label: '審查', value: review, cls: verdict ? (PASSING.includes(verdict) ? 'ok' : 'bad') : undefined },
+    { label: '審查', value: reviewMetaText(state), cls: verdictClass(state.review_verdict) },
     { label: 'commit', value: state.commit ? state.commit.slice(0, 8) : '—', cls: 'mono' },
   ];
+}
+
+/** 流程忙碌的原因：有後端防呆就用防呆，否則只看執行器是否在跑。 */
+function busyReason(snap: Snapshot): string {
+  if (snap.guards) return snap.guards['backlog.draft'] || '';
+  return snap.runnerAlive ? '流程執行中' : '';
 }
 
 /** 審查未通過而卡住的任務才顯示「接受目前結果」；規則與後端 guards::task_accept 相同。 */
 export function acceptReason(snap: Snapshot, state: TaskState): { show: boolean; reason: string | null } {
   if (state.phase !== 'stuck' || !state.review_verdict || PASSING.includes(state.review_verdict)) return { show: false, reason: null };
-  const busy = snap.guards ? snap.guards['backlog.draft'] || '' : snap.runnerAlive ? '流程執行中' : '';
+  const busy = busyReason(snap);
   if (busy) return { show: true, reason: busy };
   if (state.last_check_ok === false) return { show: true, reason: '驗證指令沒有通過，請先修好或重新執行' };
   return { show: true, reason: null };
@@ -141,6 +177,11 @@ export function textToField(text: string, type: FieldType): string | string[] {
   return text;
 }
 
+/** 沒有後端防呆時，前端自己判斷能不能開始執行。 */
+function localStartGuard(snap: Snapshot, busy: boolean, approved: boolean): string {
+  return busy || !snap.tasks.length || snap.state.prd.status !== 'approved' || !approved ? '目前不能開始' : '';
+}
+
 /** 依後端防呆算出看板主要動作的狀態。 */
 export function boardActions(snap: Snapshot) {
   const busy = anyBusy(snap);
@@ -151,7 +192,7 @@ export function boardActions(snap: Snapshot) {
     approved,
     approveGuard: approved ? '任務已核准' : guard('tasks.approve'),
     approveText: approved ? '任務已核准' : '檢視後核准任務',
-    startGuard: snap.guards ? guard('run.start') : busy || !snap.tasks.length || snap.state.prd.status !== 'approved' || !approved ? '目前不能開始' : '',
+    startGuard: snap.guards ? guard('run.start') : localStartGuard(snap, busy, approved),
     pauseDisabled: !snap.runnerAlive || !!snap.state.control.pause_requested,
     continueDisabled: busy || !human,
     continuePrimary: human && !busy,
