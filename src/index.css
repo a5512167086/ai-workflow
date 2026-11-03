@@ -146,9 +146,6 @@
   ::selection { background: color-mix(in oklab, var(--primary) 30%, transparent); }
   button, [role="button"], select, summary, a { cursor: pointer; }
   button:disabled, [aria-disabled="true"] { cursor: not-allowed; }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
-  }
   /* 細捲軸（Windows WebView2 的原生捲軸太粗，不像桌面工具） */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--muted-foreground) 35%, transparent); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
@@ -158,6 +155,11 @@
 }
 
 /* ---------- 共用的內容樣式（Markdown、log、diff）---------- */
+/* 減少動態效果：放在所有 @layer 之外，不需要 !important 就會蓋過 Tailwind 的工具類別（未分層的規則優先於分層的）。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms; transition-duration: .01ms; }
+}
+
 @layer components {
   .md { @apply text-[13px] leading-[1.6] break-words; }
   .md > :first-child { margin-top: 0; }

@@ -44,7 +44,7 @@ export function stepIndex(snap: Pick<Snapshot, 'state' | 'tasks'>): number {
   return current ? STEPS.findIndex(([key]) => key === current) : STEPS.length;
 }
 
-function Stepper({ snap }: { snap: Snapshot }) {
+function Stepper({ snap }: Readonly<{ snap: Snapshot }>) {
   const idx = stepIndex(snap);
   return (
     <ol className="flex items-center gap-1 text-[11.5px]" aria-label="PRD 流程進度">
@@ -64,11 +64,46 @@ function Stepper({ snap }: { snap: Snapshot }) {
 }
 
 function roundTitle(r: PrdRound) {
-  return `第 ${r.round} 輪・${ROUND_KIND[r.kind] || r.kind}・${PROVIDER_LABEL[r.provider] || r.provider}${r.verdict ? `・${r.verdict}` : ''}${r.version ? `・v${r.version}` : ''}`;
+  const parts = [`第 ${r.round} 輪`, ROUND_KIND[r.kind] || r.kind, PROVIDER_LABEL[r.provider] || r.provider];
+  if (r.verdict) parts.push(r.verdict);
+  if (r.version) parts.push(`v${r.version}`);
+  return parts.join('・');
 }
 const roundKey = (r: PrdRound) => `${r.round}-${r.kind}-${r.version || ''}`;
 
-function Rounds({ rounds, raw }: { rounds: PrdRound[]; raw: boolean }) {
+function verdictBorder(verdict?: string): string {
+  if (/approve|pass/i.test(verdict || '')) return 'border-l-ok';
+  if (/revise|fail/i.test(verdict || '')) return 'border-l-danger';
+  return 'border-l-border';
+}
+
+/** 展開／收合後的集合（不改動原本的 Set）。 */
+function toggled(set: Set<string>, key: string, on: boolean): Set<string> {
+  const next = new Set(set);
+  if (on) next.add(key);
+  else next.delete(key);
+  return next;
+}
+
+function RoundBody({ text, raw }: Readonly<{ text?: string; raw: boolean }>) {
+  if (raw) return <pre className="mono selectable whitespace-pre-wrap text-xs">{text}</pre>;
+  if (text) return <Markdown small text={text} />;
+  return <p className="text-xs text-muted-foreground">（無內容）</p>;
+}
+
+function PrdPreview({ text }: Readonly<{ text?: string }>) {
+  if (!text) return <p className="text-muted-foreground">（尚無）</p>;
+  return <Markdown text={text} className="max-w-[80ch]" />;
+}
+
+function taskGenStatus(generating: boolean, tg: Snapshot['state']['task_gen']): string {
+  if (generating) return 'AI 產生任務中…';
+  if (tg?.status === 'done') return `已產生 ${tg.count} 個任務`;
+  if (tg?.status === 'error') return `失敗：${tg.error}`;
+  return '';
+}
+
+function Rounds({ rounds, raw }: Readonly<{ rounds: PrdRound[]; raw: boolean }>) {
   // 重畫時保留使用者展開過的輪次。
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   if (!rounds.length) return <p className="text-xs text-muted-foreground">（尚無）</p>;
@@ -76,12 +111,12 @@ function Rounds({ rounds, raw }: { rounds: PrdRound[]; raw: boolean }) {
     <div className="flex flex-col gap-1.5">
       {rounds.map((r) => {
         const key = roundKey(r);
-        const tone = /approve|pass/i.test(r.verdict || '') ? 'border-l-ok' : /revise|fail/i.test(r.verdict || '') ? 'border-l-danger' : 'border-l-border';
+        const tone = verdictBorder(r.verdict);
         return (
-          <details key={key} open={open.has(key)} onToggle={(e) => { const next = new Set(open); if ((e.currentTarget as HTMLDetailsElement).open) next.add(key); else next.delete(key); setOpen(next); }} className={cn('rounded-md border border-l-2 bg-surface-2/50', tone)}>
+          <details key={key} open={open.has(key)} onToggle={(e) => setOpen(toggled(open, key, (e.currentTarget as HTMLDetailsElement).open))} className={cn('rounded-md border border-l-2 bg-surface-2/50', tone)}>
             <summary className="cursor-pointer px-2 py-1.5 text-xs font-medium">{roundTitle(r)}</summary>
             <div className="border-t px-2 py-2">
-              {raw ? <pre className="mono selectable whitespace-pre-wrap text-xs">{r.text}</pre> : r.text ? <Markdown small text={r.text} /> : <p className="text-xs text-muted-foreground">（無內容）</p>}
+              <RoundBody text={r.text} raw={raw} />
             </div>
           </details>
         );
@@ -120,7 +155,7 @@ export function PrdPage() {
     : 'AI 審查提供意見；你可以直接編輯、要求修改，最後由你核准。';
   const tg = snap.state.task_gen;
   const generating = snap.taskGenBusy || tg?.status === 'running';
-  const taskGenText = generating ? 'AI 產生任務中…' : tg?.status === 'done' ? `已產生 ${tg.count} 個任務` : tg?.status === 'error' ? `失敗：${tg.error}` : '';
+  const taskGenText = taskGenStatus(generating, tg);
 
   const changeView = (v: PrdView) => { setView(v); writeStorage(VIEW_KEY, v); };
   const copy = async () => {
@@ -173,7 +208,7 @@ export function PrdPage() {
           <div className="min-h-0 flex-1 overflow-auto p-4">
             {raw
               ? <pre ref={rawRef} className="mono selectable whitespace-pre-wrap text-xs leading-[1.6]">{snap.prd || '（尚無）'}</pre>
-              : snap.prd ? <Markdown text={snap.prd} className="max-w-[80ch]" /> : <p className="text-muted-foreground">（尚無）</p>}
+              : <PrdPreview text={snap.prd} />}
           </div>
         </ResizablePanel>
         <ResizableHandle />

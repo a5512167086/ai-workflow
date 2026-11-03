@@ -22,6 +22,7 @@ import { COLUMNS, COLUMN_LABELS, PRIORITY_TEXT } from '@/lib/constants';
 import { boardFacts, childTasks, column, type BoardFacts, type BoardFilter } from '@/lib/format';
 import { readStorage, writeStorage } from '@/lib/storage';
 import { cn } from '@/lib/utils';
+import { ProgressBar } from '@/components/app/ProgressBar';
 import { useBadges } from '@/stores/badges';
 import { useProject } from '@/stores/project';
 import type { Column, Snapshot, Task } from '@/types/api';
@@ -35,7 +36,13 @@ const COLUMN_BAR: Record<Column, string> = { todo: 'bg-muted-foreground/50', doi
 const STAGE_TONE: Record<Column, 'neutral' | 'info' | 'review' | 'warn' | 'ok'> = { todo: 'neutral', doing: 'info', review: 'review', test: 'warn', done: 'ok' };
 const PRIORITY_BORDER: Record<string, string> = { high: 'border-l-danger', medium: 'border-l-info', low: 'border-l-muted-foreground/40' };
 
-function TaskCard({ task, snap, facts, selected, onSelect, onEdit, onRerun }: { task: Task; snap: Snapshot; facts: BoardFacts; selected: boolean; onSelect: () => void; onEdit: () => void; onRerun: () => void }) {
+/** 藍圖卡片的完成度：有子任務看子任務完成比例，沒有就看任務本身完成了沒。 */
+function taskPercent(completed: number, total: number, selfDone: boolean): number {
+  if (total) return Math.round((completed / total) * 100);
+  return selfDone ? 100 : 0;
+}
+
+function TaskCard({ task, snap, facts, selected, onSelect, onEdit, onRerun }: Readonly<{ task: Task; snap: Snapshot; facts: BoardFacts; selected: boolean; onSelect: () => void; onEdit: () => void; onRerun: () => void }>) {
   const ts = facts.stateFor(task);
   const col = column(task, ts);
   const stuck = ts.phase === 'stuck';
@@ -96,7 +103,7 @@ function TaskCard({ task, snap, facts, selected, onSelect, onEdit, onRerun }: { 
   );
 }
 
-function Kanban({ snap, facts, selected, onSelect, onEdit, onRerun }: { snap: Snapshot; facts: BoardFacts; selected: string | null; onSelect: (id: string) => void; onEdit: (id: string) => void; onRerun: (id: string) => void }) {
+function Kanban({ snap, facts, selected, onSelect, onEdit, onRerun }: Readonly<{ snap: Snapshot; facts: BoardFacts; selected: string | null; onSelect: (id: string) => void; onEdit: (id: string) => void; onRerun: (id: string) => void }>) {
   const byCol = useMemo(() => {
     const map: Record<Column, Task[]> = { todo: [], doing: [], review: [], test: [], done: [] };
     for (const t of snap.tasks) if (facts.visible.includes(t)) map[column(t, facts.stateFor(t))].push(t);
@@ -123,21 +130,21 @@ function Kanban({ snap, facts, selected, onSelect, onEdit, onRerun }: { snap: Sn
 }
 
 /** 任務藍圖：功能 → 任務 → 子任務的完成度。 */
-function Roadmap({ facts, selected, onSelect }: { facts: BoardFacts; selected: string | null; onSelect: (id: string) => void }) {
+function Roadmap({ facts, selected, onSelect }: Readonly<{ facts: BoardFacts; selected: string | null; onSelect: (id: string) => void }>) {
   return (
     <div id="task-roadmap" aria-label="功能與任務藍圖" className="grid h-full min-h-0 content-start gap-2 overflow-y-auto p-3">
       {facts.visible.map((task) => {
         const children = childTasks(task);
         const state = facts.stateFor(task), stage = column(task, state);
         const completed = children.filter((sub) => facts.done.has(String(sub.id))).length;
-        const percent = children.length ? Math.round((completed / children.length) * 100) : facts.done.has(String(task.id)) ? 100 : 0;
+        const percent = taskPercent(completed, children.length, facts.done.has(String(task.id)));
         const unmet = facts.unmet(task).length;
         return (
           <article key={String(task.id)} className="grid gap-1.5 rounded-lg border bg-card p-3">
             <button type="button" data-task-id={String(task.id)} aria-pressed={selected === String(task.id)} onClick={() => onSelect(String(task.id))} className={cn('flex items-center gap-2 rounded px-1 text-left text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring', selected === String(task.id) && 'ring-2 ring-primary')}>
               <span className="mono text-[11px]">#{task.id}</span><strong className="min-w-0 flex-1 break-words">{task.title}</strong><Chip tone={STAGE_TONE[stage]}>{COLUMN_LABELS[stage]}</Chip>
             </button>
-            <div role="progressbar" aria-label={`${task.title}完成度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="h-1.5 overflow-hidden rounded bg-surface-2"><span className="block h-full bg-primary" style={{ width: `${percent}%` }} /></div>
+            <ProgressBar value={percent} label={`${task.title}完成度`} />
             <Hint>{children.length ? `${completed} / ${children.length} 子任務完成` : '獨立任務'}{unmet ? ` · ${unmet} 項依賴未完成` : ''}</Hint>
             {children.map((sub) => {
               if (facts.filtered && !facts.matches(sub) && !facts.matches(task)) return null;
@@ -187,13 +194,18 @@ export function BoardPage() {
   }, [tasks.length, facts.counts.done, human]);
 
   const select = useCallback((id: string | null) => {
-    setParams((prev) => { const next = new URLSearchParams(prev); if (id) next.set('task', id); else next.delete('task'); return next; }, { replace: true });
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (id) next.set('task', id);
+      else next.delete('task');
+      return next;
+    }, { replace: true });
   }, [setParams]);
   const close = useCallback(() => {
     const id = selected;
     select(null);
     // 關閉後把焦點還給原本的任務卡
-    requestAnimationFrame(() => { workspace.current?.querySelector<HTMLElement>(`[data-task-id="${(id || '').replace(/"/g, '\\"')}"]`)?.focus({ preventScroll: true }); });
+    requestAnimationFrame(() => { workspace.current?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id || '')}"]`)?.focus({ preventScroll: true }); });
   }, [selected, select]);
   useEffect(() => { if (selected) lastSelected.current = selected; }, [selected]);
   // Esc 關閉檢視面板（對話框自己處理的 Esc 不算）。
@@ -253,7 +265,7 @@ export function BoardPage() {
         <div className="flex min-w-48 flex-1 items-center gap-3">
           <div className="min-w-0 flex-1">
             <Eyebrow>目前功能</Eyebrow>
-            <div role="progressbar" aria-label="主線任務完成度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="mt-1 h-1.5 overflow-hidden rounded bg-surface-2"><span className="block h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} /></div>
+            <ProgressBar value={percent} label="主線任務完成度" className="mt-1" />
           </div>
           <dl id="board-metrics" className="flex items-center gap-4">
             {metrics.map((m) => (
@@ -283,11 +295,9 @@ export function BoardPage() {
         </div>
       </div>
       <div ref={workspace} className="min-h-0 flex-1">
-        {!tasks.length ? (
-          <EmptyState title="還沒有任務：先在 PRD 頁核准並產生任務" description="核准 PRD 後會自動建立任務看板與藍圖。" />
-        ) : !facts.visible.length ? (
-          <EmptyState title="沒有符合條件的任務，請調整搜尋或篩選。" />
-        ) : (
+        {!tasks.length && <EmptyState title="還沒有任務：先在 PRD 頁核准並產生任務" description="核准 PRD 後會自動建立任務看板與藍圖。" />}
+        {!!tasks.length && !facts.visible.length && <EmptyState title="沒有符合條件的任務，請調整搜尋或篩選。" />}
+        {!!facts.visible.length && (
           // 畫布一直放在同一個分欄容器裡，開關檢視面板不會重新掛載（保留各欄的捲動位置）。
           <ResizablePanelGroup orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged} className="h-full">
             <ResizablePanel id="board-canvas" defaultSize="55" minSize={320} className="min-w-0">{canvas}</ResizablePanel>

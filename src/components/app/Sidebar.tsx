@@ -14,6 +14,7 @@ import { useProject } from '@/stores/project';
 import { useUi, THEMES } from '@/stores/ui';
 import { useBadges } from '@/stores/badges';
 import { Logo } from '@/components/app/Logo';
+import type { ProjectStatus } from '@/types/api';
 
 const ICONS: Record<ProjectView, React.ComponentType<{ className?: string }>> = {
   chat: MessageSquareText, backlog: ListTodo, prd: FileText, board: KanbanSquare, records: History, graph: Waypoints, usage: Gauge, skills: Sparkles,
@@ -27,7 +28,14 @@ const ROW = 'group/nav relative flex h-8 w-full items-center gap-2 rounded-md px
 const ROW_COLLAPSED = 'justify-center px-0';
 
 /** 收合時加上右側 tooltip（只剩圖示，需要名稱與快捷鍵）。 */
-function RowTooltip({ collapsed, label, shortcut, children }: { collapsed: boolean; label: string; shortcut?: string; children: ReactNode }) {
+/** 專案切換器的第二行：在專案裡顯示它的狀態；在總覽顯示等你處理的數量或專案總數。 */
+function switcherSubtitle(current: { status: ProjectStatus } | undefined, attention: number, total: number): string {
+  if (current) return PROJECT_STATUS[current.status]?.[0] || current.status;
+  if (attention) return `${attention} 個專案等你處理`;
+  return `${total} 個專案`;
+}
+
+function RowTooltip({ collapsed, label, shortcut, children }: Readonly<{ collapsed: boolean; label: string; shortcut?: string; children: ReactNode }>) {
   if (!collapsed) return <>{children}</>;
   return (
     <Tooltip>
@@ -50,11 +58,16 @@ function useMouseCloseFocus() {
   const byPointer = useRef(false);
   return {
     trigger: { onPointerDown: () => { byPointer.current = true; }, onKeyDown: () => { byPointer.current = false; } },
-    content: { onCloseAutoFocus: (e: Event) => { if (byPointer.current) e.preventDefault(); byPointer.current = false; } },
+    content: {
+      onCloseAutoFocus: (e: Event) => {
+        if (byPointer.current) e.preventDefault();
+        byPointer.current = false;
+      },
+    },
   };
 }
 
-function NavItem({ to, icon: Icon, label, badge, attention, collapsed, shortcut, end }: { to: string; icon: React.ComponentType<{ className?: string }>; label: string; badge?: string; attention?: boolean; collapsed: boolean; shortcut?: string; end?: boolean }) {
+function NavItem({ to, icon: Icon, label, badge, attention, collapsed, shortcut, end }: Readonly<{ to: string; icon: React.ComponentType<{ className?: string }>; label: string; badge?: string; attention?: boolean; collapsed: boolean; shortcut?: string; end?: boolean }>) {
   const link = (
     <NavLink
       to={to}
@@ -77,7 +90,7 @@ function NavItem({ to, icon: Icon, label, badge, attention, collapsed, shortcut,
   return <RowTooltip collapsed={collapsed} label={label} shortcut={shortcut}>{link}</RowTooltip>;
 }
 
-function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
+function ProjectSwitcher({ collapsed }: Readonly<{ collapsed: boolean }>) {
   const { id } = useParams();
   const navigate = useNavigate();
   const projects = useProjects((s) => s.projects);
@@ -103,7 +116,7 @@ function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
             <>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-semibold leading-4">{name}</span>
-                <span className="block truncate text-[11px] leading-4 text-muted-foreground">{current ? (PROJECT_STATUS[current.status]?.[0] || current.status) : attention ? `${attention} 個專案等你處理` : `${projects.length} 個專案`}</span>
+                <span className="block truncate text-[11px] leading-4 text-muted-foreground">{switcherSubtitle(current, attention, projects.length)}</span>
               </span>
               <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
             </>
@@ -135,10 +148,12 @@ function ProjectSwitcher({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-function ThemeMenu({ collapsed }: { collapsed: boolean }) {
+const THEME_ICON = { light: Sun, dark: Moon, system: Monitor } as const;
+
+function ThemeMenu({ collapsed }: Readonly<{ collapsed: boolean }>) {
   const theme = useUi((s) => s.theme);
   const setTheme = useUi((s) => s.setTheme);
-  const Icon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
+  const Icon = THEME_ICON[theme];
   const label = THEMES.find((t) => t.key === theme)?.label || '';
   const focus = useMouseCloseFocus();
   return (
@@ -151,12 +166,15 @@ function ThemeMenu({ collapsed }: { collapsed: boolean }) {
         </DropdownMenuTrigger>
       </RowTooltip>
       <DropdownMenuContent align="start" side={collapsed ? 'right' : 'top'} {...focus.content}>
-        {THEMES.map((t) => (
+        {THEMES.map((t) => {
+          const ItemIcon = THEME_ICON[t.key];
+          return (
           <DropdownMenuItem key={t.key} onSelect={() => setTheme(t.key)}>
-            {t.key === 'light' ? <Sun className="size-4" /> : t.key === 'dark' ? <Moon className="size-4" /> : <Monitor className="size-4" />}
+            <ItemIcon className="size-4" />
             {t.label}{t.key === theme && <Check className="ml-auto size-4" />}
           </DropdownMenuItem>
-        ))}
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

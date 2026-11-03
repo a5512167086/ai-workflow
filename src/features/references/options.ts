@@ -87,7 +87,7 @@ export async function uploadReference(file: File): Promise<ReferenceItem> {
   if (file.size > MAX_FILE_BYTES) throw new Error('單檔上限 20 MB');
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result.split(',')[1] || '' : '');
     reader.onerror = () => reject(reader.error || new Error('讀取檔案失敗'));
     reader.readAsDataURL(file);
   });

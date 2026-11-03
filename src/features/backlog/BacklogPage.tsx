@@ -29,6 +29,7 @@ import type { BacklogItem, BacklogPayload } from '@/types/api';
 
 const LAYOUT_KEY = 'ai-workflow.backlog.layout';
 const FILTER_KEY = 'ai-workflow.backlog.filter';
+const STATUS_TONE: Record<string, 'ok' | 'info' | 'neutral'> = { done: 'ok', in_progress: 'info', open: 'neutral' };
 type StatusFilter = 'all' | BacklogItem['status'];
 const FILTERS: [StatusFilter, string][] = [['all', '全部'], ['open', BACKLOG_STATUS.open], ['in_progress', BACKLOG_STATUS.in_progress], ['done', BACKLOG_STATUS.done]];
 const readFilter = (): StatusFilter => { const v = readStorage(FILTER_KEY); return FILTERS.some(([k]) => k === v) ? (v as StatusFilter) : 'all'; };
@@ -105,7 +106,11 @@ export function BacklogPage() {
     for (const i of items) c[i.status] = (c[i.status] || 0) + 1;
     return c;
   }, [items]);
-  const changeFilter = (v: string) => { if (!v) return; setFilter(v as StatusFilter); writeStorage(FILTER_KEY, v); };
+  const changeFilter = (v: string) => {
+    if (!v) return;
+    setFilter(v as StatusFilter);
+    writeStorage(FILTER_KEY, v);
+  };
 
   /** 上／下移：篩選時跟畫面上相鄰的那一項換位置；存的仍是全部需求的優先順序。 */
   const move = async (id: string, delta: number) => {
@@ -125,7 +130,11 @@ export function BacklogPage() {
   };
   // 進入編輯時把焦點放在標題。
   useEffect(() => { if (editingId) editTitleRef.current?.focus(); }, [editingId]);
-  const startEdit = (item: BacklogItem) => { if (blocked(item)) return; setEditingId(item.id); setEdit({ title: item.title, detail: item.detail || '' }); };
+  const startEdit = (item: BacklogItem) => {
+    if (blocked(item)) return;
+    setEditingId(item.id);
+    setEdit({ title: item.title, detail: item.detail || '' });
+  };
   const saveEdit = async (item: BacklogItem) => {
     if (blocked(item)) return;
     const data = await act(api, '/api/backlog/update', { id: item.id, title: edit.title, detail: edit.detail }, '已儲存');
@@ -140,7 +149,10 @@ export function BacklogPage() {
     if (blocked(item)) return;
     openReferenceDialog({ title: `需求參考：${item.title}`, target: 'backlog', id: item.id, ids: item.references || [] }, () => { void load(); });
   };
-  const draft = (item: BacklogItem) => { if (blocked(item)) return; openInterview(item.id); };
+  const draft = (item: BacklogItem) => {
+    if (blocked(item)) return;
+    openInterview(item.id);
+  };
 
   // 拖曳排序（按住卡片空白處拖動）；鍵盤用上／下按鈕。篩選時放到畫面上那一項的前後，其餘需求的相對順序不變。
   const { dragId, drop, rowProps } = usePointerReorder({
@@ -233,7 +245,7 @@ export function BacklogPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="mono text-xs text-muted-foreground" title="優先順序">{rank}</span>
                             <b className="break-words">{item.title}</b>
-                            <Chip tone={item.status === 'done' ? 'ok' : item.status === 'in_progress' ? 'info' : 'neutral'}>{BACKLOG_STATUS[item.status] || item.status}</Chip>
+                            <Chip tone={STATUS_TONE[item.status] ?? 'neutral'}>{BACKLOG_STATUS[item.status] || item.status}</Chip>
                           </div>
                           {item.detail && <Markdown text={item.detail} small className="mt-1 text-muted-foreground" />}
                           {lock && <Hint className="mt-1">{lock}</Hint>}

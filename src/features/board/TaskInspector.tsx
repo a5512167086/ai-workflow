@@ -20,6 +20,7 @@ import { runAction } from '@/lib/actions';
 import { PRIORITY_TEXT, PROVIDER_LABEL, TASK_STATUS_TEXT } from '@/lib/constants';
 import { boardFacts, reviewCounts, verdictOf } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { withKeys } from '@/lib/keys';
 import { useProject } from '@/stores/project';
 import type { Snapshot, Task, TaskDetail, TaskState } from '@/types/api';
 import { acceptReason, revertTitle, taskGates, taskMeta } from './board-logic';
@@ -27,12 +28,32 @@ import { TaskEditDialog } from './TaskEditDialog';
 
 type SubTab = 'log' | 'checks' | 'reviews' | 'diff' | 'task';
 
+const TASK_STATUS_TONE: Record<string, 'ok' | 'bad' | 'info'> = { done: 'ok', blocked: 'bad', 'in-progress': 'info', review: 'info' };
+
+function verdictTone(verdict: string, pass: boolean): 'ok' | 'bad' | 'neutral' {
+  if (!verdict) return 'neutral';
+  return pass ? 'ok' : 'bad';
+}
+
+function GateIcon({ status }: Readonly<{ status: string }>) {
+  if (status === 'pass') return <Check className="size-3" />;
+  if (status === 'fail') return <AlertTriangle className="size-3" />;
+  return <>—</>;
+}
+
+/** 檢視面板標題：讀到詳情後是編號與標題，失敗或讀取中各有說明。 */
+function inspectorTitle(id: string, detail: TaskDetail | null, task: Task | undefined, error: string): string {
+  if (detail) return `#${detail.id} ${task?.title || ''}`;
+  if (error) return `任務 #${id} 載入失敗`;
+  return `載入任務 #${id}`;
+}
+
 /** 任務內容：用標籤、段落與清單呈現任務欄位，不顯示原始 JSON。 */
-export function TaskContent({ task, implement, done }: { task: Task; implement?: string; done: Set<string> }) {
+export function TaskContent({ task, implement, done }: Readonly<{ task: Task; implement?: string; done: Set<string> }>) {
   const chipRow = (label: string, items: { text: string; tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info'; title?: string; mono?: boolean }[]) => items.length ? (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="text-[11px] text-muted-foreground">{label}</span>
-      {items.map((item, i) => <Chip key={i} tone={item.tone} title={item.title} className={cn(item.mono && 'mono')}>{item.text}</Chip>)}
+      {withKeys(items, 'chip-').map(({ key, item }) => <Chip key={key} tone={item.tone} title={item.title} className={cn(item.mono && 'mono')}>{item.text}</Chip>)}
     </div>
   ) : null;
   const section = (title: string, content: React.ReactNode) => content ? (
@@ -44,10 +65,10 @@ export function TaskContent({ task, implement, done }: { task: Task; implement?:
   const text = (value?: string) => (typeof value === 'string' && value.trim() ? <Markdown small text={value} /> : null);
   const list = <T,>(items: T[] | undefined, render: (item: T, i: number) => React.ReactNode, manual = false) => items?.length ? (
     <ul className="grid gap-1">
-      {items.map((item, i) => <li key={i} className={cn('rounded-md border px-2 py-1', manual ? 'border-warn/40 bg-warn-soft/40' : 'bg-surface-2')}>{render(item, i)}</li>)}
+      {withKeys(items, 'item-').map(({ key, item }, i) => <li key={key} className={cn('rounded-md border px-2 py-1', manual ? 'border-warn/40 bg-warn-soft/40' : 'bg-surface-2')}>{render(item, i)}</li>)}
     </ul>
   ) : null;
-  const statusTone = (status?: string) => (status === 'done' ? 'ok' : status === 'blocked' ? 'bad' : status === 'in-progress' || status === 'review' ? 'info' : 'neutral');
+  const statusTone = (status?: string) => TASK_STATUS_TONE[status || ''] ?? 'neutral';
   const blocks = [
     chipRow('狀態', [{ text: TASK_STATUS_TEXT[task.status || 'pending'] || task.status || '待處理', tone: statusTone(task.status) }]),
     task.priority ? chipRow('優先順序', [{ text: PRIORITY_TEXT[task.priority] || task.priority, tone: task.priority === 'high' ? 'warn' : 'neutral' }]) : null,
@@ -71,7 +92,7 @@ export function TaskContent({ task, implement, done }: { task: Task; implement?:
 }
 
 /** 每次審查一列（最新的在上面）；雙人審查時 Claude 與 Codex 的意見並排。 */
-export function ReviewsView({ reviews }: { reviews: TaskDetail['reviews'] }) {
+export function ReviewsView({ reviews }: Readonly<{ reviews: TaskDetail['reviews'] }>) {
   if (!reviews?.length) return <p className="p-1 text-xs text-muted-foreground">（尚無審查意見）</p>;
   const byRound = new Map<number, TaskDetail['reviews']>();
   for (const r of reviews) byRound.set(r.round, [...(byRound.get(r.round) || []), r]);
@@ -89,7 +110,7 @@ export function ReviewsView({ reviews }: { reviews: TaskDetail['reviews'] }) {
                 <div key={r.name} className={cn('rounded-md border p-2', verdict && (pass ? 'border-ok/40' : 'border-danger/40'))}>
                   <div className="mb-1 flex flex-wrap items-center gap-1.5">
                     <Chip tone={r.provider === 'codex' ? 'review' : 'info'}>{PROVIDER_LABEL[r.provider] || '審查者'}</Chip>
-                    <Chip tone={verdict ? (pass ? 'ok' : 'bad') : 'neutral'}>{verdict || '未判定'}</Chip>
+                    <Chip tone={verdictTone(verdict, pass)}>{verdict || '未判定'}</Chip>
                     {(must || suggest) ? <span className="text-[11px] text-muted-foreground">{[must && `必須修正 ${must}`, suggest && `建議 ${suggest}`].filter(Boolean).join('・')}</span> : null}
                   </div>
                   <Markdown small text={r.text} />
@@ -103,7 +124,7 @@ export function ReviewsView({ reviews }: { reviews: TaskDetail['reviews'] }) {
   );
 }
 
-function Gates({ snap, task, state, detail }: { snap: Snapshot; task: Task; state: TaskState; detail: TaskDetail | null }) {
+function Gates({ snap, task, state, detail }: Readonly<{ snap: Snapshot; task: Task; state: TaskState; detail: TaskDetail | null }>) {
   const done = boardFacts(snap, '', 'all').done;
   const gates = taskGates(snap, task, state, detail, done);
   return (
@@ -113,7 +134,7 @@ function Gates({ snap, task, state, detail }: { snap: Snapshot; task: Task; stat
         {gates.map((g) => (
           <li key={g.label} className={cn('flex items-center gap-2 rounded-md bg-surface-2 px-2 py-1.5', `gate-${g.status}`)}>
             <span aria-hidden="true" className={cn('grid size-5 shrink-0 place-items-center rounded-full bg-card text-muted-foreground', g.status === 'pass' && 'bg-ok-soft text-ok', g.status === 'fail' && 'bg-danger-soft text-danger')}>
-              {g.status === 'pass' ? <Check className="size-3" /> : g.status === 'fail' ? <AlertTriangle className="size-3" /> : '—'}
+              <GateIcon status={g.status} />
             </span>
             <span className="flex min-w-0 flex-col text-[11px] text-muted-foreground"><b className="text-xs text-foreground">{g.label}</b><span>{g.text}</span></span>
           </li>
@@ -125,7 +146,7 @@ function Gates({ snap, task, state, detail }: { snap: Snapshot; task: Task; stat
 
 export interface TaskInspectorProps { id: string; onClose: () => void; autoEdit?: boolean; onAutoEditHandled?: () => void }
 
-export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: TaskInspectorProps) {
+export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Readonly<TaskInspectorProps>) {
   const snap = useProject((s) => s.snap)!;
   const api = useProject((s) => s.api);
   const liveLog = useProject((s) => s.logs[`task-${id}`]);
@@ -172,7 +193,11 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
   const task = detail?.task;
   const guard = (name: string) => snap.guards?.[name] || '';
   const accept = acceptReason(snap, state);
-  const rerunGuard = snap.guards ? guard('task.rerun') : snap.runnerAlive ? '流程執行中' : '';
+  let rerunGuard = '';
+  if (snap.guards) rerunGuard = guard('task.rerun');
+  else if (snap.runnerAlive) rerunGuard = '流程執行中';
+
+  const loadFailed = !!error && !detail;
 
   const onAccept = async () => {
     const ok = await confirmDialog({ title: `接受任務 ${id} 目前的實作？`, description: '會重新跑一次驗證指令，通過後不再送審查，直接進入人工驗收。審查意見會保留在「審查意見」分頁。', confirmText: '接受' });
@@ -188,15 +213,15 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
     <div ref={panel} className="flex h-full min-h-0 flex-col" data-task-inspector>
       <div className="flex shrink-0 items-start gap-2 border-b px-3 py-2">
         <h2 ref={title} tabIndex={-1} className="min-w-0 flex-1 text-[14px] font-semibold leading-5 break-words outline-none">
-          {detail ? `#${detail.id} ${task?.title || ''}` : error ? `任務 #${id} 載入失敗` : `載入任務 #${id}`}
+          {inspectorTitle(id, detail, task, error)}
         </h2>
         <Button type="button" variant="ghost" size="icon-sm" aria-label="關閉任務詳情" onClick={onClose}><X /></Button>
       </div>
-      {error && !detail ? (
+      {loadFailed && (
         <div className="p-3 text-xs"><span>{error} </span><Button type="button" size="sm" variant="outline" onClick={() => load(true)}>重新讀取</Button></div>
-      ) : !detail || !task ? (
-        <Loading inline label="載入任務…" className="px-3 py-3" />
-      ) : (
+      )}
+      {!loadFailed && (!detail || !task) && <Loading inline label="載入任務…" className="px-3 py-3" />}
+      {detail && task && (
         <>
           <div className="grid shrink-0 gap-3 overflow-y-auto border-b px-3 py-2" style={{ maxHeight: '45%' }}>
             <div data-reference-drop="task"><ReferenceWidget options={referenceOptions('task', { taskId: id, taskStatus: task.status, taskReferences: task.references })} /></div>
@@ -206,7 +231,7 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
                 {Array.isArray(state.stuck_reasons) && state.stuck_reasons.length > 0 && (
                   <>
                     <p>最後一次審查要求修正的項目（完整內容在「審查意見」分頁）：</p>
-                    <ul className="list-disc pl-4">{state.stuck_reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                    <ul className="list-disc pl-4">{withKeys(state.stuck_reasons, 'reason-').map(({ key, item }) => <li key={key}>{item}</li>)}</ul>
                   </>
                 )}
               </Notice>

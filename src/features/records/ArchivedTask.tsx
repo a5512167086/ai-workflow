@@ -11,7 +11,7 @@ import type { ArchivedTask as ArchivedTaskData, Task } from '@/types/api';
 
 type Tab = 'task' | 'log' | 'reviews' | 'checks' | 'diff';
 
-export function ArchivedTask({ archive, id, tasks }: { archive: string; id: string; tasks: Task[] }) {
+export function ArchivedTask({ archive, id, tasks }: Readonly<{ archive: string; id: string; tasks: Task[] }>) {
   const api = useProject((s) => s.api);
   const [data, setData] = useState<ArchivedTaskData | null>(null);
   const [error, setError] = useState('');

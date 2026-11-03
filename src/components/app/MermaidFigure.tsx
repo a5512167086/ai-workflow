@@ -16,7 +16,7 @@ async function renderMermaid(source: string, dark: boolean): Promise<string> {
   return svg;
 }
 
-export function MermaidFigure({ source }: { source: string }) {
+export function MermaidFigure({ source }: Readonly<{ source: string }>) {
   const dark = useUi((s) => s.dark);
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,26 +37,26 @@ export function MermaidFigure({ source }: { source: string }) {
     try { await navigator.clipboard.writeText(source); toast.success('已複製圖表原始碼'); }
     catch { toast.error('無法複製，請展開原始碼自行選取'); }
   };
-  const download = (e: React.MouseEvent<HTMLAnchorElement>) => {
+  const download = () => {
     if (!svg) return;
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
-    e.currentTarget.href = url;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `architecture-${serial}.svg`;
+    link.click();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
+  let body: React.ReactNode = <p className="text-xs text-muted-foreground">正在繪製圖表…</p>;
+  if (error) body = <p className="text-xs text-muted-foreground">圖表無法預覽：{error}</p>;
+  else if (svg) body = <div ref={preview} className="overflow-auto [&_svg]:mx-auto [&_svg]:max-w-full" />;
 
   return (
     <figure className="my-2 rounded-md border bg-card p-2">
-      {error ? (
-        <p className="text-xs text-muted-foreground">圖表無法預覽：{error}</p>
-      ) : svg ? (
-        <div ref={preview} className="overflow-auto [&_svg]:mx-auto [&_svg]:max-w-full" />
-      ) : (
-        <p className="text-xs text-muted-foreground">正在繪製圖表…</p>
-      )}
+      {body}
       <figcaption className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>架構／流程圖</span>
         <Button type="button" size="sm" variant="outline" onClick={copy}>複製 Mermaid</Button>
-        {svg && <a className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium hover:bg-accent" href="#" download={`architecture-${serial}.svg`} onClick={download}>下載 SVG</a>}
+        {svg && <Button type="button" size="sm" variant="outline" onClick={download}>下載 SVG</Button>}
       </figcaption>
       <details className="mt-2" open={!!error}>
         <summary className="text-xs text-muted-foreground">Mermaid 原始碼</summary>

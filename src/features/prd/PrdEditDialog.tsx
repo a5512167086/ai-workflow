@@ -10,7 +10,7 @@ import { Notice } from '@/components/app/Page';
 import { errorMessage } from '@/lib/api';
 import { useProject } from '@/stores/project';
 
-export function PrdEditDialog({ onClose }: { onClose: () => void }) {
+export function PrdEditDialog({ onClose }: Readonly<{ onClose: () => void }>) {
   const snap = useProject((s) => s.snap)!;
   const api = useProject((s) => s.api);
   // 開啟當下的版本：儲存時帶上，避免覆蓋別的視窗改過的 PRD。

@@ -55,10 +55,13 @@ describe('架構圖', () => {
     render(<GraphPage />);
     const frame = await waitFor(() => { const el = document.querySelector('iframe'); if (!el?.contentWindow) throw new Error('no iframe'); return el; });
     const post = vi.spyOn(frame.contentWindow!, 'postMessage');
-    const fromFrame = (data: unknown) => fireEvent(window, new MessageEvent('message', { data, source: frame.contentWindow }));
+    const fromFrame = (data: unknown) => fireEvent(window, new MessageEvent('message', { data, source: frame.contentWindow, origin: 'null' }));
     fromFrame({ type: 'ai-workflow-graph-ready' });
     expect(post).toHaveBeenLastCalledWith({ type: 'ai-workflow-graph', dark: true, aside: undefined }, '*');
     fromFrame({ type: 'ai-workflow-graph-aside', width: 362.4 });
+    expect(localStorage.getItem('ai-workflow.graph.aside')).toBe('362');
+    // 同一個視窗但來源不是沙箱的不透明來源 "null"：不理會
+    fireEvent(window, new MessageEvent('message', { data: { type: 'ai-workflow-graph-aside', width: 777 }, source: frame.contentWindow, origin: 'https://evil.example' }));
     expect(localStorage.getItem('ai-workflow.graph.aside')).toBe('362');
     // 別的來源的訊息不理會
     fireEvent(window, new MessageEvent('message', { data: { type: 'ai-workflow-graph-aside', width: 999 } }));

@@ -23,17 +23,28 @@ export function savedText(session: UsageSession) {
   return session.terse ? `${saved}（精簡回覆）` : saved;
 }
 
-function windowDuration(minutes?: number) {
-  if (!minutes) return '';
-  return `（${minutes % 1440 === 0 ? minutes / 1440 + ' 天' : minutes % 60 === 0 ? minutes / 60 + ' 小時' : minutes + ' 分鐘'}視窗）`;
+const SESSION_STATUS: Record<string, string> = { running: '執行中', done: '完成' };
+
+function providerTitle(provider: { provider: string; runtime: string; distro?: string | null }): string {
+  const name = provider.provider === 'claude' ? 'Claude Code' : 'Codex';
+  const where = provider.distro ? provider.runtime + ' / ' + provider.distro : provider.runtime;
+  return `${name} · ${where}`;
 }
 
-function ProviderCard({ provider }: { provider: UsageProvider }) {
+function windowDuration(minutes?: number) {
+  if (!minutes) return '';
+  let span = `${minutes} 分鐘`;
+  if (minutes % 1440 === 0) span = `${minutes / 1440} 天`;
+  else if (minutes % 60 === 0) span = `${minutes / 60} 小時`;
+  return `（${span}視窗）`;
+}
+
+function ProviderCard({ provider }: Readonly<{ provider: UsageProvider }>) {
   const latest = provider.latest;
   const windows = provider.limits?.windows || [];
   const context = latest?.context;
   return (
-    <Panel title={`${provider.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${provider.runtime}${provider.distro ? ` / ${provider.distro}` : ''}`} bodyClassName="space-y-1.5 text-xs">
+    <Panel title={providerTitle(provider)} bodyClassName="space-y-1.5 text-xs">
       <p>本專案處理量：{tokenNumber(provider.tokens)} tokens</p>
       <p>最近執行：{latest?.label || '尚無紀錄'}{latest?.status === 'running' ? '（執行中）' : ''}</p>
       <p>本次輸入 {tokenNumber(latest?.tokens?.inputTokens)} ／輸出 {tokenNumber(latest?.tokens?.outputTokens)} tokens</p>
@@ -62,7 +73,7 @@ function ProviderCard({ provider }: { provider: UsageProvider }) {
   );
 }
 
-function SavingPanel({ usage }: { usage: UsageSnapshot }) {
+function SavingPanel({ usage }: Readonly<{ usage: UsageSnapshot }>) {
   const saving = usage.tokenSaving || {};
   const terse = Object.entries(saving.terse || {}).filter(([, on]) => on).length;
   const items: [string, string, boolean][] = [
@@ -161,7 +172,7 @@ export function UsagePage() {
                   <TableRow key={s.id || i}>
                     <TableCell>{s.label}</TableCell>
                     <TableCell>{s.provider} / {s.runtime}</TableCell>
-                    <TableCell>{s.status === 'running' ? '執行中' : s.status === 'done' ? '完成' : '失敗'}</TableCell>
+                    <TableCell>{SESSION_STATUS[s.status] ?? '失敗'}</TableCell>
                     <TableCell>{tokenNumber(s.tokens?.inputTokens)}</TableCell>
                     <TableCell>{tokenNumber(s.tokens?.outputTokens)}</TableCell>
                     <TableCell>{tokenNumber(s.tokens?.totalTokens)}</TableCell>

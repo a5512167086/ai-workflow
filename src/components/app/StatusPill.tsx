@@ -14,17 +14,17 @@ const TONES: Record<Tone, string> = {
   complete: 'text-ok bg-ok-soft [--dot:var(--ok)]',
 };
 
-export function StatusPill({ tone, children, className, label }: { tone: Tone; children: React.ReactNode; className?: string; label?: string }) {
+export function StatusPill({ tone, children, className, label }: Readonly<{ tone: Tone; children: React.ReactNode; className?: string; label?: string }>) {
   return (
-    <span role="status" aria-atomic="true" aria-label={label} className={cn('inline-flex items-center gap-1.5 rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap', TONES[tone], className)}>
+    <output aria-atomic="true" aria-label={label} className={cn('inline-flex items-center gap-1.5 rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap', TONES[tone], className)}>
       <i aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-[var(--dot)]" />
       <span>{children}</span>
-    </span>
+    </output>
   );
 }
 
 /** 小標籤（chip），例如 PRD 狀態、優先度、任務狀態。 */
-export function Chip({ tone = 'neutral', children, className, title }: { tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info' | 'review'; children: React.ReactNode; className?: string; title?: string }) {
+export function Chip({ tone = 'neutral', children, className, title }: Readonly<{ tone?: 'neutral' | 'ok' | 'warn' | 'bad' | 'info' | 'review'; children: React.ReactNode; className?: string; title?: string }>) {
   const tones = {
     neutral: 'bg-surface-2 text-muted-foreground border-border',
     ok: 'bg-ok-soft text-ok border-transparent',

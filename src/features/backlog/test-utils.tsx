@@ -11,7 +11,8 @@ import type { BacklogItem, RequirementsPayload, Snapshot } from '@/types/api';
 export const PID = '0123456789';
 
 export type Call = { method: string; path: string; body: unknown };
-export type Route = unknown | ((body: unknown, call: Call) => unknown);
+/** 固定的回應，或 (body, call) => 回應 的函式。 */
+export type Route = unknown;
 export type Routes = Record<string, Route>;
 
 /** jsdom 裡 react-resizable-panels 會把每個點都當成分隔線（矩形全是 0×0）而擋掉 click 的聚焦，所以先 focus 再打字。 */
@@ -27,7 +28,7 @@ export function renderApp(ui: ReactElement): RenderResult {
 
 export function makeSnapshot(over: Partial<Snapshot> = {}): Snapshot {
   return {
-    root: 'C:\\code\\my-app', dataDir: 'C:\\data', project: { id: PID, name: 'my-app' },
+    root: String.raw`C:\code\my-app`, dataDir: String.raw`C:\data`, project: { id: PID, name: 'my-app' },
     config: { mode: 'manual', max_concurrent_runs: 1, max_fix_rounds: 3, max_prd_rounds: 2, num_tasks: 0, branch_prefix: 'ai/', roles: { interviewer: 'claude', author: 'claude' }, models: {}, runtime: {} },
     runnerAlive: false, prdBusy: false, taskGenBusy: false, skillBusy: false, queue: null,
     prd: '', tasks: [], taskTag: '', taskRevision: '', taskReferences: [], usage: { measuredSessions: 0, unknownSessions: 0, providers: [], recent: [] },
@@ -51,7 +52,7 @@ export function emptyRequirements(): RequirementsPayload { return { session: nul
 /** 安裝假橋接：routes 依 `METHOD path` 給回應（函式可讀 body）；回傳呼叫紀錄。 */
 export function installBridge(routes: Routes) {
   const calls: Call[] = [];
-  const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+  const respond = (cmd: string, args?: Record<string, unknown>) => {
     if (cmd !== 'api') return null;
     const method = String(args?.method); const path = String(args?.path).replace(`/api/p/${PID}`, '/api');
     const call = { method, path, body: args?.body };
@@ -62,7 +63,9 @@ export function installBridge(routes: Routes) {
     const value = typeof hit === 'function' ? (hit as (b: unknown, c: Call) => unknown)(call.body, call) : hit;
     if (value instanceof Error) throw value;
     return value;
-  });
+  };
+  // 和真的 invoke 一樣回傳 Promise：同步丟出的錯誤也變成 rejected。
+  const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => Promise.resolve().then(() => respond(cmd, args)));
   return { invoke, calls };
 }
 

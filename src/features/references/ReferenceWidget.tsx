@@ -20,7 +20,7 @@ export { openReferenceDialog, ReferenceDialogHost } from '@/features/references/
 export { useReferenceInput } from '@/features/references/use-reference-input';
 export { ReferenceDropHost } from '@/features/references/ReferenceDropHost';
 
-export function ReferenceChips({ ids, remove, className }: { ids: string[]; remove?: (id: string) => void; className?: string }) {
+export function ReferenceChips({ ids, remove, className }: Readonly<{ ids: string[]; remove?: (id: string) => void; className?: string }>) {
   const catalog = useReferences((s) => s.catalog);
   if (!ids?.length) return null;
   return (
@@ -43,7 +43,7 @@ export function ReferenceChips({ ids, remove, className }: { ids: string[]; remo
   );
 }
 
-export function ReferenceWidget({ options, className }: { options: ReferenceOptions; className?: string }) {
+export function ReferenceWidget({ options, className }: Readonly<{ options: ReferenceOptions; className?: string }>) {
   const lock = options.lock;
   return (
     <div className={cn('flex flex-col gap-1.5', lock && 'opacity-90', className)} data-reference-widget={options.key || options.target}>

@@ -21,12 +21,15 @@ function useGraphFrame(frame: React.RefObject<HTMLIFrameElement | null>) {
   const dark = useUi((s) => s.dark);
   const send = useCallback(() => {
     const aside = Number(readStorage(ASIDE_KEY)) || undefined;
-    frame.current?.contentWindow?.postMessage({ type: 'ai-workflow-graph', dark, aside }, '*');
+    // 沙箱 iframe（沒有 allow-same-origin）的來源是不透明的 "null"，沒有可以指定的 targetOrigin，只能用 '*'；
+    // 傳的只有主題與側欄寬度，不含任何敏感資料。
+    frame.current?.contentWindow?.postMessage({ type: 'ai-workflow-graph', dark, aside }, '*'); // NOSONAR：不透明來源無法指定 targetOrigin，內容不敏感
   }, [frame, dark]);
   useEffect(() => { send(); }, [send]);
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (!frame.current || e.source !== frame.current.contentWindow) return;
+      // 只接受我們自己的沙箱 iframe：視窗是它、來源是沙箱的不透明來源 "null"。
+      if (e.origin !== 'null' || !frame.current || e.source !== frame.current.contentWindow) return;
       if (e.data?.type === 'ai-workflow-graph-ready') send();
       if (e.data?.type === 'ai-workflow-graph-aside' && typeof e.data.width === 'number') writeStorage(ASIDE_KEY, String(Math.round(e.data.width)));
     };
@@ -34,6 +37,15 @@ function useGraphFrame(frame: React.RefObject<HTMLIFrameElement | null>) {
     return () => window.removeEventListener('message', onMessage);
   }, [frame, send]);
   return send;
+}
+
+/** 標題下的一行說明：統計與建立時間；還沒有圖譜或讀取中時給提示。 */
+function graphSummary(graph: GraphSummary | null): string {
+  if (!graph) return '讀取中…';
+  const s = graph.stats;
+  if (!graph.exists || !s) return '還沒有建立專案圖譜：按「重新建立」，或在實作任務時自動建立';
+  const commit = graph.commit ? ' · commit ' + String(graph.commit).slice(0, 8) : '';
+  return `${s.files} 個檔案 · ${s.nodes} 個節點 · ${s.edges} 條關係 · ${s.communities} 個分群 · 建立於 ${usageTime(graph.builtAt)}${commit}`;
 }
 
 export function GraphPage() {
@@ -69,11 +81,8 @@ export function GraphPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const s = graph?.stats;
   const building = busy && status.startsWith('正在');
-  const summary = graph?.exists && s
-    ? `${s.files} 個檔案 · ${s.nodes} 個節點 · ${s.edges} 條關係 · ${s.communities} 個分群 · 建立於 ${usageTime(graph.builtAt)}${graph.commit ? ` · commit ${String(graph.commit).slice(0, 8)}` : ''}`
-    : graph ? '還沒有建立專案圖譜：按「重新建立」，或在實作任務時自動建立' : '讀取中…';
+  const summary = graphSummary(graph);
 
   return (
     <Page>

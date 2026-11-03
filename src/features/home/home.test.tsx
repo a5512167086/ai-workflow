@@ -40,7 +40,7 @@ describe('所有專案', () => {
 
   it('列出專案卡片與狀態，等你處理的專案排在最前面', async () => {
     renderHome();
-    await waitFor(() => expect(screen.getAllByTestId('project-card').length).toBe(3));
+    await waitFor(() => expect(screen.getAllByTestId('project-card')).toHaveLength(3));
     const cards = screen.getAllByTestId('project-card');
     // 第一張在「等你處理」區，是 api-server
     expect(within(cards[0]).getByText('api-server')).toBeInTheDocument();
@@ -55,7 +55,7 @@ describe('所有專案', () => {
   it('移除先確認，確認後才呼叫 /api/projects/remove', async () => {
     const user = userEvent.setup();
     renderHome();
-    await waitFor(() => expect(screen.getAllByTestId('project-card').length).toBe(3));
+    await waitFor(() => expect(screen.getAllByTestId('project-card')).toHaveLength(3));
     confirmMock.mockResolvedValueOnce(false);
     await user.click(screen.getByRole('button', { name: 'my-app 的更多動作' }));
     await user.click(await screen.findByRole('menuitem', { name: '從總覽移除' }));

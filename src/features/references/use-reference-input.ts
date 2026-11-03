@@ -38,7 +38,8 @@ export function useReferenceInput(ref: RefObject<HTMLTextAreaElement | null>, ge
       refs.setPending(key, true);
       try {
         const ids = [...options.ids];
-        for (const file of files) ids.push((await uploadReference(file)).id);
+        // 一次上傳一份：每份都要在後端建快照，依序做才不會同時佔用大量記憶體。
+        for (const file of files) ids.push((await uploadReference(file)).id); // NOSONAR：刻意依序上傳
         await saveReferenceSelection(options, ids);
       } catch (err) { toast.error(errorMessage(err)); }
       finally { useReferences.getState().setPending(key, false); }

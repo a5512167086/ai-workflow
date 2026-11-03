@@ -6,8 +6,13 @@ export function elapsedText(since?: string | null, now = Date.now()): string {
   const ms = since ? now - new Date(since).getTime() : Number.NaN;
   if (!Number.isFinite(ms) || ms < 0) return '';
   const s = Math.floor(ms / 1000);
-  return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${Math.floor(s / 3600)} 小時 ${Math.floor((s % 3600) / 60)} 分`;
+  if (s < 60) return `${s} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+  return `${Math.floor(s / 3600)} 小時 ${Math.floor((s % 3600) / 60)} 分`;
 }
+
+/** 只接受字串；其他型別（物件、undefined…）當成空字串，避免 String(物件) 變成 "[object Object]"。 */
+const textOf = (value: unknown): string => (typeof value === 'string' ? value : '');
 
 export const tokenNumber = (value: unknown) => (typeof value === 'number' ? value.toLocaleString('zh-TW') : '未知');
 export const usageTime = (value?: string | null) => (value ? new Date(value).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + '（台北）' : '未提供');
@@ -17,7 +22,7 @@ export const dateTime = (value?: string | null) => (value ? new Date(value).toLo
 
 /** 審查意見最後一個 VERDICT。 */
 export function verdictOf(text: unknown): string {
-  return [...String(text || '').matchAll(/VERDICT[\s*]*[:：][\s*]*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
+  return [...textOf(text).matchAll(/VERDICT[\s*]*[:：][\s*]*([A-Z_]+)/gi)].at(-1)?.[1].toUpperCase() || '';
 }
 /** Codex 有時用自己的 P0–P3：P0/P1 算必須修正，P2/P3 算建議（與後端 only_suggestions 相同）。 */
 export function reviewCounts(text: string) {
@@ -29,7 +34,7 @@ export function reviewCounts(text: string) {
 /** SKILL.md 最上面 YAML frontmatter 的頂層欄位（只為顯示，解析在後端）。 */
 export function skillFrontmatter(text: unknown): [string, string][] {
   // 逐行找開頭的 --- 與下一個 ---（不用跨行的正規表示式，避免大量回溯）。
-  const lines = String(text || '').replace(/^﻿/, '').split(/\r?\n/);
+  const lines = textOf(text).replace(/^﻿/, '').split(/\r?\n/);
   if (lines[0] !== '---') return [];
   const end = lines.indexOf('---', 1);
   if (end < 0) return [];
@@ -39,7 +44,11 @@ export function skillFrontmatter(text: unknown): [string, string][] {
     const key = /^[A-Za-z_][\w-]*:/.exec(line);
     const value = key ? line.slice(key[0].length).trimStart() : '';
     if (key) fields.push([key[0].slice(0, -1), /^[|>][-+]?$/.test(value) ? '' : value]);
-    else if (fields.length && line.trim() && line.trimStart() !== line) fields[fields.length - 1][1] = `${fields[fields.length - 1][1]} ${line.trim()}`.trim();
+    else if (fields.length && line.trim() && line.trimStart() !== line) {
+      // 縮排的下一行是上一個欄位的續行
+      const last = fields.at(-1)!;
+      last[1] = `${last[1]} ${line.trim()}`.trim();
+    }
   }
   return fields;
 }
@@ -47,7 +56,7 @@ export function skillFrontmatter(text: unknown): [string, string][] {
 /** 游標前面是不是訊息開頭的 `/技能` 片段（前面可以已經有其他 `/技能 `）；是就回傳要替換的範圍。 */
 export function skillCommandToken(text: string, caret: number): { start: number; end: number; query: string } | null {
   const before = text.slice(0, caret);
-  const match = before.match(/^\s*(?:\/[a-z0-9-]+\s+)*\/([a-z0-9-]*)$/);
+  const match = /^\s*(?:\/[a-z0-9-]+\s+)*\/([a-z0-9-]*)$/.exec(before);
   return match ? { start: before.length - match[1].length - 1, end: caret, query: match[1] } : null;
 }
 
@@ -132,8 +141,8 @@ export const isDesktop = () => typeof window !== 'undefined' && '__TAURI_INTERNA
  * 欄位還沒出現回傳 null；字串還沒結束就回傳目前為止的內容。處理 \n、\"、\\、\uXXXX 等跳脫。
  */
 export function partialJsonString(text: string, field: string): string | null {
-  const key = text.match(new RegExp(`"${field}"\\s*:\\s*"`));
-  if (!key || key.index === undefined) return null;
+  const key = new RegExp(String.raw`"${field}"\s*:\s*"`).exec(text);
+  if (key?.index === undefined) return null;
   let out = '';
   for (let i = key.index + key[0].length; i < text.length; i++) {
     const c = text[i];
@@ -145,7 +154,7 @@ export function partialJsonString(text: string, field: string): string | null {
     if (next === 'u') {
       const hex = text.slice(i + 2, i + 6);
       if (!/^[0-9a-fA-F]{4}$/.test(hex)) return out;
-      out += String.fromCharCode(parseInt(hex, 16));
+      out += String.fromCodePoint(Number.parseInt(hex, 16));
       i += 5;
     } else {
       out += simple[next] ?? next;

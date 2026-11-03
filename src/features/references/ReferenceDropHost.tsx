@@ -8,7 +8,7 @@ import { errorMessage } from '@/lib/api';
 import { importReference, referenceOptions, saveReferenceSelection, MAX_IMPORT_BATCH, type ReferenceType } from '@/features/references/options';
 import { isReferenceDialogOpen, importPathsIntoDialog } from '@/features/references/ReferenceDialog';
 
-const TYPES: ReferenceType[] = ['backlog-draft', 'feature', 'task', 'group', 'chat'];
+const TYPES = new Set<ReferenceType>(['backlog-draft', 'feature', 'task', 'group', 'chat']);
 
 /** 處理一次拖放（匯出給測試用）。ctx 由 data-reference-* 屬性提供：task 區域可帶 data-reference-task-id／status。 */
 export async function handleDrop(paths: string[], element: Element | null) {
@@ -16,7 +16,7 @@ export async function handleDrop(paths: string[], element: Element | null) {
   if (element?.closest('[data-skill-drop]')) { window.dispatchEvent(new CustomEvent('ai-workflow:import-skills', { detail: { paths } })); return; }
   const zone = element?.closest<HTMLElement>('[data-reference-drop]');
   const type = zone?.dataset.referenceDrop as ReferenceType | undefined;
-  if (!type || !TYPES.includes(type)) { toast('請將參考資料拖到需求、PRD、任務或聊天區域'); return; }
+  if (!type || !TYPES.has(type)) { toast('請將參考資料拖到需求、PRD、任務或聊天區域'); return; }
   const options = referenceOptions(type, {
     chatId: zone?.dataset.referenceChatId || null,
     taskId: zone?.dataset.referenceTaskId,
@@ -26,7 +26,8 @@ export async function handleDrop(paths: string[], element: Element | null) {
   if (options.lock) { toast.error(options.lock); return; }
   try {
     const ids = [...options.ids];
-    for (const path of paths.slice(0, MAX_IMPORT_BATCH)) ids.push((await importReference({ path })).id);
+    // 一次匯入一份：每份都要在後端建快照（最多數十 MB），依序做才不會同時佔用大量記憶體與磁碟。
+    for (const path of paths.slice(0, MAX_IMPORT_BATCH)) ids.push((await importReference({ path })).id); // NOSONAR：刻意依序匯入
     await saveReferenceSelection(options, [...new Set(ids)]);
     toast.success('已加入參考資料');
   } catch (err) { toast.error(errorMessage(err)); }

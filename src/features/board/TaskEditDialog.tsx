@@ -12,7 +12,7 @@ import { useProject } from '@/stores/project';
 import type { TaskDetail } from '@/types/api';
 import { EDIT_FIELDS, editableTask, fieldToText, textToField } from './board-logic';
 
-export function TaskEditDialog({ detail, open, onOpenChange, onSaved }: { detail: TaskDetail | null; open: boolean; onOpenChange: (open: boolean) => void; onSaved?: () => void }) {
+export function TaskEditDialog({ detail, open, onOpenChange, onSaved }: Readonly<{ detail: TaskDetail | null; open: boolean; onOpenChange: (open: boolean) => void; onSaved?: () => void }>) {
   const api = useProject((s) => s.api);
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -68,11 +68,9 @@ export function TaskEditDialog({ detail, open, onOpenChange, onSaved }: { detail
                       <SelectItem value="low">低</SelectItem>
                     </SelectContent>
                   </Select>
-                ) : type === 'input' || type === 'dependencies' ? (
-                  <Input id={id} value={value} onChange={(e) => set(e.target.value)} data-autofocus={key === 'title' || undefined} />
-                ) : (
-                  <Textarea id={id} rows={3} value={value} onChange={(e) => set(e.target.value)} />
-                )}
+                ) : null}
+                {(type === 'input' || type === 'dependencies') && <Input id={id} value={value} onChange={(e) => set(e.target.value)} data-autofocus={key === 'title' || undefined} />}
+                {type !== 'select' && type !== 'input' && type !== 'dependencies' && <Textarea id={id} rows={3} value={value} onChange={(e) => set(e.target.value)} />}
               </div>
             );
           })}

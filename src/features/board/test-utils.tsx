@@ -9,7 +9,7 @@ import type { Snapshot, TaskDetail } from '@/types/api';
 
 export function makeSnapshot(overrides: Partial<Snapshot> = {}, state: Partial<Snapshot['state']> = {}): Snapshot {
   return {
-    root: 'C:\\code\\my-app', dataDir: 'C:\\data', project: { id: '0123456789', name: 'my-app' },
+    root: String.raw`C:\code\my-app`, dataDir: String.raw`C:\data`, project: { id: '0123456789', name: 'my-app' },
     config: {
       mode: 'manual', max_concurrent_runs: 1, max_fix_rounds: 3, max_prd_rounds: 2, num_tasks: 0, branch_prefix: 'ai/', roles: {}, models: {}, runtime: {},
       feature: '測試功能', commands: { build: '', test: 'npm test', lint: '' }, context_files: [],
@@ -43,17 +43,19 @@ export function makeDetail(id: string, snap: Snapshot, extra: Partial<TaskDetail
 export type FakeApi = Api & { calls: { path: string; body: unknown }[] };
 
 /** 假 API：GET /api/task/<id> 回詳情、/api/state 回目前快照；其他 POST 記錄下來回 ok。 */
-export function fakeApi(handlers: Record<string, (body: unknown) => unknown | Promise<unknown>> = {}): FakeApi {
+export function fakeApi(handlers: Record<string, (body: unknown) => unknown> = {}): FakeApi {
   const calls: { path: string; body: unknown }[] = [];
-  const fn = (async (path: string, body?: unknown) => {
+  const respond = (path: string, body?: unknown) => {
     calls.push({ path, body });
     if (handlers[path]) return handlers[path](body);
     const snap = useProject.getState().snap!;
     if (path === '/api/state') return snap;
-    const task = path.match(/^\/api\/task\/(.+)$/);
+    const task = /^\/api\/task\/(.+)$/.exec(path);
     if (task) return makeDetail(task[1], snap);
     return { ok: true };
-  }) as FakeApi;
+  };
+  // 和真的 api 一樣回傳 Promise（處理函式回傳的 Promise 也會被攤平）。
+  const fn = ((path: string, body?: unknown) => Promise.resolve().then(() => respond(path, body))) as FakeApi;
   fn.calls = calls;
   return fn;
 }

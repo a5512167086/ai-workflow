@@ -46,8 +46,13 @@ const ROLE_PARENT: Partial<Record<Role, Role>> = { interviewer: 'author', task_p
 
 interface ModelDraft { roles: Partial<Record<Role, RoleChoice>>; models: Partial<Record<Role, Partial<Record<Provider, { model: string; effort: string }>>>> }
 
+/** 設定值轉成輸入框的文字：數字與字串照原樣，其他（沒設定）是空字串。 */
+function fieldText(value: unknown): string {
+  return typeof value === 'number' || typeof value === 'string' ? String(value) : '';
+}
+
 function draftFrom(config: GlobalConfig): ModelDraft {
-  const roles = { ...(config.roles || {}) } as ModelDraft['roles'];
+  const roles = { ...config.roles } as ModelDraft['roles'];
   const models = structuredClone(config.models || {}) as ModelDraft['models'];
   for (const [role, parent] of Object.entries(ROLE_PARENT) as [Role, Role][]) {
     roles[role] ??= roles[parent] || 'claude';
@@ -56,12 +61,12 @@ function draftFrom(config: GlobalConfig): ModelDraft {
   return { roles, models };
 }
 
-function SaveButton({ onClick, disabled, label = '儲存' }: { onClick: () => void; disabled?: boolean; label?: string }) {
+function SaveButton({ onClick, disabled, label = '儲存' }: Readonly<{ onClick: () => void; disabled?: boolean; label?: string }>) {
   return <Button size="sm" onClick={onClick} disabled={disabled}><Save className="size-3.5" />{label}</Button>;
 }
 
 /** 工作流程模式與全域同時執行上限。 */
-function WorkflowCard({ config, queue, onConfig, onQueue }: { config: GlobalConfig; queue: QueueSnapshot | null; onConfig: (c: GlobalConfig) => void; onQueue: (q: QueueSnapshot) => void }) {
+function WorkflowCard({ config, queue, onConfig, onQueue }: Readonly<{ config: GlobalConfig; queue: QueueSnapshot | null; onConfig: (c: GlobalConfig) => void; onQueue: (q: QueueSnapshot) => void }>) {
   const setMode = async (mode: string) => {
     if (!mode || mode === config.mode) return;
     try {
@@ -106,7 +111,7 @@ function WorkflowCard({ config, queue, onConfig, onQueue }: { config: GlobalConf
 }
 
 /** 九個角色排成 3×3 小卡：角色、AI、模型、推理強度。 */
-function RolesCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: GlobalConfig) => void }) {
+function RolesCard({ config, onConfig }: Readonly<{ config: GlobalConfig; onConfig: (c: GlobalConfig) => void }>) {
   const options = useModels((s) => s.options);
   const modelsError = useModels((s) => s.error);
   const loading = useModels((s) => s.loading);
@@ -188,7 +193,7 @@ function RolesCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: G
 }
 
 /** 節省 Token：4 個開關與精簡回覆的角色。 */
-function SavingCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: GlobalConfig) => void }) {
+function SavingCard({ config, onConfig }: Readonly<{ config: GlobalConfig; onConfig: (c: GlobalConfig) => void }>) {
   const fromConfig = useCallback((c: GlobalConfig): TokenSaving => {
     const s = c.token_saving || {};
     return {
@@ -235,8 +240,8 @@ function SavingCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: 
 }
 
 /** 流程參數：修正輪數、PRD 審查輪數、任務數、分支前綴。 */
-function LimitsCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: GlobalConfig) => void }) {
-  const fromConfig = (c: GlobalConfig) => Object.fromEntries(LIMIT_FIELDS.map(([k]) => [k, String(c[k] ?? '')])) as Record<string, string>;
+function LimitsCard({ config, onConfig }: Readonly<{ config: GlobalConfig; onConfig: (c: GlobalConfig) => void }>) {
+  const fromConfig = (c: GlobalConfig) => Object.fromEntries(LIMIT_FIELDS.map(([k]) => [k, fieldText(c[k])])) as Record<string, string>;
   const [draft, setDraft] = useState<Record<string, string>>(() => fromConfig(config));
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setDraft(fromConfig(config)); }, [config, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -266,7 +271,7 @@ function LimitsCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: 
 }
 
 /** CLI 執行環境與 doctor。 */
-function RuntimeCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c: GlobalConfig) => void }) {
+function RuntimeCard({ config, onConfig }: Readonly<{ config: GlobalConfig; onConfig: (c: GlobalConfig) => void }>) {
   const fromConfig = (c: GlobalConfig) => ({ claude: c.runtime?.claude || 'auto', codex: c.runtime?.codex || 'auto' });
   const [draft, setDraft] = useState(() => fromConfig(config));
   const [dirty, setDirty] = useState(false);
@@ -306,13 +311,14 @@ function RuntimeCard({ config, onConfig }: { config: GlobalConfig; onConfig: (c:
         <SaveButton onClick={() => void save()} disabled={!dirty} />
         <Button size="sm" variant="outline" onClick={() => void runDoctor()} disabled={checking}><Stethoscope className="size-3.5" />檢查 CLI（doctor）</Button>
       </div>
-      {doctor !== null && <pre role="status" className="mono selectable max-h-72 overflow-auto rounded-md border bg-surface-2 p-3 text-xs whitespace-pre-wrap">{doctor}</pre>}
+      {doctor !== null && <pre aria-live="polite" className="mono selectable max-h-72 overflow-auto rounded-md border bg-surface-2 p-3 text-xs whitespace-pre-wrap">{doctor}</pre>}
     </Panel>
   );
 }
 
-function ConfigCard({ home, text, config }: { home: string; text?: string; config: GlobalConfig }) {
-  const path = home ? `${home}${home.includes('\\') ? '\\' : '/'}config.json` : 'config.json';
+function ConfigCard({ home, text, config }: Readonly<{ home: string; text?: string; config: GlobalConfig }>) {
+  const separator = home.includes('\\') ? '\\' : '/';
+  const path = home ? `${home}${separator}config.json` : 'config.json';
   return (
     <Collapsible className="xl:col-span-2 rounded-lg border bg-card">
       <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 px-3 py-2 text-left">

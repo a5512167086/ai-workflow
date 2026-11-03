@@ -39,7 +39,7 @@ function makeComponents(streaming: boolean): ComponentProps<typeof ReactMarkdown
 const components = makeComponents(false);
 const streamingComponents = makeComponents(true);
 
-export function Markdown({ text, className, small, streaming }: { text: string; className?: string; small?: boolean; streaming?: boolean }) {
+export function Markdown({ text, className, small, streaming }: Readonly<{ text: string; className?: string; small?: boolean; streaming?: boolean }>) {
   return (
     <div className={cn('md selectable', small && 'md-sm', className)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={streaming ? streamingComponents : components} skipHtml>

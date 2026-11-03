@@ -41,7 +41,7 @@ describe('ModelPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith('opus');
     expect(input).toHaveValue('opus');
     await act(async () => { fireEvent.click(input); });
-    await act(async () => { fireEvent.click(screen.getByText('Sonnet 5.5')); });
+    await act(async () => { fireEvent.mouseDown(screen.getByText('Sonnet 5.5')); });
     expect(onChange).toHaveBeenLastCalledWith('sonnet');
   });
 

@@ -22,7 +22,13 @@ import type { ProjectSummary } from '@/types/api';
 
 interface AddResult { needs_init?: boolean; path?: string; project?: { id: string; name: string } }
 
-function ProjectCard({ project, onRemove }: { project: ProjectSummary; onRemove: (p: ProjectSummary) => void }) {
+/** 總覽標題下的說明：專案數，有等你處理的就一起寫出來。 */
+function overviewDescription(total: number, attention: number): string | undefined {
+  if (!total) return undefined;
+  return attention ? `${total} 個專案・${attention} 個等你處理` : `${total} 個專案`;
+}
+
+function ProjectCard({ project, onRemove }: Readonly<{ project: ProjectSummary; onRemove: (p: ProjectSummary) => void }>) {
   const navigate = useNavigate();
   const [label, tone] = PROJECT_STATUS[project.status] || [project.status, 'idle'];
   const pct = project.progress?.total ? Math.round((project.progress.done / project.progress.total) * 100) : 0;
@@ -80,7 +86,7 @@ function ProjectCard({ project, onRemove }: { project: ProjectSummary; onRemove:
   );
 }
 
-function AddProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function AddProjectDialog({ open, onOpenChange }: Readonly<{ open: boolean; onOpenChange: (open: boolean) => void }>) {
   const [path, setPath] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -174,7 +180,7 @@ export function HomePage() {
   const attention = projects.filter((p) => p.attention);
   return (
     <Page>
-      <PageHeader title="所有專案" description={projects.length ? `${projects.length} 個專案${attention.length ? `・${attention.length} 個等你處理` : ''}` : undefined} actions={<Button onClick={() => setAddOpen(true)}><Plus className="size-4" />加入專案</Button>} />
+      <PageHeader title="所有專案" description={overviewDescription(projects.length, attention.length)} actions={<Button onClick={() => setAddOpen(true)}><Plus className="size-4" />加入專案</Button>} />
       <PageBody className="flex flex-col gap-5">
         {error && <Hint role="alert" className="text-danger">{error}</Hint>}
         {!loaded && !error && <Loading label="讀取專案…" />}

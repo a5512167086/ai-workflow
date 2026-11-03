@@ -5,36 +5,47 @@ import { useLayoutEffect, useMemo, useRef } from 'react';
 import { parseLog, segmentLines, groupKey, type LogGroup, type LogLine } from '@/lib/log-parse';
 import { PROVIDER_LABEL } from '@/lib/constants';
 import { cn } from '@/lib/utils';
+import { withKeys } from '@/lib/keys';
 import { useThrottled } from '@/hooks/use-throttled';
 import { TypingCursor } from '@/components/app/StreamingReply';
 
-function LiveText({ text }: { text: string }) {
+function LiveText({ text }: Readonly<{ text: string }>) {
   return <div className="whitespace-pre-wrap break-words py-0.5 text-xs" aria-live="polite">{text}<TypingCursor /></div>;
 }
 
 const STATUS_ICON = { running: '●', done: '✓', error: '✕' } as const;
 const STATUS_TEXT = { running: '執行中', done: '完成', error: '失敗' } as const;
 
-function Lines({ lines }: { lines: LogLine[] }) {
+function Lines({ lines }: Readonly<{ lines: LogLine[] }>) {
   if (!lines.length) return <p className="text-xs text-muted-foreground">（沒有輸出）</p>;
   return (
     <>
-      {segmentLines(lines).map((seg, i) => seg.kind === 'tool' ? (
-        <div key={i} className="mono flex gap-2 py-px text-xs"><span className="shrink-0 font-medium text-info">{seg.name}</span><span className="min-w-0 truncate text-muted-foreground" title={seg.arg}>{seg.arg}</span></div>
+      {withKeys(segmentLines(lines), 'seg-').map(({ key, item: seg }) => (seg.kind === 'tool' ? (
+        <div key={key} className="mono flex gap-2 py-px text-xs"><span className="shrink-0 font-medium text-info">{seg.name}</span><span className="min-w-0 truncate text-muted-foreground" title={seg.arg}>{seg.arg}</span></div>
       ) : (
-        <div key={i} className={cn('whitespace-pre-wrap break-words py-0.5 text-xs', seg.warn && 'text-warn')}>{seg.text}</div>
-      ))}
+        <div key={key} className={cn('whitespace-pre-wrap break-words py-0.5 text-xs', seg.warn && 'text-warn')}>{seg.text}</div>
+      )))}
     </>
   );
 }
 
-function Group({ item, open, onToggle, live }: { item: LogGroup; open: boolean; onToggle: (open: boolean) => void; live?: string }) {
+const STATUS_CLASS = { running: 'animate-pulse text-info', done: 'text-ok', error: 'text-danger' } as const;
+
+/** 區塊右邊的摘要：結果、工具呼叫數、耗時（執行中就寫執行中）、時間。 */
+function groupMeta(item: LogGroup): string {
   const tools = item.lines.filter((l) => l.text.startsWith('🔧')).length;
-  const meta = [item.result, tools ? `${tools} 個工具呼叫` : '', item.secs != null ? `${item.secs}s` : item.status === 'running' ? '執行中' : '', item.time].filter(Boolean).join(' · ');
+  let duration = '';
+  if (item.secs != null) duration = `${item.secs}s`;
+  else if (item.status === 'running') duration = '執行中';
+  return [item.result, tools ? `${tools} 個工具呼叫` : '', duration, item.time].filter(Boolean).join(' · ');
+}
+
+function Group({ item, open, onToggle, live }: Readonly<{ item: LogGroup; open: boolean; onToggle: (open: boolean) => void; live?: string }>) {
+  const meta = groupMeta(item);
   return (
     <details open={open} className={cn('mb-1 rounded-md border bg-card', item.status === 'error' && 'border-danger/50')} onToggle={(e) => { const next = (e.currentTarget as HTMLDetailsElement).open; if (next !== open) onToggle(next); }}>
       <summary className="flex cursor-pointer items-center gap-2 px-2 py-1 text-xs select-none" aria-label={`${item.title}，${STATUS_TEXT[item.status]}`}>
-        <span aria-hidden="true" className={cn('w-3 text-center', item.status === 'running' ? 'animate-pulse text-info' : item.status === 'done' ? 'text-ok' : 'text-danger')}>{STATUS_ICON[item.status]}</span>
+        <span aria-hidden="true" className={cn('w-3 text-center', STATUS_CLASS[item.status])}>{STATUS_ICON[item.status]}</span>
         <span className="min-w-0 truncate font-medium">{item.title}</span>
         {item.kind === 'agent' ? (
           <>
@@ -55,7 +66,7 @@ function Group({ item, open, onToggle, live }: { item: LogGroup; open: boolean; 
   );
 }
 
-export function LogTree({ text, className, openAll, live: liveProp }: { text: string | null | undefined; className?: string; openAll?: boolean; live?: string }) {
+export function LogTree({ text, className, openAll, live: liveProp }: Readonly<{ text: string | null | undefined; className?: string; openAll?: boolean; live?: string }>) {
   const live = useThrottled(liveProp || '');
   const box = useRef<HTMLDivElement>(null);
   // 使用者自己切換過的區塊：key → open（程式設定的不算）。
@@ -88,7 +99,7 @@ export function LogTree({ text, className, openAll, live: liveProp }: { text: st
   items.forEach((it, i) => {
     if (it.kind === 'line') { stray.push(it); return; }
     flush();
-    if (it.kind === 'header') { out.push(<div key={`h-${i}`} className="mt-2 mb-1 border-b pb-0.5 text-xs font-semibold">{it.text}</div>); return; }
+    if (it.kind === 'header') { out.push(<div key={`h-${out.length}`} className="mt-2 mb-1 border-b pb-0.5 text-xs font-semibold">{it.text}</div>); return; }
     const key = groupKey(it, i);
     const open = toggled.current.has(key) ? !!toggled.current.get(key) : it.status === 'running';
     out.push(<Group key={key} item={it} open={open || i === liveAt} live={i === liveAt ? live : undefined} onToggle={(o) => { toggled.current.set(key, o); }} />);

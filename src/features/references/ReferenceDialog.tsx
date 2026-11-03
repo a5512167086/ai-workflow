@@ -12,7 +12,7 @@ import { useReferences } from '@/stores/references';
 import { importReference, uploadReference, saveReferenceSelection, MAX_IMPORT_BATCH, MAX_REFERENCES, type ReferenceOptions } from '@/features/references/options';
 import type { ReferenceItem } from '@/types/api';
 
-interface DialogRequest { options: ReferenceOptions; onSaved?: () => void }
+interface DialogRequest { options: ReferenceOptions; onSaved?: () => void | Promise<void> }
 
 type Listener = (req: DialogRequest | null) => void;
 const listeners = new Set<Listener>();
@@ -24,7 +24,7 @@ export function isReferenceDialogOpen() { return !!current; }
 export function importPathsIntoDialog(paths: string[]) { importPaths?.(paths); }
 
 /** 開啟選擇視窗；已經開著就不重複開。 */
-export function openReferenceDialog(options: ReferenceOptions, onSaved?: () => void) {
+export function openReferenceDialog(options: ReferenceOptions, onSaved?: () => void | Promise<void>) {
   if (current) return;
   current = { options, onSaved };
   for (const fn of listeners) fn(current);
@@ -39,7 +39,24 @@ export function ReferenceDialogHost() {
   return <ReferenceDialog key={req.options.title + req.options.key} req={req} close={() => { current = null; importPaths = null; setReq(null); }} />;
 }
 
-function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void }) {
+/** Set 加入或移除一個值，回傳新的 Set。 */
+function withMember(set: Set<string>, id: string, on: boolean): Set<string> {
+  const next = new Set(set);
+  if (on) next.add(id);
+  else next.delete(id);
+  return next;
+}
+
+/** 清單裡每份參考資料的第二行：種類、檔案數、大小、排除數、來源與警告。 */
+function referenceSummary(item: ReferenceItem): string {
+  const parts = [item.kind === 'folder' ? '資料夾' : '檔案', `${item.fileCount} 檔`, `${Math.ceil(item.totalBytes / 1024)} KB`];
+  if (item.excludedCount) parts.push(`排除 ${item.excludedCount} 項`);
+  const lines = [parts.join(' · '), item.sourcePath];
+  if (item.warnings?.length) lines.push(item.warnings.join('\n'));
+  return lines.join('\n');
+}
+
+function ReferenceDialog({ req, close }: Readonly<{ req: DialogRequest; close: () => void }>) {
   const { options } = req;
   const catalog = useReferences((s) => s.catalog);
   const api = useProject((s) => s.api);
@@ -60,7 +77,8 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
     const errors: string[] = []; let count = 0;
     const added = new Set<string>();
     for (const job of jobs.slice(0, MAX_IMPORT_BATCH)) {
-      try { const item = await job(); added.add(item.id); count++; } catch (err) { errors.push(errorMessage(err)); }
+      // 一次建一份快照（每份可能數十 MB），依序做才不會同時佔用大量記憶體與磁碟。
+      try { const item = await job(); added.add(item.id); count++; } catch (err) { errors.push(errorMessage(err)); } // NOSONAR：刻意依序匯入
     }
     if (jobs.length > MAX_IMPORT_BATCH) errors.push(`一次最多匯入 ${MAX_IMPORT_BATCH} 項，其餘請再次加入`);
     setChosen((prev) => new Set([...prev, ...added]));
@@ -113,16 +131,16 @@ function ReferenceDialog({ req, close }: { req: DialogRequest; close: () => void
           <Button type="button" variant="outline" disabled={importing} onClick={addPath}>加入路徑</Button>
         </div>
         <Hint>單檔 20 MB；每份資料夾 64 MB／2000 檔。資料夾會排除 .git、node_modules、建置產物、.env、金鑰與連結。其他格式提供原始快照，能否解析取決於 CLI 工具。</Hint>
-        {status && <p role="status" className="whitespace-pre-line text-xs text-foreground">{status}</p>}
+        {status && <output className="block whitespace-pre-line text-xs text-foreground">{status}</output>}
         <div className="min-h-0 flex-1 overflow-auto rounded-md border" aria-label="已加入的參考資料">
           {!items.length && <p className="p-3 text-xs text-muted-foreground">尚未加入參考資料</p>}
           {items.map((item) => (
             <label key={item.id} className="flex cursor-pointer items-start gap-2 border-b px-3 py-2 text-xs last:border-b-0 hover:bg-accent/50">
-              <Checkbox className="mt-0.5" checked={chosen.has(item.id)} disabled={importing} aria-label={item.name} onCheckedChange={(on) => setChosen((prev) => { const next = new Set(prev); if (on) next.add(item.id); else next.delete(item.id); return next; })} />
+              <Checkbox className="mt-0.5" checked={chosen.has(item.id)} disabled={importing} aria-label={item.name} onCheckedChange={(on) => setChosen((prev) => withMember(prev, item.id, on === true))} />
               <span className="min-w-0 flex-1">
                 <b className="block truncate">{item.name}</b>
                 <small className="block whitespace-pre-line text-muted-foreground">
-                  {`${item.kind === 'folder' ? '資料夾' : '檔案'} · ${item.fileCount} 檔 · ${Math.ceil(item.totalBytes / 1024)} KB${item.excludedCount ? ` · 排除 ${item.excludedCount} 項` : ''}\n${item.sourcePath}${item.warnings?.length ? `\n${item.warnings.join('；')}` : ''}`}
+                  {referenceSummary(item)}
                 </small>
               </span>
             </label>

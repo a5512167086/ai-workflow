@@ -39,11 +39,11 @@ export function openPopup(input: HTMLElement, rows: PopupRow[], choose: (index: 
   return popup;
 }
 
-const NAV_KEYS = ['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'];
+const NAV_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab']);
 
 /** 鍵盤操作：回傳 true 表示事件已處理（呼叫端要 preventDefault 與 stopImmediatePropagation）。 */
 export function popupKeydown(popup: Popup | null, event: KeyboardEvent, choose: (index: number) => void, hide: () => void): boolean {
-  if (!popup || event.isComposing || !NAV_KEYS.includes(event.key)) return false;
+  if (!popup || event.isComposing || !NAV_KEYS.has(event.key)) return false;
   if (event.key === 'Escape') hide();
   else if (event.key === 'Enter' || event.key === 'Tab') choose(popup.cursor);
   else popup.move(event.key === 'ArrowDown' ? 1 : -1);

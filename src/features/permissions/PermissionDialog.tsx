@@ -1,6 +1,6 @@
 // AI 要求的工具權限：流程執行中 CLI 想跑沒有預先允許的指令時，跳出允許／拒絕的對話框。
 // Esc 與「稍後決定」只是暫時關掉，不算拒絕；暫時關掉後右下角留一條提示可再打開。
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -31,13 +31,17 @@ export function permissionRuleText(entry: PermissionEntry): string {
 export function PermissionDialog() {
   const waiting = useProject((s) => s.snap?.permissions) || [];
   const api = useProject((s) => s.api);
-  const [, bump] = useState(0);
+  // 「稍後決定」記在模組層的 later；version 變了才重新挑下一個要問的請求。
+  const [version, bump] = useState(0);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const next = waiting.find((entry) => !later.has(entry.id)) || null;
+  const next = useMemo(() => waiting.find((entry) => !later.has(entry.id)) || null, [waiting, version]);
   useEffect(() => { setReason(''); setError(''); setBusy(false); }, [next?.id]);
-  const dismiss = () => { if (next) later.add(next.id); bump((n) => n + 1); };
+  const dismiss = () => {
+    if (next) later.add(next.id);
+    bump((n) => n + 1);
+  };
   const answer = async (decision: 'allow' | 'allow_session' | 'deny') => {
     if (!next) return;
     setBusy(true); setError('');
@@ -51,7 +55,7 @@ export function PermissionDialog() {
   if (!next) {
     if (!waiting.length) return null;
     return (
-      <div role="status" className="fixed bottom-8 right-3 z-40 flex items-center gap-3 rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
+      <div aria-live="polite" className="fixed bottom-8 right-3 z-40 flex items-center gap-3 rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
         <span>AI 等待你允許 {waiting.length} 個操作</span>
         <Button type="button" size="sm" onClick={() => { later.clear(); bump((n) => n + 1); }}>檢視</Button>
       </div>

@@ -13,14 +13,12 @@ interface Bridge {
 let bridge: Promise<Bridge> | null = null;
 
 function loadBridge(): Promise<Bridge> {
-  if (!bridge) {
-    bridge = inTauri
-      ? Promise.all([import('@tauri-apps/api/core'), import('@tauri-apps/api/event')]).then(([core, event]) => ({
-        invoke: <T,>(cmd: string, args?: Record<string, unknown>) => core.invoke<T>(cmd, args),
-        listen: <T,>(name: string, handler: Handler<T>) => event.listen<T>(name, (e) => handler(e.payload)),
-      }))
-      : import('@/dev/mock').then((m) => m.mockBridge as Bridge);
-  }
+  bridge ??= inTauri
+    ? Promise.all([import('@tauri-apps/api/core'), import('@tauri-apps/api/event')]).then(([core, event]) => ({
+      invoke: <T,>(cmd: string, args?: Record<string, unknown>) => core.invoke<T>(cmd, args),
+      listen: <T,>(name: string, handler: Handler<T>) => event.listen<T>(name, (e) => handler(e.payload)),
+    }))
+    : import('@/dev/mock').then((m) => m.mockBridge as Bridge);
   return bridge;
 }
 

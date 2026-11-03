@@ -5,7 +5,7 @@ import { Markdown } from '@/components/app/Markdown';
 import { useThrottled } from '@/hooks/use-throttled';
 import { cn } from '@/lib/utils';
 
-export function TypingCursor({ className }: { className?: string }) {
+export function TypingCursor({ className }: Readonly<{ className?: string }>) {
   return <span aria-hidden="true" className={cn('ml-0.5 inline-block h-[1em] w-[0.5em] translate-y-[0.15em] animate-pulse rounded-[1px] bg-primary/70', className)} />;
 }
 
@@ -18,7 +18,7 @@ function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function StreamingText({ text, className, small }: { text: string; className?: string; small?: boolean }) {
+export function StreamingText({ text, className, small }: Readonly<{ text: string; className?: string; small?: boolean }>) {
   const shown = useThrottled(text);
   const box = useRef<HTMLDivElement>(null);
   const prevHeight = useRef(0);

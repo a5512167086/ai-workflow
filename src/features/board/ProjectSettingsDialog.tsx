@@ -17,7 +17,7 @@ const COMMANDS: ['build' | 'test' | 'lint', string][] = [
   ['lint', '留空：自動偵測（例如 npm run lint）'],
 ];
 
-export function ProjectSettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ProjectSettingsDialog({ open, onOpenChange }: Readonly<{ open: boolean; onOpenChange: (open: boolean) => void }>) {
   const snap = useProject((s) => s.snap);
   const api = useProject((s) => s.api);
   const [commands, setCommands] = useState<Record<string, string>>({});

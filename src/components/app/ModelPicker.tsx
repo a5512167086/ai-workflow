@@ -17,7 +17,7 @@ export interface ModelPickerProps {
   disabled?: boolean;
 }
 
-export function ModelPicker({ provider, value, onChange, placeholder, className, disabled, ...rest }: ModelPickerProps) {
+export function ModelPicker({ provider, value, onChange, placeholder, className, disabled, ...rest }: Readonly<ModelPickerProps>) {
   const options = useModels((s) => s.options);
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState(false); // 剛打開時列出全部，開始輸入才篩選
@@ -82,8 +82,7 @@ export function ModelPicker({ provider, value, onChange, placeholder, className,
               role="option"
               aria-selected={m.id === value}
               className={cn('cursor-pointer rounded px-2 py-1 text-xs hover:bg-accent', i === active && 'bg-accent', m.id === value && 'font-semibold')}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => choose(m.id)}
+              onMouseDown={(e) => { e.preventDefault(); choose(m.id); }}
             >
               <div className="flex items-baseline gap-2"><b>{m.name}</b>{m.id && <code className="mono text-[11px] text-muted-foreground">{m.id}</code>}</div>
               {m.description && <small className="block text-muted-foreground">{m.description}</small>}

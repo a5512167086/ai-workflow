@@ -81,7 +81,8 @@ export interface Task extends Loose {
   parent?: Task;
 }
 export interface TaskState extends Loose {
-  phase?: 'implementing' | 'reviewing' | 'awaiting_test' | 'done' | 'stuck' | string;
+  /** implementing、reviewing、awaiting_test、done、stuck，或之後新增的階段。 */
+  phase?: string;
   step?: string;
   fix_round?: number;
   attempts?: number;
@@ -172,7 +173,7 @@ export interface BacklogItem extends Loose {
 }
 export interface BacklogPayload { items: BacklogItem[]; path: string }
 
-export interface ChatMessage extends Loose { id?: string; role: 'user' | 'assistant' | string; text: string; at?: string; provider?: string; references?: string[] }
+export interface ChatMessage extends Loose { id?: string; /** user、assistant，或其他角色。 */ role: string; text: string; at?: string; provider?: string; references?: string[] }
 export type ChatStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 export interface ChatSummary extends Loose { id: string; title?: string; status: ChatStatus; updated_at?: string; kind?: string }
 export interface ChatSession extends ChatSummary {
@@ -183,7 +184,7 @@ export interface ChatSession extends ChatSummary {
 export interface RequirementsPayload { session: ChatSession | null; confirmed?: boolean; stale?: boolean }
 
 export interface ReferenceItem extends Loose {
-  id: string; name: string; kind: 'file' | 'folder' | string; sourcePath: string; fileCount: number; totalBytes: number; excludedCount?: number; warnings?: string[];
+  id: string; name: string; /** file 或 folder。 */ kind: string; sourcePath: string; fileCount: number; totalBytes: number; excludedCount?: number; warnings?: string[];
 }
 export interface ReferenceSuggestion extends Loose { id?: string; name: string; kind?: string; path?: string }
 

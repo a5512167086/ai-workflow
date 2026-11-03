@@ -1,5 +1,5 @@
 // 品牌標誌：兩個循環箭頭包住一串流程節點（loop ＋ flow）。
-export function Logo({ className }: { className?: string }) {
+export function Logo({ className }: Readonly<{ className?: string }>) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4.5 10a8 8 0 0 1 14.2-3" />

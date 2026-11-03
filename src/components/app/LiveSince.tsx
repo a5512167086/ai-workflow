@@ -14,7 +14,7 @@ export function useElapsed(since?: string | null) {
   return since ? elapsedText(since, now) : '';
 }
 
-export function LiveSince({ label, since, className, role = 'status' }: { label: string; since?: string | null; className?: string; role?: string }) {
+export function LiveSince({ label, since, className, role = 'status' }: Readonly<{ label: string; since?: string | null; className?: string; role?: string }>) {
   const elapsed = useElapsed(since);
   if (!label) return null;
   return (
