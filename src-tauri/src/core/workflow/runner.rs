@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::core::agents::{combine_reviews, run_agent, run_reviews, AgentOpts};
+use crate::core::agents::{combine_reviews, only_suggestions, run_agent, run_reviews, AgentOpts};
 use crate::core::archive::archive_tasks;
 use crate::core::backlog::update_item;
 use crate::core::config::{cfg_str, load_config};
@@ -123,13 +123,13 @@ fn skills_for(cfg: &Value, stage: &str, task: &Value) -> Vec<String> {
 }
 
 /// 程式碼審查的 prompt 與節省紀錄。review_diff_filter：lockfile 與產生檔只留檔名（比較截斷後實際會送出的長度）。
-fn review_prompt(cfg: &Value, task: &Value, diff: &str, summary: &str) -> (String, Vec<Value>) {
+fn review_prompt(cfg: &Value, task: &Value, diff: &str, summary: &str, previous: &str) -> (String, Vec<Value>) {
     if !saving_on(cfg, "review_diff_filter") {
-        return (code_review_prompt(task, diff, summary), vec![]);
+        return (code_review_prompt(task, diff, summary, previous), vec![]);
     }
     let (filtered, skipped) = filter_review_diff(diff);
     let savings = if skipped.is_empty() { vec![] } else { saved("review_diff_filter", &clip(diff, MAX_DIFF_CHARS), &clip(&filtered, MAX_DIFF_CHARS)).into_iter().collect() };
-    (code_review_prompt(task, &filtered, summary), savings)
+    (code_review_prompt(task, &filtered, summary, previous), savings)
 }
 
 /// run_agent 的捷徑：角色換成 cfg.roles 裡的 provider。
@@ -146,6 +146,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
     let Some(task) = tasks::find_task(root, id)? else { return Err(AppError::new(format!("tasks.json 找不到任務 {id}")).into()) };
     let dir = task_dir(root, id)?;
     let prev = read_state(root)["tasks"][id].clone();
+    let accepted = verify_only && prev["review_override"] == true;
     if !verify_only {
         // 新的一次嘗試：清掉上一次的審查與驗證紀錄，避免 UI 顯示過期內容（log 保留）。
         for entry in fs::read_dir(&dir).map_err(AppError::from)? {
@@ -163,7 +164,7 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         for (k, v) in [
             ("title", json!(title)), ("phase", json!("implementing")), ("step", json!(if verify_only { "重新驗證" } else { "實作中" })),
             ("fix_round", json!(0)), ("attempts", json!(attempts)), ("base_tree", json!(base_tree)), ("started_at", json!(now_iso())),
-            ("finished_at", Value::Null), ("error", json!("")), ("review_verdict", Value::Null), ("last_check_ok", Value::Null),
+            ("finished_at", Value::Null), ("error", json!("")), ("review_verdict", Value::Null), ("last_check_ok", Value::Null), ("review_override", Value::Null),
         ] {
             t[k] = v;
         }
@@ -174,6 +175,8 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
 
     let mut notes = String::new();
     let mut implement_denied: Vec<String> = Vec::new();
+    // 上一輪的審查意見與修正者的回覆，下一次審查會看到。
+    let mut previous = String::new();
     if !verify_only {
         let (implement, implement_saved) = implement_prompt(root, cfg, &task);
         let impl_ = agent(root, cfg, "implementer", implement, true, scope, &format!("實作任務 {id}"), "implement", Some(skills_for(cfg, "implement", &task)), implement_saved)?;
@@ -206,6 +209,11 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
             continue;
         }
 
+        if accepted {
+            append_log(root, scope, "使用者接受目前結果：驗證通過，不再送審查");
+            set_task(root, id, json!({ "review_verdict": "ACCEPTED", "review_verdicts": {} }))?;
+            break;
+        }
         set_task(root, id, json!({ "phase": "reviewing", "step": "程式碼審查中" }))?;
         tasks::set_status(root, id, "review")?;
         let diff = git::diff_trees(root, &base_tree, &git::snapshot_tree(root)?)?;
@@ -217,11 +225,17 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         let summary = if results.is_empty() { "- 未設定驗證指令".to_string() } else { results.iter().map(|r| format!("- {}: PASS", r.name)).collect::<Vec<_>>().join("\n") };
         let shown = if diff.is_empty() { "（沒有任何變更）" } else { &diff };
         let label = format!("程式碼審查 第 {} 次", round + 1);
-        let (prompt, review_saved) = review_prompt(cfg, &task, shown, &summary);
+        let (prompt, review_saved) = review_prompt(cfg, &task, shown, &summary, &previous);
         let reviews = run_reviews(AgentOpts {
             root, cfg, provider: "", prompt, write: false, scope, label: &label,
             stage: Some("code_review"), skills: Some(skills_for(cfg, "code_review", &task)), role: Some("code_reviewer"), saved: review_saved,
         }, &["PASS"]).map_err(|e| TaskError::Stuck(e.message))?;
+        let mut reviews = reviews;
+        for r in reviews.iter_mut().filter(|r| !r.pass && only_suggestions(&r.text)) {
+            append_log(root, scope, "審查意見只有 [建議]，沒有 [必須修正]：視為通過");
+            r.pass = true;
+            r.verdict = "PASS".into();
+        }
         // 雙人審查時每個 AI 一個檔案（review-<n>-<ai>.md），兩份都 PASS 才算通過。
         let mut verdicts = json!({});
         for r in &reviews {
@@ -240,11 +254,13 @@ fn run_task(root: &Path, cfg: &Value, id: &str, verify_only: bool) -> std::resul
         }
         round += 1;
         set_task(root, id, json!({ "phase": "implementing", "step": format!("處理審查意見（第 {round} 輪）"), "fix_round": round }))?;
-        let fix = agent(root, cfg, "fixer", fix_review_prompt(root, cfg, &task, &combine_reviews(&reviews), round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
+        let combined = combine_reviews(&reviews);
+        let fix = agent(root, cfg, "fixer", fix_review_prompt(root, cfg, &task, &combined, round), true, scope, &format!("處理審查意見 第 {round} 輪"), "fix", Some(skills_for(cfg, "fix", &task)), vec![])?;
         if !fix.ok {
             return Err(TaskError::Stuck(format!("修正 AI 失敗：{}", fix.error_text())));
         }
         notes.push_str(&format!("\n\n### 處理審查意見第 {round} 輪\n{}", fix.text));
+        previous = format!("### 審查意見（第 {round} 次）\n{combined}\n\n### 修正者的回覆\n{}", fix.text);
     }
 
     set_task(root, id, json!({ "phase": "reviewing", "step": "更新 handover" }))?;

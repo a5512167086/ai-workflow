@@ -271,6 +271,12 @@ pub fn run_reviews(base: AgentOpts, pass_words: &[&str]) -> Result<Vec<Review>> 
     Ok(reviews)
 }
 
+/// 審查判 FAIL，但所有意見都標成 [建議]、沒有任何 [必須修正]：依審查規則應該是通過。
+/// 沒有標等級的舊格式回覆維持原判（保守）。
+pub fn only_suggestions(text: &str) -> bool {
+    text.contains("[建議]") && !text.contains("[必須修正]")
+}
+
 /// 給修訂者看的審查意見：雙人審查時依 AI 分段。
 pub fn combine_reviews(reviews: &[Review]) -> String {
     if reviews.len() == 1 {

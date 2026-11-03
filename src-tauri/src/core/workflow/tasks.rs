@@ -186,6 +186,9 @@ fn clean_task(task: &Value, index: usize, sub: bool, preserve_status: bool, ids:
     if task.get("dependencies").is_some_and(|d| !d.is_array()) {
         crate::bail!("任務 {id_str} 的 dependencies 必須是陣列");
     }
+    if task.get("manualChecks").is_some_and(|m| !m.is_null() && !m.as_array().is_some_and(|a| a.iter().all(Value::is_string))) {
+        crate::bail!("任務 {id_str} 的 manualChecks 必須是文字陣列");
+    }
     if let Some(skills) = task.get("skills") {
         if !skills.as_array().is_some_and(|a| a.iter().all(|s| s.as_str().is_some_and(valid_skill_name))) {
             crate::bail!("任務 {id_str} 的 skills 格式錯誤");
@@ -515,10 +518,10 @@ pub fn edit_task(root: &Path, id: &str, tag: &str, expected: &str, patch: &Value
         let mut list=original.clone(); let parts:Vec<_>=id.split('.').collect();
         let parent=list.iter_mut().find(|t|js_string(&t["id"])==parts[0]).ok_or_else(||AppError::new("找不到任務"))?;
         let target=if parts.len()==2 { parent["subtasks"].as_array_mut().and_then(|ts|ts.iter_mut().find(|t|js_string(&t["id"])==parts[1])).ok_or_else(||AppError::new("找不到子任務"))? } else if parts.len()==1 { parent } else { crate::bail!(400; "任務 id 不正確"); };
-        for field in ["title","description","details","testStrategy","priority","dependencies","acceptanceCriteria","requirement_ids","skills"] {
+        for field in ["title","description","details","testStrategy","priority","dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"] {
             if let Some(value)=patch.get(field) {
                 if ["title","description","details","testStrategy","priority"].contains(&field) && (!value.is_string() || value.as_str().unwrap().len()>100000) { crate::bail!(400; "{field} 必須是文字且小於 100 KB"); }
-                if ["dependencies","acceptanceCriteria","requirement_ids","skills"].contains(&field) && !value.is_array() { crate::bail!(400; "{field} 必須是陣列"); }
+                if ["dependencies","acceptanceCriteria","manualChecks","requirement_ids","skills"].contains(&field) && !value.is_array() { crate::bail!(400; "{field} 必須是陣列"); }
                 if field=="priority" && !["high","medium","low"].contains(&value.as_str().unwrap_or("")) { crate::bail!(400; "優先序不正確"); }
                 target[field]=value.clone();
             }

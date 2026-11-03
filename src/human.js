@@ -40,7 +40,7 @@ function editHumanTask() {
   const dialog = humanModal(`人工編輯任務 #${source.id}`, '可修改需求、驗收條件、優先序與依賴。實質修改後，此任務、同組子任務及後續依賴會重新待辦，並撤回任務核准；已寫入的程式碼保留。'); if (!dialog) return;
   const body = dialog.querySelector('.human-editor-body'); body.classList.add('human-task-editor');
   const controls = {};
-  const fields = [['title','標題','input'], ['priority','優先序','select'], ['description','需求說明','textarea'], ['details','實作說明／限制','textarea'], ['acceptanceCriteria','驗收條件（每行一項）','lines'], ['testStrategy','驗證方式','textarea'], ['dependencies','依賴的任務 ID（逗號分隔；子任務可用完整 ID）','dependencies'], ['requirement_ids','對應需求 ID（每行一項）','lines'], ['skills','Skills 名稱（每行一項）','lines']];
+  const fields = [['title','標題','input'], ['priority','優先序','select'], ['description','需求說明','textarea'], ['details','實作說明／限制','textarea'], ['acceptanceCriteria','驗收條件（每行一項）','lines'], ['manualChecks','人工驗收：只有你能做的檢查，AI 不做也不審（每行一項）','lines'], ['testStrategy','驗證方式','textarea'], ['dependencies','依賴的任務 ID（逗號分隔；子任務可用完整 ID）','dependencies'], ['requirement_ids','對應需求 ID（每行一項）','lines'], ['skills','Skills 名稱（每行一項）','lines']];
   for (const [key,label,type] of fields) {
     const wrapper = document.createElement('label'); wrapper.className = 'human-field'; const title = document.createElement('span'); title.textContent = label;
     const input = document.createElement(type === 'select' ? 'select' : ['textarea','lines'].includes(type) ? 'textarea' : 'input');

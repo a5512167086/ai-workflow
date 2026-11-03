@@ -647,3 +647,66 @@ fn codex_沙箱被降成唯讀時_寫入角色直接回報_不開始回合() {
     assert!(result.error.unwrap().contains("read-only"));
     assert!(calls(&root).is_empty(), "沒有開始回合");
 }
+
+/// 審查規則：只有 [建議] 視為通過；[必須修正] 才消耗修正輪數；下一次審查看得到上一輪與修正者的回覆；
+/// 卡住後使用者可以接受目前結果，重新驗證通過就跳過審查進入人工驗收。
+#[test]
+fn 審查分級_上一輪交接與人工接受目前結果() {
+    // 只有建議：FAIL 也視為通過，不送修正。
+    let mut scenario = pipeline_scenario();
+    scenario["codex"]["rules"][2]["text"] = json!("- [建議] `a.js:1` 命名可以更清楚\nVERDICT: FAIL");
+    let (root, _cfg) = git_project(scenario);
+    approved_prd(&root, "# PRD");
+    generate_tasks(&root).unwrap();
+    approve_tasks(&root);
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
+    assert_eq!(read_state(&root)["tasks"]["1"]["review_verdict"], "PASS");
+    assert!(!calls(&root).iter().any(|c| c["prompt"].as_str().unwrap().contains("程式碼審查者提出以下意見")));
+    assert!(calls(&root).iter().any(|c| c["prompt"].as_str().unwrap().contains("[必須修正]：會造成錯誤")));
+
+    // 必須修正：修正者說明不改的理由，下一次審查看得到；輪數用完後卡住。
+    let mut scenario = pipeline_scenario();
+    let rules = scenario["codex"]["rules"].as_array_mut().unwrap();
+    rules.insert(0, json!({ "contains": "程式碼審查者提出以下意見", "text": "不改：手動驗收要由使用者做" }));
+    rules[3]["text"] = json!("- [必須修正] `docs/check.md:1` 手動驗收結果空白\nVERDICT: FAIL");
+    let (root, mut cfg) = git_project(scenario);
+    cfg["max_fix_rounds"] = json!(1);
+    save_config(&root, &cfg).unwrap();
+    approved_prd(&root, "# PRD");
+    generate_tasks(&root).unwrap();
+    approve_tasks(&root);
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "stuck");
+    let reviews: Vec<String> = calls(&root).iter().filter_map(|c| c["prompt"].as_str()).filter(|p| p.contains("你是程式碼審查者")).map(String::from).collect();
+    assert_eq!(reviews.len(), 2);
+    assert!(!reviews[0].contains("上一輪審查與修正者的回覆"));
+    assert!(reviews[1].contains("上一輪審查與修正者的回覆") && reviews[1].contains("不改：手動驗收要由使用者做") && reviews[1].contains("手動驗收結果空白"));
+
+    // 使用者接受目前結果：重新驗證，通過後不再審查，進入人工驗收。
+    let snap = ai_workflow::core::api::snapshot(&root).unwrap();
+    assert!(ai_workflow::core::guards::task_accept(&snap, "1").is_none());
+    update_state(&root, |s| { s["tasks"]["1"]["review_override"] = json!(true); }).unwrap();
+    let before = calls(&root).len();
+    assert_eq!(run_pipeline(&root, Some("1"), true).unwrap(), "waiting");
+    let ts = &read_state(&root)["tasks"]["1"];
+    assert_eq!(ts["review_verdict"], "ACCEPTED");
+    assert!(ts["review_override"].is_null());
+    assert!(!calls(&root)[before..].iter().any(|c| c["prompt"].as_str().unwrap().contains("你是程式碼審查者")));
+}
+
+#[test]
+fn 拆任務把只能人做的檢查放在_manual_checks_實作與審查都知道不是_ai_的工作() {
+    let mut scenario = pipeline_scenario();
+    scenario["codex"]["rules"][1]["text"] = json!(json!({ "tasks": [{ "title": "樣式", "acceptanceCriteria": ["npm test 通過"], "manualChecks": ["在 Chrome 與 Edge 用 375px 檢查"] }] }).to_string());
+    let (root, _cfg) = git_project(scenario);
+    approved_prd(&root, "# PRD");
+    generate_tasks(&root).unwrap();
+    assert_eq!(read_tasks(&root).unwrap()[0]["manualChecks"], json!(["在 Chrome 與 Edge 用 375px 檢查"]));
+    let planner = calls(&root).into_iter().find(|c| c["prompt"].as_str().unwrap().contains("拆成可以逐一")).unwrap();
+    assert!(planner["prompt"].as_str().unwrap().contains("manualChecks：只有人能做的檢查"));
+    approve_tasks(&root);
+    assert_eq!(run_pipeline(&root, None, false).unwrap(), "waiting");
+    for marker in ["你正在一個全新的對話中實作", "你是程式碼審查者"] {
+        let call = calls(&root).into_iter().find(|c| c["prompt"].as_str().unwrap().contains(marker)).unwrap();
+        assert!(call["prompt"].as_str().unwrap().contains("manualChecks 是使用者在人工驗收時自己做的檢查"), "{marker}");
+    }
+}

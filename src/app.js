@@ -541,8 +541,8 @@ function renderDetail() {
     ['修正輪數', `${ts.fix_round || 0} / ${snap.config.max_fix_rounds}`],
     ['嘗試次數', ts.attempts || 0],
     ['驗證', ...check],
-    ['審查', ts.review_verdict && ts.review_verdicts ? Object.entries(ts.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ') : ts.review_verdict || '—',
-      ts.review_verdict === 'PASS' || ts.review_verdict === 'APPROVE' ? 'ok' : ts.review_verdict ? 'bad' : ''],
+    ['審查', ts.review_verdict === 'ACCEPTED' ? '人工接受' : ts.review_verdict && ts.review_verdicts ? Object.entries(ts.review_verdicts).map(([p, v]) => `${PROVIDER_LABEL[p] || p} ${v}`).join(' · ') : ts.review_verdict || '—',
+      ['PASS', 'APPROVE', 'ACCEPTED'].includes(ts.review_verdict) ? 'ok' : ts.review_verdict ? 'bad' : ''],
     ['commit', ts.commit ? ts.commit.slice(0, 8) : '—', 'mono'],
   ];
   const dl = $('#d-meta');
@@ -559,6 +559,7 @@ function renderDetail() {
   }
   if (snap.guards) { applyGuard($('#d-rerun'), guardOf('task.rerun')); applyGuard($('#d-revert'), guardOf('task.rerun')); }
   else $('#d-rerun').disabled = snap.runnerAlive;
+  renderAcceptButton(ts);
   $('#d-revert').parentElement.title = ts.commit ? `會 git revert ${ts.commit.slice(0, 8)}` : '手動模式沒有 commit：會把這個任務改過的檔案還原到任務開始前（之後任務對同檔案的修改也會一起還原）';
   renderTaskGates(t, ts);
   for (const b of $$('[data-sub]')) {
@@ -583,6 +584,22 @@ function renderDetail() {
   body.replaceChildren(pre);
 }
 
+/** 審查未通過而卡住的任務才顯示「接受目前結果」；規則與後端 guards::task_accept 相同。 */
+function acceptReason(ts) {
+  if (ts.phase !== 'stuck' || !ts.review_verdict || ['PASS', 'APPROVE', 'ACCEPTED'].includes(ts.review_verdict)) return { show: false };
+  const busy = snap.guards ? guardOf('backlog.draft') : snap.runnerAlive ? '流程執行中' : null;
+  if (busy) return { show: true, reason: busy };
+  if (ts.last_check_ok === false) return { show: true, reason: '驗證指令沒有通過，請先修好或重新執行' };
+  return { show: true, reason: null };
+}
+function renderAcceptButton(ts) {
+  const button = $('#d-accept');
+  if (!button) return;
+  const { show, reason } = acceptReason(ts);
+  button.hidden = !show;
+  if (show) applyGuard(button, reason);
+}
+
 function renderTaskGates(task, state) {
   const done = boardFacts().done;
   const missing = (task.dependencies || []).filter(id => !done.has(String(id)));
@@ -593,7 +610,7 @@ function renderTaskGates(task, state) {
   const gates = [
     ['依賴', missing.length ? `尚有 ${missing.length} 項未完成` : '已滿足', missing.length ? 'pending' : 'pass'],
     ['驗證', verified ? state.last_check_ok ? '通過' : '失敗' : checksConfigured ? '尚未執行' : '未設定驗證指令', verified ? state.last_check_ok ? 'pass' : 'fail' : 'pending'],
-    ['審查', review ? ['PASS', 'APPROVE'].includes(review) ? '通過' : '未通過' : '尚未審查', review ? ['PASS', 'APPROVE'].includes(review) ? 'pass' : 'fail' : 'pending'],
+    ['審查', review === 'ACCEPTED' ? '你已接受目前結果' : review ? ['PASS', 'APPROVE'].includes(review) ? '通過' : '未通過' : '尚未審查', review ? ['PASS', 'APPROVE', 'ACCEPTED'].includes(review) ? 'pass' : 'fail' : 'pending'],
     ['人工驗收', humanDone ? '已確認' : '等待人工確認', humanDone ? 'pass' : 'pending'],
   ];
   $('#d-gates').innerHTML = gates.map(([label, text, status]) => `<li class="gate-${status}"><span class="gate-mark" aria-hidden="true">${status === 'pass' ? icon('check') : status === 'fail' ? icon('alert') : '—'}</span><span><b>${label}</b><span>${text}</span></span></li>`).join('');
@@ -665,6 +682,12 @@ function taskContentView(task, implement) {
     li.append(markdownBlock(String(item)));
     return li;
   }));
+  section('人工驗收（你自己測，AI 不做也不審）', list(task.manualChecks, item => {
+    const li = document.createElement('li');
+    li.className = 'tc-check tc-manual';
+    li.append(markdownBlock(String(item)));
+    return li;
+  }));
   section('測試策略', text(task.testStrategy));
   section(`子任務（${(task.subtasks || []).length}）`, list(task.subtasks, sub => {
     const li = document.createElement('li');
@@ -716,6 +739,14 @@ function reviewsView(reviews) {
       who.textContent = PROVIDER_LABEL[r.provider] || '審查者';
       if (r.provider) who.classList.add(r.provider);
       head.querySelector('.chip').textContent = verdict || '未判定';
+      const must = (r.text.match(/\[必須修正\]/g) || []).length;
+      const suggest = (r.text.match(/\[建議\]/g) || []).length;
+      if (must || suggest) {
+        const counts = document.createElement('span');
+        counts.className = 'review-counts';
+        counts.textContent = [must && `必須修正 ${must}`, suggest && `建議 ${suggest}`].filter(Boolean).join('・');
+        head.append(counts);
+      }
       col.append(head, markdownBlock(r.text));
       pair.append(col);
     }
@@ -1718,6 +1749,10 @@ function bind() {
     const cards = $$('#tab-board [data-task-id]');
     const card = cards.find(c => c.dataset.taskId === id && (boardView === 'roadmap' ? c.closest('#task-roadmap') : c.closest('#board')));
     card?.focus();
+  };
+  $('#d-accept').onclick = () => {
+    if (!confirm(`接受任務 ${selected} 目前的實作？\n\n會重新跑一次驗證指令，通過後不再送審查，直接進入人工驗收。審查意見會保留在「審查意見」分頁。`)) return;
+    runAction('/api/task/accept', { id: selected }, `任務 ${selected} 已接受，重新驗證中`);
   };
   $('#d-rerun').onclick = () => {
     const revert = $('#d-revert').checked;

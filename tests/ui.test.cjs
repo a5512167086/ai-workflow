@@ -35,6 +35,7 @@ function page() {
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
     taskContentView, logScopes, renderLogSelect, renderLog,
+    renderAcceptButton, acceptReason,
     setLog(scope, text) { logs[scope] = text; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
@@ -1105,5 +1106,40 @@ test('紀錄的來源列出每個任務（依編號），第一次選取時讀�
   await new Promise(r => setTimeout(r, 0));
   assert.ok(calls.includes('/api/log/task-2'));
   assert.ok(doc.querySelector('#rec-body').textContent.includes('完整 /api/log/task-2'));
+  dom.window.close();
+});
+
+test('審查未通過而卡住時才顯示「接受目前結果」，驗證失敗或執行中會停用並說明原因', () => {
+  const { dom, ui, doc } = page();
+  const state = snapshot();
+  ui.setSnap(state);
+  const button = doc.querySelector('#d-accept');
+  ui.renderAcceptButton({ phase: 'awaiting_test', review_verdict: 'PASS' });
+  assert.equal(button.hidden, true);
+  ui.renderAcceptButton({ phase: 'stuck', review_verdict: 'FAIL', last_check_ok: true });
+  assert.equal(button.hidden, false);
+  assert.equal(button.disabled, false);
+  ui.renderAcceptButton({ phase: 'stuck', review_verdict: 'FAIL', last_check_ok: false });
+  assert.equal(button.disabled, true);
+  assert.match(button.title, /驗證指令沒有通過/);
+  ui.renderAcceptButton({ phase: 'stuck', review_verdict: null, last_check_ok: false });
+  assert.equal(button.hidden, true);
+  state.runnerAlive = true;
+  ui.renderAcceptButton({ phase: 'stuck', review_verdict: 'FAIL', last_check_ok: true });
+  assert.equal(button.disabled, true);
+  dom.window.close();
+});
+
+test('任務內容列出人工驗收清單；審查意見標出必須修正與建議的數量', () => {
+  const { dom, ui } = page();
+  ui.setSnap(snapshot());
+  const view = ui.taskContentView({ id: 9, title: '樣式', acceptanceCriteria: ['npm test 通過'], manualChecks: ['Chrome 與 Edge 375px 檢查'] }, '');
+  const manual = [...view.querySelectorAll('h4')].find(h => h.textContent.startsWith('人工驗收'));
+  assert.ok(manual);
+  assert.equal(manual.parentElement.querySelectorAll('.tc-manual').length, 1);
+  const reviews = ui.reviewsView([{ round: 1, provider: 'codex', text: '- [必須修正] a\n- [必須修正] b\n- [建議] c\nVERDICT: FAIL' }]);
+  const holder = dom.window.document.createElement('div');
+  holder.append(reviews);
+  assert.equal(holder.querySelector('.review-counts').textContent, '必須修正 2・建議 1');
   dom.window.close();
 });

@@ -158,17 +158,20 @@ pub fn tasks_from_prd_prompt(root: &Path, cfg: &Value, prd: &str) -> String {
 - description：從使用者角度寫這個任務完成後的行為（做什麼），不要列各層的實作步驟。
 - details：實作上需要注意的決策與限制（引用 PRD 的實作決策），不寫具體檔案路徑。
 - testStrategy：在 PRD 測試決策中的哪個接縫測試、測哪些行為。
-- acceptanceCriteria：可以觀察、可以手動驗證的條件。
+- acceptanceCriteria：AI 實作完能用測試、建置或讀程式碼確認的條件。
+- manualChecks：只有人能做的檢查（在真的瀏覽器或裝置上操作、目測版面、跨瀏覽器驗收等），使用者會在人工驗收時自己做。不要放進 acceptanceCriteria，也不要要求 AI 填寫手動驗收結果；沒有就留空陣列。
 - requirement_ids：對應 PRD 的使用者故事編號（例如 US-3）；確保每條使用者故事都有任務涵蓋。
 - 拆成{count}任務。
 - skills 可以選擇以下適用技能，沒有適用的就留空：{}。
 - 使用與 PRD 相同的語言。
 - 不要修改任何檔案。最後的回覆只輸出一個 JSON 物件，不要其他文字或圍欄：
-{{\"tasks\":[{{\"title\":\"\",\"description\":\"\",\"details\":\"實作決策與限制\",\"testStrategy\":\"在哪個接縫、測哪些行為\",\"priority\":\"high|medium|low\",\"dependencies\":[],\"requirement_ids\":[],\"acceptanceCriteria\":[],\"skills\":[]}}]}}", context_block(root, cfg, false), skills.join("、"))
+{{\"tasks\":[{{\"title\":\"\",\"description\":\"\",\"details\":\"實作決策與限制\",\"testStrategy\":\"在哪個接縫、測哪些行為\",\"priority\":\"high|medium|low\",\"dependencies\":[],\"requirement_ids\":[],\"acceptanceCriteria\":[],\"manualChecks\":[],\"skills\":[]}}]}}", context_block(root, cfg, false), skills.join("、"))
 }
 
 fn task_block(task: &Value) -> String {
-    format!("```json\n{}\n```", pretty(task))
+    let manual = task["manualChecks"].as_array().is_some_and(|a| !a.is_empty());
+    let note = if manual { "\n\nmanualChecks 是使用者在人工驗收時自己做的檢查（例如在真的瀏覽器操作、目測版面）。AI 不需要也無法完成這些項目，不要宣稱已經做過，也不要因為它們還沒做就判定任務未完成。" } else { "" };
+    format!("```json\n{}\n```{note}", pretty(task))
 }
 
 fn id_of(task: &Value) -> String {
@@ -277,9 +280,11 @@ pub fn fix_review_prompt(root: &Path, cfg: &Value, task: &Value, review: &str, r
 {}
 
 ## 規則
-- 處理合理的意見；不同意的意見在回覆中說明理由。
+- 每一條 [必須修正] 都要處理：修好，或在回覆中說明為什麼不需要改（下一輪審查者會看到你的說明）。
+- [建議] 可以順手改，不改也沒關係。
+- 需要人親自做的檢查（手動瀏覽器驗收、目測）不是你的工作，不要假裝做過或填寫結果。
 {NO_TOUCH}
-- 完成後簡短說明改了什麼。",
+- 完成後逐條簡短回覆：每條意見改了什麼，或為什麼不改。",
         id_of(task), task_block(task), code_map_block(root, cfg, &format!("{}\n{}", task_question(task), clip(review, 8000))), clip(review, MAX_FILE_CHARS), commands_block(cfg))
 }
 
@@ -288,7 +293,11 @@ pub fn diff_stat(diff: &str) -> String {
     diff.lines().filter(|l| (l.starts_with(' ') && l.len() > 1 && !l[1..].starts_with(char::is_whitespace) && l.contains('|')) || l.contains("file changed") || l.contains("files changed")).collect::<Vec<_>>().join("\n")
 }
 
-pub fn code_review_prompt(task: &Value, diff: &str, check_summary: &str) -> String {
+/// previous：上一輪的審查意見與修正者的回覆（第一次審查是空字串）。
+pub fn code_review_prompt(task: &Value, diff: &str, check_summary: &str, previous: &str) -> String {
+    let previous = if previous.trim().is_empty() { String::new() } else {
+        format!("\n## 上一輪審查與修正者的回覆\n{}\n\n- 已經修好的不要再提。\n- 修正者說明不改的理由合理時就接受，不再列為 [必須修正]；理由不成立才再列，並說明為什麼不成立。\n", clip(previous, 12000))
+    };
     format!("你是程式碼審查者。請審查 開發任務 {} 的變更是否正確完成任務、有沒有錯誤、安全問題、遺漏的測試或超出範圍的修改。
 
 ## 任務
@@ -301,15 +310,19 @@ pub fn code_review_prompt(task: &Value, diff: &str, check_summary: &str) -> Stri
 ```diff
 {}
 ```
-
+{previous}
 ## 檢查重點
 - 每一條驗收條件是否都做到，而且有測試或可以手動驗證。
 - 測試品質：是否在講好的接縫透過公開介面驗證行為；有沒有綁實作細節（mock 自己的模組、測私有函式、繞過介面驗證）、套套邏輯（預期值用和程式相同的方式算出來）、或只測形狀不測行為的測試。這些都算問題。
 - mock 是否只用在系統邊界（外部 API、時間、亂數等）。
 - 有沒有做了其他任務的事，或任務範圍內該做卻沒做的部分。
+- 只有人能做的檢查（任務的 manualChecks，或在真的瀏覽器操作、跨瀏覽器驗收、目測版面這類條件）不在審查範圍：使用者會在人工驗收時自己做。不要因為它們還沒做而判 FAIL，也不要要求 AI 補做或填寫結果。
 
 ## 回覆格式
-- 只列出需要修改的具體問題（檔案、位置、原因、建議）。風格偏好不算問題。
+- 每一條意見開頭標上等級，並寫出檔案、位置、原因、建議：
+  - [必須修正]：會造成錯誤、安全問題、沒有做到驗收條件，或缺少驗證這個任務行為的測試。
+  - [建議]：可以更好但不影響正確性，例如更完整的測試、命名、小幅重構。風格偏好不用列。
+- 有任何一條 [必須修正] 就判 FAIL；只有 [建議] 或沒有意見就判 PASS。
 - 不要修改任何檔案。
 - 最後一行必須是以下其中之一：
 VERDICT: PASS

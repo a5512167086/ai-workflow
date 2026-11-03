@@ -326,6 +326,19 @@ fn handle_action(root: &Path, action: &str, body: &Value) -> Result<Value> {
             busy_guard(&snap)?;
             spawn_run(root, &["continue"], body)
         }
+        "task/accept" => {
+            let id = text_field(body, "id");
+            if !is_task_id(&id) {
+                return Err(http(400, "任務 id 不正確"));
+            }
+            if let Some(why) = crate::core::guards::task_accept(&snap, &id) {
+                return Err(http(409, why));
+            }
+            let verdict = crate::core::util::js_string(&snap["state"]["tasks"][&id]["review_verdict"]);
+            crate::core::state::update_state(root, |s| { crate::core::state::task_state(s, &id)["review_override"] = json!(true); })?;
+            crate::core::state::append_log(root, &format!("task-{id}"), &format!("使用者接受目前結果（審查 {verdict}），重新驗證後進入人工驗收"));
+            spawn_run(root, &["run", "--task", &id, "--verify"], body)
+        }
         "task/rerun" => {
             // 先檢查輸入格式（400），再檢查流程狀態（409）。
             let id = text_field(body, "id");

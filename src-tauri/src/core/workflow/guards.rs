@@ -73,6 +73,18 @@ pub fn backlog_item(state: &Value, item: &Value) -> Option<String> {
     }
 }
 
+/// 「接受目前結果」：只給因為審查未通過而卡住、驗證有通過的任務用；接受後重新驗證，通過就跳過審查進入人工驗收。
+pub fn task_accept(snap: &Value, id: &str) -> Option<String> {
+    if let Some(why) = busy(snap) { return Some(why); }
+    let t = &snap["state"]["tasks"][id];
+    if t["phase"] != "stuck" { return Some("只有卡住的任務可以接受目前結果".into()); }
+    if !t["review_verdict"].as_str().is_some_and(|v| !["PASS", "APPROVE", "ACCEPTED"].contains(&v)) {
+        return Some("這個任務不是因為審查未通過而卡住，請按「繼續」或重新執行".into());
+    }
+    if t["last_check_ok"] == false { return Some("驗證指令沒有通過，請先修好或重新執行".into()); }
+    None
+}
+
 /// API 用：不能做就回 409 與原因。
 pub fn check(snap: &Value, action: &str) -> Result<()> {
     match project(snap)[action].as_str() {
@@ -133,6 +145,22 @@ mod tests {
         assert!(g["prd.edit"].as_str().unwrap().contains("流程執行中"));
         assert!(g["project.settings"].as_str().unwrap().contains("流程執行中"));
         assert_eq!(check(&s, "task.rerun").unwrap_err().status, 409);
+    }
+
+    #[test]
+    fn 接受目前結果_只給審查未通過而卡住的任務() {
+        let mut s = snap("approved", "stuck", json!([{ "id": 9, "status": "review" }]));
+        s["state"]["tasks"] = json!({ "9": { "phase": "stuck", "review_verdict": "FAIL", "last_check_ok": true } });
+        assert!(task_accept(&s, "9").is_none());
+        s["state"]["tasks"]["9"]["last_check_ok"] = json!(false);
+        assert!(task_accept(&s, "9").unwrap().contains("驗證"));
+        s["state"]["tasks"]["9"] = json!({ "phase": "stuck", "review_verdict": null, "last_check_ok": false });
+        assert!(task_accept(&s, "9").unwrap().contains("不是因為審查"));
+        s["state"]["tasks"]["9"] = json!({ "phase": "implementing", "review_verdict": "FAIL" });
+        assert!(task_accept(&s, "9").unwrap().contains("卡住"));
+        s["state"]["tasks"]["9"] = json!({ "phase": "stuck", "review_verdict": "FAIL" });
+        s["runnerAlive"] = json!(true);
+        assert!(task_accept(&s, "9").unwrap().contains("流程執行中"));
     }
 
     #[test]

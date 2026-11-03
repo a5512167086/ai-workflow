@@ -1124,3 +1124,6 @@ details.graph-report > summary { cursor: pointer; display: flex; align-items: ce
 details.graph-report > summary h2 { margin: 0; }
 details.graph-report[open] > summary { margin-bottom: var(--s-3); }
 #graph-path { overflow-wrap: anywhere; }
+
+.tc-manual::before { border-style: dashed; border-color: var(--warn); }
+.review-counts { font-size: 12px; color: var(--text-muted); }
