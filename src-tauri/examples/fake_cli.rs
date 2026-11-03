@@ -87,8 +87,7 @@ fn codex_turn(me: &Value, args: &[String], thread: &Value, turn: &Value, lines: 
         return;
     }
     if let Some(events) = me["events"].as_array() {
-        for e in events { println!("{}", e.as_str().map(String::from).unwrap_or_else(|| e.to_string())); }
-        std::io::stdout().flush().unwrap();
+        print_events(events);
         return;
     }
     let text = me["rules"].as_array().into_iter().flatten()
@@ -101,6 +100,20 @@ fn codex_turn(me: &Value, args: &[String], thread: &Value, turn: &Value, lines: 
         "total": { "inputTokens": 1000, "cachedInputTokens": 200, "outputTokens": 50, "reasoningOutputTokens": 10, "totalTokens": 1050 },
         "last": { "inputTokens": 1000, "cachedInputTokens": 200, "outputTokens": 50, "reasoningOutputTokens": 10, "totalTokens": 1050 }, "modelContextWindow": 200000 } } }));
     print_line(&json!({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } } }));
+}
+
+/// scenario 的 events 裡可以放 "sleep:<毫秒>"：在那裡停一下，測試才看得到執行中的狀態（例如逐字輸出的串流檔）。
+fn sleep_ms(event: &Value) -> Option<u64> {
+    event.as_str()?.strip_prefix("sleep:")?.parse().ok()
+}
+
+fn print_events(events: &[Value]) {
+    let mut out = std::io::stdout();
+    for e in events {
+        if let Some(ms) = sleep_ms(e) { std::thread::sleep(std::time::Duration::from_millis(ms)); continue; }
+        writeln!(out, "{}", e.as_str().map(String::from).unwrap_or_else(|| e.to_string())).unwrap();
+        out.flush().unwrap();
+    }
 }
 
 fn print_line(value: &Value) {
@@ -176,6 +189,10 @@ fn run_output(provider: &str, me: &Value, args: &[String], prompt: &str, allowed
         }
         // 互動模式下不能直接結束：呼叫端要先讀到結果再關閉 stdin。
         if !args.iter().any(|a| a == "--permission-prompt-tool") { std::process::exit(1); }
+        return;
+    }
+    if let Some(events) = me["events"].as_array().filter(|e| e.iter().any(|e| sleep_ms(e).is_some())) {
+        print_events(events);
         return;
     }
     if let Some(events) = me["events"].as_array() {

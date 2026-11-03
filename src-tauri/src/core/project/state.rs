@@ -115,6 +115,27 @@ pub fn append_log(root: &Path, scope: &str, text: &str) {
     }
 }
 
+/// AI 正在打的那一段回覆（還沒寫完的文字）：和 log 分開放，App 監看這個檔案逐字顯示。
+/// 一段訊息寫完後會進 log，這個檔案就清掉；檔案不存在或是空的代表目前沒有在打字。
+pub fn stream_path(root: &Path, scope: &str) -> PathBuf {
+    data_dir(root).join("logs").join(format!("{scope}.stream"))
+}
+
+/// 加上一小段 AI 正在輸出的文字。
+pub fn append_stream(root: &Path, scope: &str, text: &str) {
+    if text.is_empty() { return; }
+    let _ = ensure_dirs(root);
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(stream_path(root, scope)) {
+        let _ = f.write_all(text.replace('\r', "").as_bytes());
+    }
+}
+
+/// 這一段已經寫完（或執行結束）：清掉正在打字的文字。
+pub fn clear_stream(root: &Path, scope: &str) {
+    let path = stream_path(root, scope);
+    if path.exists() { let _ = fs::remove_file(path); }
+}
+
 /// pid 欄位可能是 null、數字或（舊資料）字串。
 pub fn pid_of(value: &Value) -> Option<u32> {
     match value {

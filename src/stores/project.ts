@@ -22,6 +22,8 @@ interface ProjectState {
   /** 已經從檔案讀過完整內容（最多最後 200 KB）的 log；串流只會推送開著 App 之後新增的部分。 */
   logsFull: Set<string>;
   rounds: PrdRound[];
+  /** AI 正在打的那一段文字（還沒寫完、還沒進 log），鍵是 log 的 scope（chat-<turn>、skill-<id>、task-3、prd…）。 */
+  streams: Record<string, string>;
   open: (id: string) => Promise<void>;
   close: () => void;
   refresh: () => Promise<Snapshot | null>;
@@ -45,14 +47,15 @@ export const useProject = create<ProjectState>((set, get) => ({
   logs: {},
   logsFull: new Set(),
   rounds: [],
+  streams: {},
   open: async (id) => {
     if (get().id === id) return;
     get().close();
     const gen = ++generation;
     const api = projectApi(id);
-    set({ id, api, snap: null, error: null, logs: {}, logsFull: new Set(), rounds: [] });
+    set({ id, api, snap: null, error: null, logs: {}, logsFull: new Set(), rounds: [], streams: {} });
     try {
-      const [state, log] = await Promise.all([
+      unlisteners = await Promise.all([
         listen<Snapshot>(`state-${id}`, (snap) => { if (gen === generation) get().setSnap(snap); }),
         listen<{ scope: string; text: string }>(`log-${id}`, ({ scope, text }) => {
           if (gen !== generation) return;
@@ -64,8 +67,15 @@ export const useProject = create<ProjectState>((set, get) => ({
           for (const fn of logListeners) fn(scope, next);
         }),
         listen<{ message: string }>(`error-${id}`, ({ message }) => { if (gen === generation) set({ error: `讀取專案狀態失敗：${message}` }); }),
+        // 逐字輸出：後端推送整段目前的文字；空字串代表這段已寫完（內容已進 log 或訊息）。
+        listen<{ scope: string; text: string }>(`stream-${id}`, ({ scope, text }) => {
+          if (gen !== generation) return;
+          const streams = { ...get().streams };
+          if (text) streams[scope] = text; else delete streams[scope];
+          set({ streams });
+        }),
       ]);
-      unlisteners = [state, log];
+      // 離開專案時全部取消訂閱（state、log、error、stream）。
       await invoke('watch_project', { id });
     } catch (err) {
       set({ error: String((err as Error)?.message ?? err) });
@@ -80,7 +90,7 @@ export const useProject = create<ProjectState>((set, get) => ({
     for (const un of unlisteners) un();
     unlisteners = [];
     generation++;
-    set({ id: null, api: projectApi(''), snap: null, error: null, logs: {}, logsFull: new Set(), rounds: [] });
+    set({ id: null, api: projectApi(''), snap: null, error: null, logs: {}, logsFull: new Set(), rounds: [], streams: {} });
   },
   refresh: async () => {
     try {
@@ -118,6 +128,9 @@ export const useProject = create<ProjectState>((set, get) => ({
   },
   onLog: (fn) => { logListeners.add(fn); return () => logListeners.delete(fn); },
 }));
+
+/** AI 正在打字的文字（沒有就是空字串）。 */
+export const useStream = (scope: string | null | undefined) => useProject((s) => (scope ? s.streams[scope] || '' : ''));
 
 /** 目前專案的快照；還沒載入時是 null。 */
 export const useSnapshot = () => useProject((s) => s.snap);

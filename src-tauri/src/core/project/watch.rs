@@ -20,13 +20,16 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 pub struct ProjectWatcher {
     root: PathBuf,
     sizes: HashMap<String, u64>,
+    /// AI 正在打字的串流檔（<scope>.stream）上次推送時的大小。
+    streams: HashMap<String, u64>,
     last: Option<Vec<Option<SystemTime>>>,
 }
 
 impl ProjectWatcher {
     /// 建立時記下目前 log 大小：只推送之後新增的內容（既有內容由前端另外讀取）。
     pub fn new(root: &Path) -> Self {
-        let mut w = Self { root: root.to_path_buf(), sizes: HashMap::new(), last: None };
+        // 串流檔不先記大小：App 打開時如果 AI 正在打字，第一次 tick 就把目前的文字送出去。
+        let mut w = Self { root: root.to_path_buf(), sizes: HashMap::new(), streams: HashMap::new(), last: None };
         for (name, size) in w.log_sizes() {
             w.sizes.insert(name, size);
         }
@@ -35,7 +38,15 @@ impl ProjectWatcher {
 
     fn log_sizes(&self) -> Vec<(String, u64)> {
         let dir = data_dir(&self.root).join("logs");
-        fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.metadata().ok()?.len()))).collect()).unwrap_or_default()
+        fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.metadata().ok()?.len()))).filter(|(name, _)| name.ends_with(".log")).collect()).unwrap_or_default()
+    }
+
+    fn stream_sizes(&self) -> HashMap<String, u64> {
+        let dir = data_dir(&self.root).join("logs");
+        fs::read_dir(dir).map(|d| d.filter_map(|e| e.ok()).filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            Some((name.strip_suffix(".stream")?.to_string(), e.metadata().ok()?.len()))
+        }).collect()).unwrap_or_default()
     }
 
     /// 回傳 (事件名稱, 內容)：state 變化時推送完整 snapshot，log 只推送新增的部分（單次最多 500 KB）。
@@ -76,6 +87,17 @@ impl ProjectWatcher {
             }
             self.sizes.insert(name, size);
         }
+        // 正在打字的文字：有變化就推送整段（一段訊息通常不大）；檔案被清掉就推送空字串，前端收起打字中的訊息。
+        let streams = self.stream_sizes();
+        for (scope, size) in &streams {
+            if self.streams.get(scope) == Some(size) { continue; }
+            let text = fs::read(data_dir(&self.root).join("logs").join(format!("{scope}.stream"))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            events.push(("stream", json!({ "scope": scope, "text": text })));
+        }
+        for scope in self.streams.keys().filter(|s| !streams.contains_key(*s)) {
+            events.push(("stream", json!({ "scope": scope, "text": "" })));
+        }
+        self.streams = streams;
         events
     }
 }
@@ -124,5 +146,27 @@ mod tests {
         assert!(log.1["text"].as_str().unwrap().contains("新的一行"));
         assert!(!log.1["text"].as_str().unwrap().contains("舊的內容"));
         assert_eq!(events.iter().find(|(e, _)| *e == "state").unwrap().1["state"]["pipeline"]["status"], "running");
+    }
+
+    #[test]
+    fn ai_打字中的文字_推送整段_清掉後推送空字串_不混進_log() {
+        let root = temp_dir("watch-stream-");
+        crate::core::config::save_project(&root, &json!({})).unwrap();
+        ensure_dirs(&root).unwrap();
+        // App 打開時 AI 已經在打字：第一次 tick 就送出目前的文字。
+        crate::core::state::append_stream(&root, "chat-t1", "你好");
+        let mut w = ProjectWatcher::new(&root);
+        let stream = |events: &[(&str, Value)]| events.iter().find(|(e, _)| *e == "stream").map(|(_, v)| v.clone());
+        let first = w.tick();
+        assert_eq!(stream(&first).unwrap(), json!({ "scope": "chat-t1", "text": "你好" }));
+        assert!(first.iter().all(|(e, _)| *e != "log"), "串流檔不能當成 log 推送");
+        // 沒變化不重送；多了文字就送整段。
+        assert!(stream(&w.tick()).is_none());
+        crate::core::state::append_stream(&root, "chat-t1", "，世界\r\n");
+        assert_eq!(stream(&w.tick()).unwrap()["text"], "你好，世界\n");
+        // 這段寫完（清掉串流檔）：送空字串，前端收起打字中的訊息。
+        crate::core::state::clear_stream(&root, "chat-t1");
+        assert_eq!(stream(&w.tick()).unwrap(), json!({ "scope": "chat-t1", "text": "" }));
+        assert!(stream(&w.tick()).is_none());
     }
 }

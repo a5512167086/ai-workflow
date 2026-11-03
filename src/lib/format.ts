@@ -121,3 +121,31 @@ export function boardFacts(snap: Pick<Snapshot, 'tasks' | 'state'>, query: strin
 }
 
 export const isDesktop = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/**
+ * 從還沒寫完的 JSON 文字裡取出某個字串欄位目前已經寫出來的部分（需求釐清的回覆是 {"message": "...", "ready": …}）。
+ * 欄位還沒出現回傳 null；字串還沒結束就回傳目前為止的內容。處理 \n、\"、\\、\uXXXX 等跳脫。
+ */
+export function partialJsonString(text: string, field: string): string | null {
+  const key = text.match(new RegExp(`"${field}"\\s*:\\s*"`));
+  if (!key || key.index === undefined) return null;
+  let out = '';
+  for (let i = key.index + key[0].length; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') return out;
+    if (c !== '\\') { out += c; continue; }
+    const next = text[i + 1];
+    if (next === undefined) return out; // 跳脫字元還沒寫完
+    const simple: Record<string, string> = { n: '\n', t: '\t', r: '', '"': '"', '\\': '\\', '/': '/', b: '', f: '' };
+    if (next === 'u') {
+      const hex = text.slice(i + 2, i + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) return out;
+      out += String.fromCharCode(parseInt(hex, 16));
+      i += 5;
+    } else {
+      out += simple[next] ?? next;
+      i += 1;
+    }
+  }
+  return out;
+}

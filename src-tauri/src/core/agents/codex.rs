@@ -73,10 +73,13 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
                     _ => {}
                 }
             }
+            // 逐字輸出：AI 回覆的增量寫到串流檔，App 邊打邊顯示。
+            (None, Some("item/agentMessage/delta")) => append_stream(root, scope, message["params"]["delta"].as_str().unwrap_or("")),
             (None, Some("item/completed")) => {
                 let item = &message["params"]["item"];
                 match item["type"].as_str() {
                     Some("agentMessage") => {
+                        clear_stream(root, scope);
                         last_message = item["text"].as_str().unwrap_or("").to_string();
                         append_log(root, scope, &last_message);
                     }
@@ -118,6 +121,8 @@ pub(super) fn run_codex(opts: &AgentOpts, prompt: &str, references: &crate::core
     crate::core::permissions::expire_scope(root, scope);
     let res = res?;
     buffer.finish(&mut handle);
+    // 不論成功、失敗、取消或逾時，都不要留下打到一半的文字。
+    clear_stream(root, scope);
     let text = last_message;
     if res.cancelled { return Ok(CliOutcome { ok: false, text, error: Some("使用者已停止回覆".into()) }); }
     if res.timed_out { return Ok(CliOutcome { ok: false, text, error: Some(format!("逾時（{timeout}s）")) }); }

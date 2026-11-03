@@ -57,7 +57,8 @@ src/
 - `api(path, body?)`：有 body 是 POST，沒有是 GET；`projectApi(id)` 把 `/api/xxx` 換成 `/api/p/<id>/xxx`（`/api/projects`、`/api/queue` 仍是全域）。
 - `act(api, path, body, okMsg)`：成功 toast、失敗 toast 並回傳 null。`runAction(api, snap, …)`：額度用完時先確認改用另一個 AI。
 - 防呆：`snap.guards[name]` 是不能做的原因（空字串＝可以）；用 `GuardButton guard={reason}` 停用並在 tooltip 顯示原因。
-- 事件：`projects`（總覽）、`state-<id>`（整份快照）、`log-<id>`（`{scope, text}` 增量）。
+- 事件：`projects`（總覽）、`state-<id>`（整份快照）、`log-<id>`（`{scope, text}` 增量）、`stream-<id>`（`{scope, text}`：AI 正在打的那段回覆的全文，空字串代表已寫完）。
+- 逐字輸出：Claude 以 `--include-partial-messages`、Codex 以 app-server 的 `item/agentMessage/delta` 取得增量，寫到 `logs/<scope>.stream`（不混進 log），訊息寫完或執行結束就刪掉；App 每 200ms 檢查一次。前端 `useProject().streams[scope]` 給 LogTree 的 `live` 與對話、Grill Me、技能會議的打字中訊息（`StreamingText`，節流 120ms，打字中不畫 Mermaid）。
 
 ## 共用元件介面
 

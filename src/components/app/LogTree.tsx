@@ -1,9 +1,16 @@
 // 可展開的 log（像 Claude Code：每段工作包成一個區塊）。執行中的區塊預設展開、完成的收合；使用者手動展開／收合過的區塊重畫時保留。
 // 捲到最底時自動跟隨新輸出；openAll 由父層的「全部展開／收合」切換。
+// live：AI 正在打字的文字（還沒進 log），顯示在執行中的那個區塊最下面，結尾有游標。
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { parseLog, segmentLines, groupKey, type LogGroup, type LogLine } from '@/lib/log-parse';
 import { PROVIDER_LABEL } from '@/lib/constants';
 import { cn } from '@/lib/utils';
+import { useThrottled } from '@/hooks/use-throttled';
+import { TypingCursor } from '@/components/app/StreamingReply';
+
+function LiveText({ text }: { text: string }) {
+  return <div className="whitespace-pre-wrap break-words py-0.5 text-xs" aria-live="polite">{text}<TypingCursor /></div>;
+}
 
 const STATUS_ICON = { running: '●', done: '✓', error: '✕' } as const;
 const STATUS_TEXT = { running: '執行中', done: '完成', error: '失敗' } as const;
@@ -21,7 +28,7 @@ function Lines({ lines }: { lines: LogLine[] }) {
   );
 }
 
-function Group({ item, open, onToggle }: { item: LogGroup; open: boolean; onToggle: (open: boolean) => void }) {
+function Group({ item, open, onToggle, live }: { item: LogGroup; open: boolean; onToggle: (open: boolean) => void; live?: string }) {
   const tools = item.lines.filter((l) => l.text.startsWith('🔧')).length;
   const meta = [item.result, tools ? `${tools} 個工具呼叫` : '', item.secs != null ? `${item.secs}s` : item.status === 'running' ? '執行中' : '', item.time].filter(Boolean).join(' · ');
   return (
@@ -41,13 +48,15 @@ function Group({ item, open, onToggle }: { item: LogGroup; open: boolean; onTogg
       </summary>
       <div className="border-t px-2 py-1">
         {item.error && <div className="whitespace-pre-wrap py-0.5 text-xs text-warn">{item.error}</div>}
-        <Lines lines={item.lines} />
+        {item.lines.length || !live ? <Lines lines={item.lines} /> : null}
+        {live && <LiveText text={live} />}
       </div>
     </details>
   );
 }
 
-export function LogTree({ text, className, openAll }: { text: string | null | undefined; className?: string; openAll?: boolean }) {
+export function LogTree({ text, className, openAll, live: liveProp }: { text: string | null | undefined; className?: string; openAll?: boolean; live?: string }) {
+  const live = useThrottled(liveProp || '');
   const box = useRef<HTMLDivElement>(null);
   // 使用者自己切換過的區塊：key → open（程式設定的不算）。
   const toggled = useRef(new Map<string, boolean>());
@@ -65,10 +74,13 @@ export function LogTree({ text, className, openAll }: { text: string | null | un
   useLayoutEffect(() => {
     const el = box.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
-  }, [items, openAll]);
+  }, [items, openAll, live]);
   const onScroll = () => { const el = box.current; if (el) atBottom.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 30; };
 
-  if (!items.length) return <div ref={box} className={cn('overflow-auto', className)}><p className="text-xs text-muted-foreground">（尚無 log）</p></div>;
+  if (!items.length) return <div ref={box} className={cn('overflow-auto', className)}>{live ? <LiveText text={live} /> : <p className="text-xs text-muted-foreground">（尚無 log）</p>}</div>;
+  // 打字中的文字屬於最後一個還在執行的 AI 區塊；找不到就放在最後面。
+  let liveAt = -1;
+  if (live) items.forEach((it, i) => { if (it.kind === 'agent' && it.status === 'running') liveAt = i; });
 
   const out: React.ReactNode[] = [];
   let stray: LogLine[] = [];
@@ -79,8 +91,9 @@ export function LogTree({ text, className, openAll }: { text: string | null | un
     if (it.kind === 'header') { out.push(<div key={`h-${i}`} className="mt-2 mb-1 border-b pb-0.5 text-xs font-semibold">{it.text}</div>); return; }
     const key = groupKey(it, i);
     const open = toggled.current.has(key) ? !!toggled.current.get(key) : it.status === 'running';
-    out.push(<Group key={key} item={it} open={open} onToggle={(o) => { toggled.current.set(key, o); }} />);
+    out.push(<Group key={key} item={it} open={open || i === liveAt} live={i === liveAt ? live : undefined} onToggle={(o) => { toggled.current.set(key, o); }} />);
   });
   flush();
+  if (live && liveAt < 0) out.push(<div key="live" className="px-1"><LiveText text={live} /></div>);
   return <div ref={box} onScroll={onScroll} className={cn('selectable overflow-auto', className)}>{out}</div>;
 }

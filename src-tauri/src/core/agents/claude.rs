@@ -8,8 +8,8 @@ pub(super) fn run_claude(opts: &AgentOpts, prompt: &str, references: &crate::cor
     // 寫入角色（實作、修正）需要權限時改問使用者：CLI 透過 stdout 送 can_use_tool 請求，App 跳出對話框，回答再寫回 stdin。
     let interactive = write;
     let input = if interactive { claude_interactive_input(prompt, &references.images)? } else { claude_input(prompt, &references.images)? };
-    // -p + stream-json 需要 --verbose 才會輸出逐步事件。
-    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].map(String::from).to_vec();
+    // -p + stream-json 需要 --verbose 才會輸出逐步事件；--include-partial-messages 再加上逐字的 stream_event，App 才能邊打邊顯示。
+    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"].map(String::from).to_vec();
     if interactive || !references.images.is_empty() { args.extend(["--input-format", "stream-json"].map(String::from)); }
     if interactive { args.extend(["--permission-prompt-tool", "stdio"].map(String::from)); }
     // Skill 快照、參考資料與 handover 都在專案資料目錄（不在專案裡），讓 Claude 把它當成額外的工作目錄。
@@ -56,7 +56,16 @@ pub(super) fn run_claude(opts: &AgentOpts, prompt: &str, references: &crate::cor
         if interactive && ev["type"] == "result" { let _ = stdin_tx.send(None); }
         on_event(&ev);
         match ev["type"].as_str() {
+            // 逐字輸出：只取文字的增量（工具參數、思考過程不顯示），寫到串流檔。
+            Some("stream_event") => {
+                let e = &ev["event"];
+                if e["type"] == "content_block_delta" && e["delta"]["type"] == "text_delta" {
+                    append_stream(root, scope, e["delta"]["text"].as_str().unwrap_or(""));
+                }
+            }
             Some("assistant") => {
+                // 完整的訊息到了，寫進 log；正在打字的文字清掉，避免重複顯示。
+                clear_stream(root, scope);
                 for part in ev["message"]["content"].as_array().into_iter().flatten() {
                     if part["type"] == "text" && part["text"].as_str().is_some_and(|t| !t.trim().is_empty()) {
                         append_log(root, scope, part["text"].as_str().unwrap().trim());
@@ -90,6 +99,8 @@ pub(super) fn run_claude(opts: &AgentOpts, prompt: &str, references: &crate::cor
     // 執行結束（含逾時、取消、出錯）：還在等使用者回答的請求一律失效，App 不再顯示。
     finished.store(true, std::sync::atomic::Ordering::SeqCst);
     if interactive { crate::core::permissions::expire_scope(root, scope); }
+    // 不論成功、失敗、取消或逾時，都不要留下打到一半的文字。
+    clear_stream(root, scope);
     let res = res?;
     buffer.finish(&mut handle);
     if res.cancelled { return Ok(CliOutcome { ok: false, text: final_text, error: Some("使用者已停止回覆".into()) }); }

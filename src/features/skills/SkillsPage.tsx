@@ -12,6 +12,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { Page, Eyebrow, Hint, Notice, EmptyState } from '@/components/app/Page';
 import { Chip } from '@/components/app/StatusPill';
 import { Markdown } from '@/components/app/Markdown';
+import { StreamingText } from '@/components/app/StreamingReply';
 import { LogTree } from '@/components/app/LogTree';
 import { LiveSince } from '@/components/app/LiveSince';
 import { confirmDialog, promptDialog } from '@/components/app/confirm';
@@ -34,6 +35,18 @@ type Bindings = Partial<Record<SkillStage, string[]>>;
 type Selected = string | 'bindings' | null;
 
 const runActive = (run?: SkillRun | null) => !!run && run.status === 'running';
+
+/** 技能會議 AI 正在打的回覆（逐字）。 */
+function SkillTyping({ runId }: { runId: string }) {
+  const typing = useProject((s) => s.streams[`skill-${runId}`] || '');
+  if (!typing) return null;
+  return (
+    <article className="mr-8 rounded-lg border bg-card p-3" data-testid="skill-typing">
+      <div className="mb-1 text-xs text-muted-foreground">正在回覆…</div>
+      <StreamingText text={typing} />
+    </article>
+  );
+}
 
 /** 技能來源與相容狀態的文字，側欄與標題共用。 */
 export function skillOriginText(skill: Skill) {
@@ -454,6 +467,7 @@ export function SkillsPage() {
                             </article>
                           ))}
                           {run.status === 'error' && <Notice tone="bad">這次回覆失敗：{run.error || '未知錯誤'}。請開新會議，或選擇已完成的會議接續。</Notice>}
+                          {runActive(run) && <SkillTyping runId={run.id} />}
                           {runActive(run) && (
                             <details open className="rounded-lg border bg-surface-2 p-2 text-xs">
                               <summary className="cursor-pointer"><LiveSince label="正在回覆 · 查看執行紀錄" since={run.created_at || run.updated_at} /></summary>

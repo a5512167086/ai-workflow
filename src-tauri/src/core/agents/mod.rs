@@ -25,7 +25,7 @@ use crate::core::config::model_for;
 use crate::core::proc::{last_lines, resolve_cli_for, run, RunOpts};
 use crate::core::runtime::cli_environment;
 use crate::core::skills::prepare_skills;
-use crate::core::state::{append_log, data_dir};
+use crate::core::state::{append_log, append_stream, clear_stream, data_dir};
 use crate::core::usage::{record_telemetry, Telemetry};
 use crate::core::util::{now_iso, write_json};
 use crate::core::Result;
@@ -157,6 +157,8 @@ fn run_agent_session(opts: &AgentOpts, provider: &str) -> Result<AgentResult> {
         }
     };
     on_event(&json!({}));
+    // 上一次執行如果異常結束，可能留下打到一半的文字。
+    clear_stream(root, scope);
     append_log(root, scope, &format!("── {label}：{provider}（{}）開始，session {session_id} ──", if opts.write { "可編輯" } else { "唯讀" }));
     let prompt_file = data_dir(root).join("tmp").join(format!("{session_id}.prompt.md"));
     fs::create_dir_all(prompt_file.parent().unwrap())?;

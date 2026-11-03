@@ -129,6 +129,8 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
   const snap = useProject((s) => s.snap)!;
   const api = useProject((s) => s.api);
   const liveLog = useProject((s) => s.logs[`task-${id}`]);
+  // AI 正在打字的文字（還沒進 log）。
+  const typing = useProject((s) => s.streams[`task-${id}`] || '');
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [error, setError] = useState('');
   const [subtab, setSubtab] = useState<SubTab>('log');
@@ -233,7 +235,7 @@ export function TaskInspector({ id, onClose, autoEdit, onAutoEditHandled }: Task
               <TabsTrigger value="diff" className="flex-none">diff</TabsTrigger>
               <TabsTrigger value="task" className="flex-none">任務內容</TabsTrigger>
             </TabsList>
-            <TabsContent value="log" className="min-h-0 flex-1 overflow-hidden p-2"><LogTree text={liveLog ?? detail.log} className="h-full" /></TabsContent>
+            <TabsContent value="log" className="min-h-0 flex-1 overflow-hidden p-2"><LogTree text={liveLog ?? detail.log} live={typing} className="h-full" /></TabsContent>
             <TabsContent value="checks" className="min-h-0 flex-1 overflow-auto p-2"><pre className="mono selectable whitespace-pre-wrap text-xs">{detail.checks || '（尚未執行驗證）'}</pre></TabsContent>
             <TabsContent value="reviews" className="min-h-0 flex-1 overflow-auto p-2"><ReviewsView reviews={detail.reviews} /></TabsContent>
             <TabsContent value="diff" className="min-h-0 flex-1 overflow-hidden p-2"><DiffView text={detail.diff} className="h-full" /></TabsContent>

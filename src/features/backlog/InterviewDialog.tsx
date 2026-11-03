@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Markdown } from '@/components/app/Markdown';
+import { StreamingText } from '@/components/app/StreamingReply';
+import { partialJsonString } from '@/lib/format';
 import { LiveSince } from '@/components/app/LiveSince';
 import { GuardButton } from '@/components/app/GuardButton';
 import { Hint } from '@/components/app/Page';
@@ -27,6 +29,19 @@ const interviewDrafts = new Map<string, string>();
 
 // ---------- 命令式開啟 ----------
 const openers = new Set<(id: string) => void>();
+/** 需求釐清 AI 正在打的回覆：回覆是 JSON（message、ready、summary…），只把 message 的部分逐字顯示。 */
+function InterviewTyping({ turn }: { turn: string }) {
+  const raw = useProject((s) => s.streams[`chat-${turn}`] || '');
+  const message = partialJsonString(raw, 'message');
+  if (!raw) return null;
+  return (
+    <article className="mr-8 rounded-md border bg-background px-3 py-2" data-testid="interview-typing">
+      <b className="mb-1 block text-xs text-muted-foreground">需求釐清 AI · 正在回覆…</b>
+      {message ? <StreamingText text={message} /> : <p className="text-xs text-muted-foreground">正在整理問題…</p>}
+    </article>
+  );
+}
+
 export function openInterview(id: string) {
   for (const fn of openers) fn(id);
 }
@@ -215,6 +230,7 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
                     {message.role === 'user' ? <div className="selectable whitespace-pre-wrap">{message.text}</div> : <Markdown text={message.text} />}
                   </article>
                 ))}
+                {active && session?.turn && <InterviewTyping turn={session.turn} />}
               </div>
               <LiveSince label={statusText} since={since} className={cn('text-xs', (statusError || session?.error || data?.stale) && 'text-danger')} />
               <div className="shrink-0 space-y-2">

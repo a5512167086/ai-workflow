@@ -126,6 +126,7 @@ export function RecordsPage() {
   const snap = useProject((s) => s.snap)!;
   const api = useProject((s) => s.api);
   const logs = useProject((s) => s.logs);
+  const streams = useProject((s) => s.streams);
   const rounds = useProject((s) => s.rounds);
   const [archives, setArchives] = useState<ArchiveSummary[]>([]);
   const [archiveDir, setArchiveDir] = useState('');
@@ -243,7 +244,7 @@ export function RecordsPage() {
             {!current && !archive ? (
               <EmptyState title="讀取封存…" />
             ) : tab === 'log' && current ? (
-              <LogTree text={loading ? '讀取中…' : logs[scope] || '（還沒有 log）'} openAll={openAll} className="h-full" />
+              <LogTree text={loading ? '讀取中…' : logs[scope] || '（還沒有 log）'} live={loading ? '' : streams[scope]} openAll={openAll} className="h-full" />
             ) : tab === 'prd' ? (
               <Markdown text={(current ? snap.prd : archive?.prd) || '（還沒有 PRD）'} />
             ) : tab === 'rounds' ? (

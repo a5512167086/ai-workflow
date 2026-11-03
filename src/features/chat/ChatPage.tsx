@@ -12,6 +12,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Page, Hint, Eyebrow, EmptyState } from '@/components/app/Page';
 import { Markdown } from '@/components/app/Markdown';
+import { StreamingText } from '@/components/app/StreamingReply';
 import { LogTree } from '@/components/app/LogTree';
 import { LiveSince } from '@/components/app/LiveSince';
 import { ModelPicker } from '@/components/app/ModelPicker';
@@ -67,6 +68,12 @@ function MessageList({ session, onSuggest }: { session: ChatSession | null; onSu
     if (el) atBottom.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 50;
   };
   const running = chatActive(session);
+  // AI 正在打的這段回覆（逐字）；寫完後會變成正式訊息。
+  const typing = useProject((s) => (running && session?.turn ? s.streams[`chat-${session.turn}`] || '' : ''));
+  useEffect(() => {
+    const el = host.current;
+    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [typing]);
   return (
     <div ref={host} onScroll={onScroll} role="region" aria-label="對話訊息" tabIndex={0} className="min-h-0 flex-1 overflow-auto px-4 py-3">
       {!session?.messages?.length && (
@@ -96,6 +103,13 @@ function MessageList({ session, onSuggest }: { session: ChatSession | null; onSu
             </article>
           );
         })}
+        {/* 打字中的回覆放在執行紀錄上面：寫完後正式訊息出現在同一個位置，不會跳。 */}
+        {typing && (
+          <article className="rounded-lg border bg-card px-3 py-2" data-testid="chat-typing">
+            <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground"><b className="text-foreground">{PROVIDER_LABEL[session?.provider || ''] || '專案助理'}</b><span>正在回覆…</span></div>
+            <StreamingText text={typing} />
+          </article>
+        )}
         {session?.turn && <TurnActivity turn={session.turn} running={running} since={lastUserAt(session)} />}
       </div>
     </div>

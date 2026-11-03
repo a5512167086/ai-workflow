@@ -211,6 +211,52 @@ fn cli_實際事件串流會寫入_session_與專案統計_且保留最後回覆
     }
 }
 
+#[test]
+fn ai_回覆逐字寫到串流檔_寫完進_log_結束後清掉() {
+    for provider in ["claude", "codex"] {
+        let delta = |text: &str| if provider == "claude" {
+            json!({ "type": "stream_event", "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": text } } })
+        } else {
+            json!({ "method": "item/agentMessage/delta", "params": { "itemId": "m", "delta": text } })
+        };
+        let finish = if provider == "claude" {
+            json!([
+                { "type": "assistant", "message": { "id": "a", "content": [{ "type": "text", "text": "第一段，第二段" }] } },
+                { "type": "result", "result": "第一段，第二段", "is_error": false },
+            ])
+        } else {
+            json!([
+                { "method": "item/completed", "params": { "item": { "type": "agentMessage", "id": "m", "text": "第一段，第二段" } } },
+                { "method": "turn/completed", "params": { "turn": { "id": "t", "status": "completed" } } },
+            ])
+        };
+        let mut events = vec![delta("第一段"), delta("，第二段"), json!("sleep:1500")];
+        events.extend(finish.as_array().unwrap().iter().cloned());
+        let (root, cfg) = fixture(&[provider], json!({ provider: { "events": events } }));
+        let stream = ai_workflow::core::state::stream_path(&root, "chat-t1");
+        let worker = { let (root, cfg) = (root.clone(), cfg.clone()); std::thread::spawn(move || run_agent(AgentOpts { root: &root, cfg: &cfg, provider, prompt: "test".into(), write: false, scope: "chat-t1", label: "test", stage: None, skills: None, role: None, saved: vec![] }).unwrap()) };
+        // 執行中：串流檔裡是到目前為止的文字，log 裡還沒有。
+        let started = std::time::Instant::now();
+        let mut seen = String::new();
+        while started.elapsed() < std::time::Duration::from_secs(10) {
+            seen = fs::read_to_string(&stream).unwrap_or_default();
+            if seen == "第一段，第二段" { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(seen, "第一段，第二段", "{provider}：執行中應該看得到逐字輸出");
+        let log = || fs::read_to_string(data_dir(&root).join("logs/chat-t1.log")).unwrap_or_default();
+        assert!(!log().contains("第一段，第二段"), "{provider}：還沒寫完的文字不能進 log");
+        let result = worker.join().unwrap();
+        assert!(result.ok, "{provider}：{:?}", result.error);
+        // 寫完：整段進 log 一次，串流檔清掉。
+        assert_eq!(log().matches("第一段，第二段").count(), 1, "{provider}");
+        assert!(!stream.exists(), "{provider}：結束後不能留下打到一半的文字");
+        if provider == "claude" {
+            assert!(calls(&root)[0]["args"].as_array().unwrap().iter().any(|a| a == "--include-partial-messages"));
+        }
+    }
+}
+
 // ---------- 整個流程 ----------
 
 fn git_project(scenario: Value) -> (PathBuf, Value) {

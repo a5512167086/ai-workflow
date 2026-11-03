@@ -24,7 +24,8 @@ pub fn watch_project(app: AppHandle, watching: State<Watching>, id: String) -> R
             for (event, payload) in watcher.tick() {
                 let _ = app.emit(&format!("{event}-{id}"), payload);
             }
-            std::thread::sleep(Duration::from_millis(700));
+            // 200ms：AI 逐字輸出時看起來是連續的；每次只比對幾個檔案的修改時間與大小，成本很低。
+            std::thread::sleep(Duration::from_millis(200));
         }
     });
     Ok(())

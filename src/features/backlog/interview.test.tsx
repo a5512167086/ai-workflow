@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { InterviewDialog } from '@/features/backlog/InterviewDialog';
 import { installBridge, makeSnapshot, seedProject, renderApp, typeInto, type Routes } from '@/features/backlog/test-utils';
 import type { RequirementsPayload } from '@/types/api';
+import { useProject } from '@/stores/project';
 
 const bridge = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@/lib/tauri', () => ({
@@ -124,5 +125,16 @@ describe('需求釐清會議', () => {
     expect(box).toHaveValue('/grill-me ');
     expect(screen.queryByRole('listbox', { name: '技能' })).not.toBeInTheDocument();
     expect(calls.some((c) => c.path === '/api/backlog/interview' && (c.body as { input: string }).input)).toBe(false);
+  });
+
+  test('AI 回覆中逐字顯示問題內容，只顯示 message、不顯示 JSON', async () => {
+    setup({ session: session({ status: 'running', turn: 't2' }), confirmed: false, stale: false });
+    // 後端推來的是 AI 原始輸出：JSON 字串裡的換行是跳脫的 \n。
+    useProject.setState({ streams: { 'chat-t2': '```json\n{"message": "## 本輪問題\\n1. 匯出要包含哪些欄位？' } });
+    renderApp(<InterviewDialog id="bbb" onClose={() => {}} />);
+    const typing = await screen.findByTestId('interview-typing');
+    expect(typing).toHaveTextContent('匯出要包含哪些欄位？');
+    expect(typing).not.toHaveTextContent('"message"');
+    expect(typing).not.toHaveTextContent('json');
   });
 });
