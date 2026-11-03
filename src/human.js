@@ -91,7 +91,7 @@ async function openInterview(id) {
     <div class="interview-body">
       <div class="interview-chat">
         <div class="interview-conversation" role="log" aria-live="polite"></div><p class="interview-status" role="status"></p>
-        <div class="interview-answer"><label class="field-label">你的回答或補充<textarea rows="3" maxlength="20000" placeholder="回答本輪問題；有多題時可依題號回答…"></textarea></label><div class="row end"><label class="hint">AI <select aria-label="需求釐清 AI"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><button type="button" data-stop hidden>停止回覆</button><button type="button" data-retry hidden>重試回覆</button><button type="button" data-restart>重新釐清</button><button type="button" data-send>送出回答</button></div></div>
+        <div class="interview-answer"><label class="field-label">你的回答或補充<textarea rows="3" maxlength="20000" placeholder="回答本輪問題；有多題時可依題號回答。開頭輸入 / 可叫用技能…"></textarea></label><div class="row end"><label class="hint">AI <select aria-label="需求釐清 AI"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><button type="button" data-stop hidden>停止回覆</button><button type="button" data-retry hidden>重試回覆</button><button type="button" data-restart>重新釐清</button><button type="button" data-send>送出回答</button></div></div>
       </div>
       <aside class="interview-summary" aria-label="需求摘要" hidden>
         <div class="card-head"><h3>需求摘要</h3><div class="seg" role="radiogroup" aria-label="摘要顯示方式"><button type="button" role="radio" aria-checked="true" data-summary-view="preview" class="on">預覽</button><button type="button" role="radio" aria-checked="false" data-summary-view="edit">編輯</button></div></div>
@@ -102,6 +102,7 @@ async function openInterview(id) {
     </div></div>`;
   const messages = dialog.querySelector('.interview-conversation'), status = dialog.querySelector('.interview-status'), input = dialog.querySelector('.interview-answer textarea'), provider = dialog.querySelector('select');
   const summary = dialog.querySelector('.interview-summary textarea'), preview = dialog.querySelector('.summary-preview'), summaryNote = dialog.querySelector('.interview-summary-note');
+  bindSkillCommandInput(input);
   input.value = interviewDrafts.get(id) || ''; provider.value = snap?.config?.roles?.interviewer || snap?.config?.roles?.author || 'claude';
   let data, timer, pending = false, messageKey = '', summaryTurn = '', previewText = null;
   // 摘要預覽：與會議訊息相同的 Markdown／Mermaid 渲染；只在內容變動時重畫。

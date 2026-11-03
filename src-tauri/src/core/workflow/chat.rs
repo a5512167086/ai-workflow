@@ -100,11 +100,14 @@ pub fn start_turn(root: &Path, body: &Value, launch: &dyn Fn(&str, &str) -> Resu
             if body["backlogId"]!=chat["backlogId"] { crate::bail!(400; "請從需求待辦接續這個需求會議"); }
             chat["requirementsReady"]=json!(false); chat["confirmed_at"]=Value::Null;
         }
+        let invoked = if retry { vec![] } else { invoked_skills(root, input)? };
         let messages = chat["messages"].as_array_mut().unwrap();
         if retry {
             if !messages.last().is_some_and(|message| message["role"] == "user") { crate::bail!(400; "這個對話沒有可重試的訊息"); }
         } else {
-            messages.push(json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "user", "text": input, "references": references, "at": now_iso() }));
+            let mut message = json!({ "id": uuid::Uuid::new_v4().to_string(), "role": "user", "text": input, "references": references, "at": now_iso() });
+            if !invoked.is_empty() { message["skills"] = json!(invoked); }
+            messages.push(message);
         }
         for (key, value) in [("status", json!("pending")), ("pid", Value::Null), ("provider", json!(provider)), ("model", json!(model)), ("effort", json!(effort)), ("turn", json!(uuid::Uuid::new_v4().to_string())), ("error", json!("")), ("cancelRequested", json!(false))] { chat[key] = value; }
         save(root, &mut chat)?; Ok(chat)
@@ -157,7 +160,9 @@ pub fn run_turn(root: &Path, id: &str, turn: &str) -> Result<Value> {
         if interview { prompt=crate::core::requirements::prompt(root,&cfg,&chat)?; }
         change(root, id, |chat| { chat["contextMessages"] = json!(count); chat["contextTruncated"] = json!(truncated); chat["contextReferencesTruncated"]=json!(references_truncated); Ok(()) })?;
         let scope = format!("chat-{turn}");
-        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: if interview { "需求釐清" } else { "專案對話" }, stage: Some("chat"), role: Some(if interview { "interviewer" } else { "chat" }), skills: Some(if interview { interview_skills(&cfg) } else { vec![] }), saved: vec![] })?;
+        let mut skills = if interview { interview_skills(&cfg) } else { vec![] };
+        for name in chat_skills(&chat) { if !skills.contains(&name) { skills.push(name); } }
+        let result = run_agent(AgentOpts { root, cfg: &cfg, provider, prompt, write: false, scope: &scope, label: if interview { "需求釐清" } else { "專案對話" }, stage: Some("chat"), role: Some(if interview { "interviewer" } else { "chat" }), skills: Some(skills), saved: vec![] })?;
         if !result.ok { return Err(AppError::new(result.error_text())); }
         Ok(result)
     })();
@@ -191,6 +196,36 @@ pub fn rename_chat(root: &Path, id: &str, title: &str) -> Result<Value> {
 }
 pub fn delete_chat(root: &Path, id: &str) -> Result<()> {
     locked(root, || { if active(&get_chat(root, id)?) { crate::bail!(409; "請先停止回覆，再刪除對話"); } fs::remove_file(file(root, id)?)?; Ok(()) })
+}
+
+/// 訊息開頭的 `/技能名稱`（可以連續好幾個，例如 `/grill-me /tdd 幫我想測試`）：和 Claude Code 的 /skill 相同。
+/// 只看開頭，訊息中間的 /path 不算；名稱不在技能庫或不能共用時直接回 400，讓使用者馬上知道打錯了。
+pub fn invoked_skills(root: &Path, text: &str) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for token in text.split_whitespace() {
+        let Some(name) = token.strip_prefix('/') else { break };
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') { break; }
+        if !names.contains(&name.to_string()) { names.push(name.to_string()); }
+    }
+    if names.is_empty() { return Ok(names); }
+    let library = crate::core::skills::list_skills(root);
+    for name in &names {
+        match library.iter().find(|s| s["name"] == name.as_str()) {
+            None => crate::bail!(400; "找不到技能 /{name}。可用的技能：{}", library.iter().filter(|s| s["compatible"] == true).filter_map(|s| s["name"].as_str()).map(|n| format!("/{n}")).collect::<Vec<_>>().join("、")),
+            Some(skill) if skill["compatible"] != true => crate::bail!(400; "技能 /{name} 含執行器專屬欄位或無法讀取，請先到 Skills 頁調整"),
+            Some(_) => {}
+        }
+    }
+    Ok(names)
+}
+
+/// 這個對話用 /技能 叫用過的技能：之後每一輪都會繼續載入，和 Claude Code 叫用技能後留在對話裡一樣。
+fn chat_skills(chat: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in chat["messages"].as_array().into_iter().flatten().flat_map(|m| m["skills"].as_array().cloned().unwrap_or_default()) {
+        if let Some(name) = name.as_str().filter(|n| !names.iter().any(|x| x == n)) { names.push(name.to_string()); }
+    }
+    names
 }
 
 /// 需求釐清會議載入 Skills 頁「需求釐清」綁定的技能（預設 grill-me）；提示詞本身已經內含同樣的會議規則。

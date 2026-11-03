@@ -83,7 +83,7 @@
             <div class="chat-options"><label for="chat-provider">AI<select id="chat-provider"><option value="claude">Claude Code</option><option value="codex">Codex</option></select></label><details class="chat-model-options"><summary>模型與推理設定</summary><div class="chat-model-fields"><label for="chat-model">模型<input id="chat-model" type="text" placeholder="沿用對話角色預設"></label><label for="chat-effort">推理強度<select id="chat-effort"><option value="">預設</option></select></label><p id="chat-model-hint" class="hint">空白沿用首頁「專案對話」角色的設定。</p></div></details></div>
             <div id="chat-references" class="reference-widget"></div>
             <label class="sr-only" for="chat-input">詢問專案</label><textarea id="chat-input" rows="3" maxlength="20000" placeholder="問問目前的進度、執行問題，或請 AI 畫出專案架構圖…"></textarea>
-            <div class="chat-send-row"><span class="hint">Enter 傳送 · Shift+Enter 換行 · 不修改專案檔案</span><button id="chat-stop" type="button" hidden>停止回覆</button><button id="chat-retry" type="button" hidden>重試這則訊息</button><button id="chat-send" type="submit" class="primary">傳送</button></div>
+            <div class="chat-send-row"><span class="hint">Enter 傳送 · Shift+Enter 換行 · 開頭輸入 / 叫用技能 · 不修改專案檔案</span><button id="chat-stop" type="button" hidden>停止回覆</button><button id="chat-retry" type="button" hidden>重試這則訊息</button><button id="chat-send" type="submit" class="primary">傳送</button></div>
           </form>
         </div>
       </div>

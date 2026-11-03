@@ -169,3 +169,25 @@ fn 只有附件可發問且追問沿用快照_重新讀取對話仍保留參考(
     assert_eq!(run(&root, &second)["status"], "done");
     for call in calls(&root) { assert!(call["prompt"].as_str().unwrap().contains("UNIQUE_CHAT_REFERENCE")); }
 }
+
+#[test]
+fn 訊息開頭的_slash_技能會載入這輪與之後的對話_打錯名稱直接回報() {
+    let root = fixture();
+    // 中間的 /path 不算技能；開頭打錯會列出可用的技能。
+    assert!(chat::invoked_skills(&root, "請看 /src/app.js").unwrap().is_empty());
+    assert!(chat::invoked_skills(&root, "/api/chat 是做什麼的").unwrap().is_empty());
+    assert_eq!(chat::invoked_skills(&root, "/grill-me /tdd 幫我想測試").unwrap(), vec!["grill-me", "tdd"]);
+    let err = chat::start_turn(&root, &json!({ "input": "/no-such-skill 你好", "provider": "codex" }), &|_, _| Ok(0)).unwrap_err();
+    assert_eq!(err.status, 400);
+    assert!(err.message.contains("找不到技能 /no-such-skill") && err.message.contains("/grill-me"));
+
+    let first = start(&root, json!({ "input": "/grill-me 我想做登入功能", "provider": "codex" }));
+    assert_eq!(first["messages"][0]["skills"], json!(["grill-me"]));
+    run(&root, &first);
+    let prompt = calls(&root).last().unwrap()["prompt"].as_str().unwrap().to_string();
+    assert!(prompt.contains("### Skill: grill-me"));
+    // 下一輪沒有再打 /grill-me，技能仍留在這個對話裡。
+    let next = start(&root, json!({ "chatId": first["id"], "input": "繼續問我", "provider": "codex" }));
+    run(&root, &next);
+    assert!(calls(&root).last().unwrap()["prompt"].as_str().unwrap().contains("### Skill: grill-me"));
+}

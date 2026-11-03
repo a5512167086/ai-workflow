@@ -166,7 +166,55 @@ async function sendChat(retry = false) {
   } catch (error) { $('#chat-status').textContent = error.message; toast(error.message, true); }
   finally { chatSending = false; renderChatControls(); }
 }
+/** 游標前面是不是訊息開頭的 `/技能` 片段（前面可以已經有其他 `/技能 `）；是就回傳要替換的範圍。 */
+function skillCommandToken(text, caret) {
+  const before = text.slice(0, caret);
+  const match = before.match(/^\s*(?:\/[a-z0-9-]+\s+)*\/([a-z0-9-]*)$/);
+  return match ? { start: before.length - match[1].length - 1, end: caret, query: match[1] } : null;
+}
+/** 對話框輸入 / 時列出技能（和 Claude Code 的 /skill 一樣）；選了補上 `/名稱 `，送出後這個對話會載入該技能。 */
+function bindSkillCommandInput(input) {
+  if (!input) return;
+  let popup = null, timer, generation = 0, cursor = 0, rows = [], token = null;
+  const hide = () => { popup?.remove(); popup = null; rows = []; generation++; };
+  const choose = index => {
+    const row = rows[index]; if (!row || !token) return; const selected = token; hide();
+    input.setRangeText(`/${row.name} `, selected.start, selected.end, 'end'); input.dispatchEvent(new Event('input', { bubbles: true })); input.focus();
+  };
+  input.addEventListener('input', () => {
+    clearTimeout(timer); hide();
+    token = skillCommandToken(input.value, input.selectionStart); if (!token) return;
+    const current = generation, query = token.query;
+    timer = setTimeout(async () => {
+      try {
+        const { skills } = await api('/api/skills'); if (current !== generation || !input.isConnected || document.activeElement !== input) return;
+        rows = (skills || []).filter(skill => skill.compatible && skill.name.includes(query))
+          .sort((a, b) => Number(!a.name.startsWith(query)) - Number(!b.name.startsWith(query)) || a.name.localeCompare(b.name)).slice(0, 12);
+        if (!rows.length) return;
+        popup = document.createElement('div'); popup.className = 'reference-suggestions skill-suggestions'; popup.setAttribute('role', 'listbox'); popup.setAttribute('aria-label', '技能');
+        const rect = input.getBoundingClientRect(); popup.style.left = `${rect.left}px`; popup.style.bottom = `${window.innerHeight - rect.top + 4}px`; popup.style.width = `${Math.min(rect.width, 550)}px`; cursor = 0;
+        rows.forEach((skill, index) => {
+          const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(index === 0));
+          const name = document.createElement('b'); name.textContent = `/${skill.name}`;
+          const description = document.createElement('span'); description.textContent = skill.description || '';
+          button.append(name, description); button.onmousedown = event => { event.preventDefault(); choose(index); }; popup.append(button);
+        });
+        document.body.append(popup);
+      } catch (error) { toast(error.message, true); }
+    }, 120);
+  });
+  input.addEventListener('keydown', event => {
+    if (!popup || event.isComposing) return;
+    if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (event.key === 'Escape') hide();
+    else if (event.key === 'Enter' || event.key === 'Tab') choose(cursor);
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { cursor = (cursor + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length; [...popup.children].forEach((el, i) => el.setAttribute('aria-selected', String(i === cursor))); popup.children[cursor].scrollIntoView?.({ block: 'nearest' }); }
+  }, true);
+  input.addEventListener('blur', () => setTimeout(hide, 150));
+}
+
 function bindChat() {
+  bindSkillCommandInput($('#chat-input'));
   $('#chat-form').onsubmit = event => { event.preventDefault(); sendChat(); };
   $('#chat-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendChat(); } };
   $('#chat-new').onclick = newChat;

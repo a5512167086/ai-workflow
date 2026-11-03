@@ -35,7 +35,7 @@ function page() {
     bindSkills, loadSkills, loadSkillRuns, selectSkill, renderSkills, importSkillFolders, sendSkill, skillFrontmatter,
     skillState() { return { selected: skillSelected, runId: skillRunId, editing: skillEditing, bindings: skillBindings }; },
     taskContentView, logScopes, renderLogSelect, renderLog,
-    renderAcceptButton, acceptReason, renderStuckReason,
+    renderAcceptButton, acceptReason, renderStuckReason, skillCommandToken, bindSkillCommandInput,
     setLog(scope, text) { logs[scope] = text; }
   };`);
   return { dom, w, ui: w.ui, doc: w.document };
@@ -1160,5 +1160,29 @@ test('卡住的任務在詳情最上面列出原因與審查要求修正的項�
   const holder = doc.createElement('div');
   holder.append(ui.reviewsView([{ round: 1, provider: 'codex', text: '- [P1] a\n- [P2] b\n- [P3] c\nVERDICT: FAIL' }]));
   assert.equal(holder.querySelector('.review-counts').textContent, '必須修正 1・建議 2');
+  dom.window.close();
+});
+
+test('對話框開頭輸入 / 會列出技能，選了就補上 /名稱；訊息中間的 / 不會跳出選單', async () => {
+  const { dom, ui, doc, w } = page();
+  assert.equal(JSON.stringify(ui.skillCommandToken('/gr', 3)), JSON.stringify({ start: 0, end: 3, query: 'gr' }));
+  assert.equal(JSON.stringify(ui.skillCommandToken('/grill-me /t', 12)), JSON.stringify({ start: 10, end: 12, query: 't' }));
+  assert.equal(ui.skillCommandToken('請看 /src', 7), null);
+  assert.equal(ui.skillCommandToken('/grill-me ', 10), null);
+  ui.setApi(async path => path === '/api/skills' ? { skills: [
+    { name: 'tdd', description: '測試先行', compatible: true },
+    { name: 'grill-me', description: '追問需求', compatible: true },
+    { name: 'native-only', description: '', compatible: false },
+  ] } : {});
+  const input = doc.createElement('textarea'); doc.body.append(input);
+  ui.bindSkillCommandInput(input);
+  input.focus(); input.value = '/'; input.setSelectionRange(1, 1); input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 200));
+  const options = [...doc.querySelectorAll('.skill-suggestions [role=option]')];
+  assert.equal(options.map(o => o.querySelector('b').textContent).join(','), '/grill-me,/tdd');
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.equal(input.value, '/tdd ');
+  assert.equal(doc.querySelector('.skill-suggestions'), null);
   dom.window.close();
 });
