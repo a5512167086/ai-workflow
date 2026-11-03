@@ -227,10 +227,17 @@ export function InterviewDialog({ id, onClose }: { id: string; onClose: () => vo
                     value={input}
                     onChange={(e) => { setInput(e.target.value); interviewDrafts.set(id, e.target.value); }}
                     placeholder="回答本輪問題；有多題時可依題號回答。開頭輸入 / 可叫用技能…"
+                    // 和專案對話一樣：Enter 送出、Shift+Enter 換行，中文組字時不送出；技能清單開著時 Enter 由清單處理。
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+                      e.preventDefault();
+                      if (!pending && !active && !data?.stale) void send();
+                    }}
                     aria-label="你的回答或補充"
                   />
                 </label>
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  <span className="mr-auto text-xs text-muted-foreground">Enter 送出 · Shift+Enter 換行 · 開頭輸入 / 叫用技能</span>
                   <label className="flex items-center gap-1.5 text-xs text-muted-foreground">AI
                     <Select value={provider} onValueChange={(v) => setProvider(v as Provider)}>
                       <SelectTrigger size="sm" aria-label="需求釐清 AI" className="w-32"><SelectValue /></SelectTrigger>

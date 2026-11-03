@@ -98,4 +98,31 @@ describe('需求釐清會議', () => {
     expect(draft).toBeDisabled();
     expect(draft.dataset.guarded).toBe('1');
   });
+
+  test('回答框：Enter 送出、Shift+Enter 換行（和專案對話一樣）', async () => {
+    const { calls } = setup({ session: session(), confirmed: false, stale: false });
+    renderApp(<InterviewDialog id="bbb" onClose={() => {}} />);
+    const box = await screen.findByLabelText('你的回答或補充');
+    await typeInto(box, '第一行{Shift>}{Enter}{/Shift}第二行');
+    expect(box).toHaveValue('第一行\n第二行');
+    expect(calls.some((c) => c.path === '/api/backlog/interview' && (c.body as { input: string }).input)).toBe(false);
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(calls.find((c) => c.path === '/api/backlog/interview' && (c.body as { input: string }).input)?.body).toMatchObject({ id: 'bbb', input: '第一行\n第二行' }));
+  });
+
+  test('回答框開頭輸入 / 會在對話框裡列出技能，Tab 補上名稱、不會送出', async () => {
+    const { calls } = setup({ session: session(), confirmed: false, stale: false }, {
+      'GET /api/skills': { skills: [{ name: 'grill-me', description: '釐清需求', compatible: true }, { name: 'to-spec', description: '寫 PRD', compatible: true }] },
+    });
+    renderApp(<InterviewDialog id="bbb" onClose={() => {}} />);
+    const box = await screen.findByLabelText('你的回答或補充');
+    await typeInto(box, '/gr');
+    const list = await screen.findByRole('listbox', { name: '技能' });
+    expect(list).toHaveTextContent('/grill-me');
+    expect(list.style.pointerEvents).toBe('auto');
+    await userEvent.keyboard('{Tab}');
+    expect(box).toHaveValue('/grill-me ');
+    expect(screen.queryByRole('listbox', { name: '技能' })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === '/api/backlog/interview' && (c.body as { input: string }).input)).toBe(false);
+  });
 });

@@ -14,6 +14,8 @@ export function openPopup(input: HTMLElement, rows: PopupRow[], choose: (index: 
   const el = document.createElement('div');
   el.className = `fixed z-50 max-h-64 overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md ${className}`;
   el.setAttribute('role', 'listbox'); el.setAttribute('aria-label', label);
+  // 對話框（Radix Dialog）打開時 body 是 pointer-events: none，清單掛在 body 上要自己恢復才點得到。
+  el.style.pointerEvents = 'auto';
   const rect = input.getBoundingClientRect();
   el.style.left = `${rect.left}px`; el.style.bottom = `${window.innerHeight - rect.top + 4}px`; el.style.width = `${Math.min(rect.width, 550)}px`;
   const popup: Popup = {

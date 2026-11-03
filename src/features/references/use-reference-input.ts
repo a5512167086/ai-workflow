@@ -1,5 +1,6 @@
 // textarea 的參考資料輸入：貼上圖片／檔案會先建立快照再加入附件；輸入 @ 列出專案檔案與已加入的快照。
 import { useEffect, type RefObject } from 'react';
+import { useLatest, useRefElement } from '@/hooks/use-ref-element';
 import { toast } from 'sonner';
 import { errorMessage } from '@/lib/api';
 import { useProject } from '@/stores/project';
@@ -10,10 +11,13 @@ import type { ReferenceItem, ReferenceSuggestion } from '@/types/api';
 
 type Row = ReferenceItem | ReferenceSuggestion;
 
-export function useReferenceInput(ref: RefObject<HTMLTextAreaElement | null>, getOptions: () => ReferenceOptions) {
+export function useReferenceInput(ref: RefObject<HTMLTextAreaElement | null>, getOptionsProp: () => ReferenceOptions) {
+  // 輸入框出現時才綁定；getOptions 每次 render 都是新的函式，用 ref 取最新的，避免重畫時把正在顯示的 @ 清單關掉。
+  const input = useRefElement(ref);
+  const latest = useLatest(getOptionsProp);
   useEffect(() => {
-    const input = ref.current;
     if (!input) return;
+    const getOptions = () => latest.current();
     let popup: Popup | null = null, timer: ReturnType<typeof setTimeout> | undefined, generation = 0, rows: Row[] = [], token = { start: 0, end: 0 };
     const hide = () => { popup?.remove(); popup = null; rows = []; generation++; };
     const choose = async (index: number) => {
@@ -72,5 +76,5 @@ export function useReferenceInput(ref: RefObject<HTMLTextAreaElement | null>, ge
       input.removeEventListener('keydown', onKeydown, true);
       input.removeEventListener('blur', onBlur);
     };
-  }, [ref, getOptions]);
+  }, [input, latest]);
 }
